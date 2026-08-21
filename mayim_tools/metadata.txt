@@ -1,0 +1,23 @@
+[general]
+name=Mayim Tools
+qgisMinimumVersion=4.0
+qgisMaximumVersion=4.99
+description=A suite of modular engineering and geospatial tools for QGIS
+version=0.1.0
+author=Your Name / Organisation
+email=your.email@example.com
+about=Mayim Tools provides a categorised collection of engineering and
+    geospatial processing tools for QGIS 4+. Categories include Hydrology,
+    Geometry, Network Analysis, and more. Designed for extensibility and
+    public redistribution.
+tracker=https://github.com/yourname/mayim-tools/issues
+repository=https://github.com/yourname/mayim-tools
+tags=water,hydrology,geometry,engineering,tools,processing
+homepage=https://github.com/yourname/mayim-tools
+category=Plugins
+icon=icons/mayim_logo.png
+experimental=True
+deprecated=False
+server=False
+hasProcessingProvider=True
+license=GPL-2.0+

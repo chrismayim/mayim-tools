@@ -1,0 +1,336 @@
+================================================================================
+                        MAYIM TOOLS – QGIS 4+ PLUGIN
+                        ARCHITECTURE REFERENCE REPORT
+================================================================================
+Prepared by:    Zutari Digital Engineering
+Plugin Name:    Mayim Tools
+Target Platform:QGIS 4+ | PyQGIS | Qt6 | Python 3.10+
+Distribution:   Public – QGIS Plugin Repository (plugins.qgis.org)
+License:        GNU General Public License v2 or later (GPL-2.0+)
+Version:        1.0 (Architecture Definition)
+Status:         Draft
+================================================================================
+
+
+────────────────────────────────────────────────────────────────────────────────
+1. EXECUTIVE SUMMARY
+────────────────────────────────────────────────────────────────────────────────
+
+Mayim Tools is a publicly redistributable QGIS 4+ plugin designed to deliver
+a suite of engineering and geospatial tools organized into clearly defined
+functional categories. The plugin is architected to be modular, extensible,
+and maintainable — enabling new tool categories to be added over time without
+modifying the core framework.
+
+The architecture follows a 7-tier layered design, with a shared Core Tools
+layer that provides reusable utilities accessible to all tool categories. All
+tools are exposed through the QGIS Processing Framework, ensuring compatibility
+with the QGIS Toolbox, Graphical Modeler, and Python scripting console.
+
+The plugin name "Mayim" is derived from the Hebrew word for "water" (מַיִם),
+reflecting its initial focus on hydrological and water-related engineering tools.
+
+
+────────────────────────────────────────────────────────────────────────────────
+2. ARCHITECTURAL OVERVIEW
+────────────────────────────────────────────────────────────────────────────────
+
+The Mayim Tools plugin is structured as a 7-tier layered architecture:
+
+  TIER 1 │ QGIS 4+ HOST Environment
+         │ PyQGIS API | Qt6/PyQt6 | Processing Framework | Layer Registry
+         ▼
+  TIER 2 │ Plugin Entry Point
+         │ metadata.txt | __init__.py | MayimToolsPlugin (main class)
+         ▼
+  TIER 3 │ Core Framework Layer
+         │ PluginManager | SettingsManager | Logger | EventBus | I18n
+         ▼
+  TIER 4 │ Shared Core Tools Layer
+         │ LayerUtils | GeomUtils | CRSManager | FileIO | ValidationUtils
+         ▼
+  TIER 5 │ Category Registry Layer
+         │ Hydrology | Geometry | Network | Data Tools | [Custom Categories]
+         ▼
+  TIER 6 │ UI / UX Layer
+         │ Toolbar | Menu | Dockable Panels | Dialogs | Processing GUI
+         ▼
+  TIER 7 │ Output & Integration Layer
+         │ QGIS Canvas | Processing Results | File Export | REST APIs
+
+
+2.1 Architectural Principles
+────────────────────────────
+  • Separation of Concerns: Each tier has a single, well-defined responsibility.
+  • Modularity: Tool categories are self-contained and independently deployable.
+  • Extensibility: New categories and tools can be added via registry pattern
+    without touching core code.
+  • Reusability: Core shared tools are stateless utilities consumed across all
+    categories.
+  • Testability: All processing logic is decoupled from UI, enabling headless
+    unit testing.
+  • QGIS Compliance: Full adherence to QGIS plugin architecture standards and
+    the QGIS Processing Framework API.
+
+
+────────────────────────────────────────────────────────────────────────────────
+3. PROJECT STRUCTURE
+────────────────────────────────────────────────────────────────────────────────
+
+mayim_tools/
+│
+├── metadata.txt                    QGIS plugin metadata (required for repo)
+├── __init__.py                     classFactory() entry point
+├── mayim_tools_plugin.py           Main plugin class (init/unload lifecycle)
+├── resources.qrc                   Qt resource file (icons, images, assets)
+├── resources_rc.py                 Compiled Qt resources (auto-generated)
+│
+├── core/                           ── SHARED CORE TOOLS ──
+│   ├── __init__.py
+│   ├── plugin_manager.py           Plugin lifecycle management
+│   ├── settings_manager.py         QSettings wrapper for persistent config
+│   ├── logger.py                   Centralised logging via QgsMessageLog
+│   ├── event_bus.py                Lightweight pub/sub event system
+│   ├── i18n_manager.py             Internationalisation (translation) support
+│   ├── layer_utils.py              Layer inspection and manipulation helpers
+│   ├── geometry_utils.py           Geometry processing helper functions
+│   ├── crs_manager.py              CRS detection and transformation utilities
+│   ├── file_io.py                  File read/write and format utilities
+│   └── validation_utils.py         Input validation and error-checking helpers
+│
+├── categories/                     ── TOOL CATEGORIES ──
+│   ├── __init__.py
+│   ├── category_registry.py        Dynamic category self-registration system
+│   │
+│   ├── hydrology/                  Category: Hydrology Tools
+│   │   ├── __init__.py
+│   │   ├── category.py             Category descriptor and metadata
+│   │   ├── tools/
+│   │   │   ├── catchment_delineation.py
+│   │   │   ├── flow_accumulation.py
+│   │   │   └── rainfall_analysis.py
+│   │   └── ui/
+│   │       └── hydrology_dialog.ui
+│   │
+│   ├── geometry/                   Category: Geometry Tools
+│   │   ├── __init__.py
+│   │   ├── category.py
+│   │   └── tools/
+│   │       ├── polygon_splitter.py
+│   │       └── centerline_extractor.py
+│   │
+│   └── [other_categories]/         Pattern repeated for each new category
+│
+├── ui/                             ── GLOBAL UI COMPONENTS ──
+│   ├── main_toolbar.py             Plugin toolbar integration
+│   ├── main_menu.py                Plugin menu integration (Plugins menu)
+│   ├── dock_widget.py              Dockable side panel (Qt6 QDockWidget)
+│   ├── about_dialog.py             About / version / credits dialog
+│   └── styles/
+│       ├── mayim_light.qss         Light theme Qt stylesheet
+│       └── mayim_dark.qss          Dark theme Qt stylesheet
+│
+├── processing/                     ── PROCESSING FRAMEWORK ──
+│   ├── __init__.py
+│   ├── provider.py                 MayimToolsProvider (Processing Provider)
+│   └── algorithms/
+│       ├── base_algorithm.py       Abstract base class for all algorithms
+│       └── [tool_algorithms].py    Individual algorithm implementations
+│
+├── tests/                          ── AUTOMATED TESTS ──
+│   ├── conftest.py                 pytest + pytest-qgis configuration
+│   ├── test_core/                  Unit tests for core utilities
+│   └── test_categories/            Integration tests per category
+│
+├── docs/                           ── DOCUMENTATION ──
+│   └── source/                     Sphinx documentation source
+│
+├── i18n/                           ── TRANSLATIONS ──
+│   └── mayim_tools_af.ts           Afrikaans translation (example)
+│
+└── scripts/                        ── DEVELOPER UTILITIES ──
+    ├── deploy.py                   Local deployment helper script
+    └── compile_resources.py        Qt resource compilation script
+
+
+────────────────────────────────────────────────────────────────────────────────
+4. CORE FRAMEWORK COMPONENTS
+────────────────────────────────────────────────────────────────────────────────
+
+4.1 Plugin Entry Point (mayim_tools_plugin.py)
+───────────────────────────────────────────────
+The main plugin class implements the standard QGIS plugin lifecycle:
+  • initGui()  — Registers toolbar, menus, Processing Provider, and dock widget
+  • unload()   — Cleans up all GUI elements and deregisters the provider
+
+4.2 Core Shared Tools
+──────────────────────
+All core modules are stateless utility classes or functions. They are not
+instantiated as singletons but imported directly where needed, avoiding
+circular dependencies.
+
+  Module              │ Responsibility
+  ────────────────────┼──────────────────────────────────────────────────────
+  logger.py           │ Wraps QgsMessageLog with Info/Warning/Critical levels
+  settings_manager.py │ Reads/writes plugin settings via QSettings
+  layer_utils.py      │ Layer listing, field access, type checking
+  geometry_utils.py   │ Geometry validation, transformation, simplification
+  crs_manager.py      │ CRS detection, EPSG lookup, on-the-fly reprojection
+  file_io.py          │ GeoJSON, CSV, shapefile, GeoPackage read/write
+  validation_utils.py │ Null checks, type validation, range enforcement
+  event_bus.py        │ Signal/slot-based pub/sub for inter-module messaging
+  i18n_manager.py     │ Translation loading and locale detection
+
+4.3 Category Registry
+──────────────────────
+The CategoryRegistry allows each tool category to self-register at import
+time using a decorator or explicit register() call. This eliminates the need
+for a hard-coded list of categories in the core plugin class.
+
+  class CategoryRegistry:
+      _categories: dict[str, BaseCategory] = {}
+
+      @classmethod
+      def register(cls, category: BaseCategory) -> None:
+          cls._categories[category.id] = category
+
+      @classmethod
+      def get_all(cls) -> list[BaseCategory]:
+          return list(cls._categories.values())
+
+4.4 Processing Provider
+────────────────────────
+The MayimToolsProvider registers all Mayim Tools algorithms with the QGIS
+Processing Framework. This makes every tool available in:
+  • The Processing Toolbox (GUI)
+  • The Graphical Modeler (drag-and-drop workflows)
+  • PyQGIS scripting (processing.run("mayimtools:toolname", {...}))
+  • QGIS Server WPS (if configured)
+
+4.5 Base Algorithm
+───────────────────
+All processing tools inherit from MayimBaseAlgorithm, which extends
+QgsProcessingAlgorithm and enforces a consistent interface:
+  • name()        — Unique algorithm identifier
+  • displayName() — Human-readable tool name
+  • group()       — Category group name
+  • groupId()     — Category group identifier
+  • initAlgorithm() — Parameter definition
+  • processAlgorithm() — Core processing logic
+  • createInstance()   — Required factory method
+
+
+────────────────────────────────────────────────────────────────────────────────
+5. TOOL CATEGORY DESIGN PATTERN
+────────────────────────────────────────────────────────────────────────────────
+
+Each tool category follows an identical internal structure:
+
+  [category_name]/
+  ├── __init__.py          Imports category and registers it
+  ├── category.py          Category class: id, name, icon, description
+  ├── tools/               One Python file per tool/algorithm
+  └── ui/                  Qt Designer .ui files for any custom dialogs
+
+Category Descriptor (category.py):
+  class HydrologyCategory(BaseCategory):
+      id          = "hydrology"
+      name        = "Hydrology Tools"
+      description = "Tools for catchment analysis, flow routing, and rainfall"
+      icon        = ":/icons/hydrology.png"
+
+This pattern ensures:
+  • Consistent discovery by the CategoryRegistry
+  • Uniform UI representation in the toolbar and menu
+  • Independent development and testing of each category
+
+
+────────────────────────────────────────────────────────────────────────────────
+6. UI / UX DESIGN
+────────────────────────────────────────────────────────────────────────────────
+
+6.1 Toolbar
+  A dedicated Mayim Tools toolbar is added to the QGIS main window, containing
+  category shortcut buttons and a "Mayim Tools" branding icon.
+
+6.2 Plugin Menu
+  A top-level menu entry is added under the QGIS "Plugins" menu:
+    Plugins > Mayim Tools > [Category Submenus] > [Individual Tools]
+
+6.3 Dockable Panel
+  An optional dockable QDockWidget provides a persistent side panel with:
+  • Category browser (tree view)
+  • Recently used tools
+  • Quick-access search/filter
+
+6.4 Dialogs
+  Each tool may provide a custom Qt6 dialog (designed in Qt Designer) or use
+  the auto-generated QGIS Processing dialog. Custom dialogs inherit from
+  MayimBaseDialog for consistent styling.
+
+6.5 Theming
+  Qt stylesheets (QSS) provide light and dark theme support, respecting the
+  host QGIS theme where possible.
+
+
+────────────────────────────────────────────────────────────────────────────────
+7. QUALITY, TESTING & CI/CD
+────────────────────────────────────────────────────────────────────────────────
+
+7.1 Testing Strategy
+  Framework:   pytest + pytest-qgis
+  Unit Tests:  All core utilities tested in isolation (no QGIS instance needed)
+  Integration: Category tools tested with a live QGIS test environment
+  Coverage:    Minimum 80% code coverage enforced via CI
+
+7.2 Code Quality
+  Linting:     ruff (fast Python linter, replaces flake8/pylint)
+  Type Safety: mypy (strict mode for core modules)
+  Formatting:  black (auto-formatter, 88-char line length)
+  Pre-commit:  pre-commit hooks enforce quality before every commit
+
+7.3 CI/CD Pipeline (GitHub Actions)
+  Trigger:     Push to main/develop branches; Pull Requests
+  Steps:
+    1. Lint (ruff + mypy)
+    2. Unit Tests (pytest)
+    3. Integration Tests (pytest-qgis)
+    4. Build plugin ZIP package
+    5. Upload to GitHub Releases (on tag)
+    6. Notify QGIS Plugin Repository (on release)
+
+
+────────────────────────────────────────────────────────────────────────────────
+8. DISTRIBUTION & LICENSING
+────────────────────────────────────────────────────────────────────────────────
+
+  License:        GNU General Public License v2 or later (GPL-2.0+)
+                  Required for all QGIS plugin repository submissions.
+
+  Repository:     QGIS Official Plugin Repository — plugins.qgis.org
+  Source Code:    GitHub (public repository)
+  Versioning:     Semantic Versioning — MAJOR.MINOR.PATCH (e.g., 1.0.0)
+
+  metadata.txt fields (key):
+    name            = Mayim Tools
+    qgisMinimumVersion = 4.0
+    version         = 1.0.0
+    author          = [Author/Organisation Name]
+    email           = [contact email]
+    description     = A suite of engineering and geospatial tools for QGIS
+    license         = GPL-2.0+
+    repository      = https://github.com/[org]/mayim-tools
+    tracker         = https://github.com/[org]/mayim-tools/issues
+    tags            = water, hydrology, geometry, engineering, tools
+
+
+────────────────────────────────────────────────────────────────────────────────
+9. TECHNOLOGY STACK SUMMARY
+────────────────────────────────────────────────────────────────────────────────
+
+  Component           │ Technology
+  ────────────────────┼──────────────────────────────────────────────────────
+  Host Platform       │ QGIS 4.x
+  Language            │ Python 3.10+
+  GUI Framework       │ Qt6 / PyQt6
+  GIS API             │
