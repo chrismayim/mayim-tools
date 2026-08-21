@@ -1,0 +1,17 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+
+    <qresource prefix="/icons">
+        <!-- Main plugin icon -->
+        <file>icons/mayim_logo.png</file>
+
+        <!-- Category icons -->
+        <file>icons/hydrology.png</file>
+        <file>icons/geometry.png</file>
+
+        <!-- Add new icon entries here as categories are added:  -->
+        <!-- <file>icons/network.png</file>                      -->
+        <!-- <file>icons/data_tools.png</file>                   -->
+    </qresource>
+
+</RCC>

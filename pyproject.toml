@@ -1,0 +1,27 @@
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+select = ["E", "F", "W", "I", "N", "UP"]
+ignore = ["E501"]
+exclude = [
+    "resources_rc.py",
+    ".git",
+    "__pycache__",
+]
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+
+[tool.black]
+line-length = 88
+target-version = ["py312"]
+exclude = "resources_rc.py"
+
+[tool.pytest.ini_options]
+testpaths = ["mayim_tools/tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]

@@ -1,0 +1,55 @@
+{
+    "python.defaultInterpreterPath": "C:\\Program Files\\QGIS 4.x\\apps\\Python3xx\\python.exe",
+    "editor.formatOnSave": true,
+    "editor.defaultFormatter": "ms-python.black-formatter",
+    "editor.rulers": [88],
+    "files.trimTrailingWhitespace": true,
+    "files.insertFinalNewline": true,
+    "files.exclude": {
+        "**/__pycache__": true,
+        "**/*.pyc": true,
+        "**/*.pyo": true,
+        "**/.git": false
+    },
+    "search.exclude": {
+        "**/__pycache__": true,
+        "**/*.pyc": true,
+        "resources_rc.py": true
+    },
+    "python.analysis.extraPaths": [
+        "C:\\Program Files\\QGIS 4.x\\apps\\qgis\\python",
+        "C:\\Program Files\\QGIS 4.x\\apps\\qgis\\python\\plugins"
+    ],
+    "python.linting.enabled": true,
+    "python.linting.mypyEnabled": true,
+    "ruff.enable": true,
+    "ruff.organizeImports": true,
+    "[python]": {
+        "editor.defaultFormatter": "ms-python.black-formatter",
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+            "source.organizeImports": "explicit"
+        }
+    },
+    "editor.tabSize": 4,
+    "editor.insertSpaces": true,
+    "todo-tree.general.tags": [
+        "TODO",
+        "FIXME",
+        "HACK",
+        "NOTE",
+        "BUG"
+    ],
+    "todo-tree.highlights.defaultHighlight": {
+        "foreground": "white",
+        "background": "#F4A261",
+        "iconColour": "#F4A261"
+    },
+    "git.enableSmartCommit": true,
+    "git.autofetch": true,
+    "workbench.colorCustomizations": {
+        "activityBar.background": "#0A3D62",
+        "titleBar.activeBackground": "#0A3D62",
+        "titleBar.activeForeground": "#FFFFFF"
+    }
+}
