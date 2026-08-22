@@ -53,3 +53,7 @@
         "titleBar.activeForeground": "#FFFFFF"
     }
 }
+{
+    "files.encoding": "utf8",
+    "files.autoGuessEncoding": false
+}

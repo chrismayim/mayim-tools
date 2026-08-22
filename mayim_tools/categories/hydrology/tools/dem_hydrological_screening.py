@@ -49,23 +49,24 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
-
 from qgis.core import (
     QgsProcessingContext,
     QgsProcessingException,
     QgsProcessingFeedback,
-    QgsProcessingParameterEnum,
-    QgsProcessingParameterFolderDestination,
-    QgsProcessingParameterNumber,
-    QgsProcessingParameterRasterLayer,
     QgsProcessingOutputFile,
     QgsProcessingOutputRasterLayer,
+    QgsProcessingParameterBoolean,
+    QgsProcessingParameterEnum,
+    QgsProcessingParameterFileDestination,
+    QgsProcessingParameterFolderDestination,
+    QgsProcessingParameterNumber,
+    QgsProcessingParameterRasterDestination,
+    QgsProcessingParameterRasterLayer,
 )
 
 from mayim_tools.core.logger import MayimLogger
 from mayim_tools.core.validation_utils import ValidationUtils
 from mayim_tools.processing.algorithms.base_algorithm import MayimBaseAlgorithm
-
 
 # -- DEM Source Type Constants ---------------------------------------------- #
 
@@ -201,7 +202,7 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
     def initAlgorithm(self, config=None) -> None:
         """Define all input and output parameters."""
 
-        # -- Input DEM --
+        # ── Input DEM ──
         self.addParameter(
             QgsProcessingParameterRasterLayer(
                 self.PARAM_DEM,
@@ -209,7 +210,7 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
             )
         )
 
-        # -- DEM Source Type --
+        # ── DEM Source Type ──
         self.addParameter(
             QgsProcessingParameterEnum(
                 self.PARAM_SOURCE_TYPE,
@@ -220,19 +221,20 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
             )
         )
 
-        # -- Known vertical accuracy (optional override) --
-        param_rmse = QgsProcessingParameterNumber(
-            self.PARAM_USER_RMSE,
-            "Known vertical accuracy RMSE (m) — leave -1 to use default",
-            type=QgsProcessingParameterNumber.Double,
-            defaultValue=-1.0,
-            minValue=-1.0,
-            maxValue=100.0,
-            optional=True,
+        # ── Known vertical accuracy (optional override) ──
+        self.addParameter(
+            QgsProcessingParameterNumber(
+                self.PARAM_USER_RMSE,
+                "Known vertical accuracy RMSE (m) — leave -1 to use default",
+                type=QgsProcessingParameterNumber.Double,
+                defaultValue=-1.0,
+                minValue=-1.0,
+                maxValue=100.0,
+                optional=True,
+            )
         )
-        self.addParameter(param_rmse)
 
-        # -- Small void threshold --
+        # ── Small void threshold ──
         self.addParameter(
             QgsProcessingParameterNumber(
                 self.PARAM_SMALL_VOID,
@@ -245,7 +247,7 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
             )
         )
 
-        # -- Large void threshold --
+        # ── Large void threshold ──
         self.addParameter(
             QgsProcessingParameterNumber(
                 self.PARAM_LARGE_VOID,
@@ -258,7 +260,7 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
             )
         )
 
-        # -- MAD filter window size --
+        # ── MAD filter window size ──
         self.addParameter(
             QgsProcessingParameterNumber(
                 self.PARAM_MAD_WINDOW,
@@ -270,7 +272,7 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
             )
         )
 
-        # -- MAD threshold (sigma) --
+        # ── MAD threshold (sigma) ──
         self.addParameter(
             QgsProcessingParameterNumber(
                 self.PARAM_MAD_THRESHOLD,
@@ -283,11 +285,36 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
             )
         )
 
-        # -- Output folder --
+        # ── Output folder ──
         self.addParameter(
             QgsProcessingParameterFolderDestination(
                 self.PARAM_OUTPUT_FOLDER,
                 "Output folder",
+            )
+        )
+
+        # ── Output loading options ──────────────────────────────────────── #
+        self.addParameter(
+            QgsProcessingParameterBoolean(
+                "LOAD_SCREENED_DEM",
+                "Load screened DEM into project",
+                defaultValue=True,
+            )
+        )
+
+        self.addParameter(
+            QgsProcessingParameterBoolean(
+                "LOAD_VOID_MASK",
+                "Load void mask into project",
+                defaultValue=True,
+            )
+        )
+
+        self.addParameter(
+            QgsProcessingParameterBoolean(
+                "LOAD_ARTIFACT_MASK",
+                "Load artifact mask into project",
+                defaultValue=True,
             )
         )
 
@@ -316,7 +343,7 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
             )
 
         try:
-            from scipy.ndimage import label, generic_filter
+            from scipy.ndimage import generic_filter, label
         except ImportError:
             raise QgsProcessingException(
                 "The 'scipy' library is required but not installed.\n"
@@ -373,8 +400,19 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
 
         # -- Set up output paths ------------------------------------------ #
 
+        # ── Handle temporary folder ────────────────────────────────────── #
+        if not output_folder or output_folder.strip() == "":
+            import tempfile
+            output_folder = tempfile.mkdtemp(prefix="mayim_screening_")
+            self.log(
+                f"  No output folder specified — using temporary "
+                f"folder: {output_folder}",
+                feedback
+            )
+
         output_dir = Path(output_folder)
         output_dir.mkdir(parents=True, exist_ok=True)
+
 
         dem_stem = Path(dem_layer.source()).stem
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -922,13 +960,14 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
 
         feedback.setProgress(95)
 
-        # -- Final summary ------------------------------------------------ #
+        # ── Final summary ──────────────────────────────────────────────── #
         self.log("", feedback)
         self.log("=" * 60, feedback)
         self.log("  SCREENING COMPLETE", feedback)
         self.log("=" * 60, feedback)
         self.log(
-            f"  All outputs written to: {output_folder}", feedback
+            f"  All outputs written to: {output_folder}",
+            feedback
         )
         self.log(
             f"  Review the QA report before proceeding to "
@@ -936,6 +975,30 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
             feedback
         )
         self.log("", feedback)
+
+        feedback.setProgress(95)
+
+        # ── Read load preferences ──────────────────────────────────────── #
+        load_screened_dem  = self.parameterAsBoolean(
+            parameters, "LOAD_SCREENED_DEM", context
+        )
+        load_void_mask     = self.parameterAsBoolean(
+            parameters, "LOAD_VOID_MASK", context
+        )
+        load_artifact_mask = self.parameterAsBoolean(
+            parameters, "LOAD_ARTIFACT_MASK", context
+        )
+
+        # ── Load output layers into QGIS project ──────────────────────── #
+        self._load_layers_into_project(
+            paths=paths,
+            load_screened_dem=load_screened_dem,
+            load_void_mask=load_void_mask,
+            load_artifact_mask=load_artifact_mask,
+            dem_stem=dem_stem,
+            context=context,
+            feedback=feedback,
+        )
 
         feedback.setProgress(100)
 
@@ -946,6 +1009,7 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
             self.OUTPUT_QA_REPORT:     str(paths["qa_report_txt"]),
             self.OUTPUT_PROVENANCE:    str(paths["provenance"]),
         }
+
 
     # -- Private helper methods ------------------------------------------- #
 

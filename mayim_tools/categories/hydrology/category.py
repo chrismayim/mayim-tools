@@ -32,7 +32,8 @@ class HydrologyCategory(BaseCategory):
 
     @property
     def icon_path(self) -> str:
-        return ":/icons/hydrology.png"
+        from mayim_tools.resources_rc import get_icon_path
+        return get_icon_path("hydrology.png")
 
     def get_algorithms(self) -> list:
         """

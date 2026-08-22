@@ -15,6 +15,8 @@ from qgis.PyQt.QtWidgets import (
     QVBoxLayout,
 )
 
+from mayim_tools.resources_rc import get_icon_path
+
 
 class AboutDialog(QDialog):
     """
@@ -59,7 +61,7 @@ class AboutDialog(QDialog):
 
         logo_label = QLabel()
         logo_label.setPixmap(
-            QPixmap(":/icons/mayim_logo.png").scaled(
+            QPixmap(get_icon_path("mayim_logo.png")).scaled(
                 64, 64,
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
@@ -102,7 +104,7 @@ class AboutDialog(QDialog):
 
         # ── Repository button ──
         repo_button = QPushButton(
-            QIcon(":/icons/mayim_logo.png"),
+            QIcon(get_icon_path("mayim_logo.png")),
             "  View on GitHub"
         )
         repo_button.setToolTip(self.PLUGIN_REPO)

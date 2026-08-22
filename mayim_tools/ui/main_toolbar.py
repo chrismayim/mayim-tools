@@ -9,6 +9,7 @@ from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction, QToolBar
 
 from mayim_tools.core.logger import MayimLogger
+from mayim_tools.resources_rc import get_icon_path
 
 
 class MayimToolbar:
@@ -40,7 +41,7 @@ class MayimToolbar:
 
         # ── Add About action ──
         about_action = QAction(
-            QIcon(":/icons/mayim_logo.png"),
+            QIcon(get_icon_path("mayim_logo.png")),
             "Mayim Tools",
             self.iface.mainWindow(),
         )
@@ -77,15 +78,60 @@ class MayimToolbar:
             self.toolbar.addAction(action)
             self.actions.append(action)
 
+    def _add_category_actions(self) -> None:
+        """
+        Dynamically add a toolbar button for each registered category.
+        Clicking a category button opens the first tool in that category,
+        or shows a message if no tools are available yet.
+        """
+        from mayim_tools.categories.category_registry import CategoryRegistry
+
+        for category in CategoryRegistry.get_all():
+            action = QAction(
+                category.icon,
+                category.name,
+                self.iface.mainWindow(),
+            )
+            action.setToolTip(category.description)
+
+            # Capture category correctly in closure
+            def make_handler(cat):
+                def handler():
+                    self._open_category(cat)
+                return handler
+
+            action.triggered.connect(make_handler(category))
+            self.toolbar.addAction(action)
+            self.actions.append(action)
+
     def _open_category(self, category) -> None:
         """
-        Open the Processing Toolbox and filter to the selected category.
-
-        :param category: BaseCategory instance
+        Open the first tool in the category, or show a message
+        if no tools are available yet.
         """
-        self.iface.openMessageLog()
-        MayimLogger.info(f"Opening category: {category.name}")
-        # Future: filter Processing Toolbox to this category directly
+        try:
+            import processing
+            algorithms = category.get_algorithms()
+            if algorithms:
+                alg_id = f"mayimtools:{algorithms[0].name()}"
+                processing.execAlgorithmDialog(alg_id)
+                MayimLogger.info(
+                    f"Opened tool: {algorithms[0].displayName()}"
+                )
+            else:
+                from qgis.PyQt.QtWidgets import QMessageBox
+                QMessageBox.information(
+                    self.iface.mainWindow(),
+                    "Mayim Tools",
+                    f"{category.name} has no tools yet.\n"
+                    f"Tools are being developed and will appear here "
+                    f"in a future release.",
+                )
+        except Exception as e:
+            MayimLogger.critical(
+                f"Failed to open category {category.name}: {e}"
+            )
+
 
     def _show_about(self) -> None:
         """Open the About dialog."""
