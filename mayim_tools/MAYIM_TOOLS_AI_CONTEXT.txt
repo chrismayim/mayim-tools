@@ -1,0 +1,531 @@
+═══════════════════════════════════════════════════════════════════════════════
+MAYIM TOOLS — AI CONTEXT & PROJECT INSTRUCTION DOCUMENT
+Version: 1.0
+Date: 2025
+═══════════════════════════════════════════════════════════════════════════════
+
+SECTION 1 — WHO I AM
+─────────────────────────────────────────────────────────────────────────────
+I am a civil/water engineer and QGIS user developing a custom QGIS 4+ plugin
+called "Mayim Tools". I am not a professional software developer — I have
+intermediate technical knowledge and am learning as I go, with AI assistance.
+
+My name:        Chris
+GitHub user:    chrismayim
+Organisation:   Mayim Consulting
+Email:          (your email here)
+
+
+SECTION 2 — WHAT MAYIM TOOLS IS
+─────────────────────────────────────────────────────────────────────────────
+Mayim Tools is a publicly redistributable QGIS 4+ plugin designed for
+engineering and geospatial analysis. The name "Mayim" comes from the Hebrew
+word for "water" (מַיִם), reflecting its initial focus on hydrological and
+water-related engineering tools.
+
+The plugin provides a categorised suite of processing tools accessible via:
+  • The QGIS Processing Toolbox
+  • The QGIS Graphical Modeler
+  • The QGIS Python Console (processing.run())
+  • A custom Dock Panel (category/tool browser)
+  • A custom Plugin Menu (Plugins > Mayim Tools)
+  • A custom Toolbar
+
+Repository:   https://github.com/chrismayim/mayim-tools
+License:      GNU General Public License v2.0 or later (GPL-2.0+)
+Status:       Active development — architecture complete, tools in progress
+
+
+SECTION 3 — TECHNOLOGY STACK
+─────────────────────────────────────────────────────────────────────────────
+Host Platform:    QGIS 4.0.3 (Norrköping)
+Language:         Python 3.12.13
+GUI Framework:    Qt6 / PyQt6
+GIS API:          PyQGIS (QGIS Python API)
+IDE:              VS Code
+Version Control:  Git + GitHub
+OS:               Windows 11
+Python Path:      C:\Program Files\QGIS 4.0.3\apps\Python312\python.exe
+Plugins Folder:   C:\Users\caets\AppData\Roaming\QGIS\QGIS4\profiles\
+                  default\python\plugins\
+Project Folder:   D:\Dropbox\MAYIM\6 TEGNIESE DATA EN DOKUMENTE\QGIS\
+                  QGIS Plug-ins\Mayim Tools\
+
+Code Quality:
+  Linter:         ruff
+  Formatter:      black
+  Type checker:   mypy
+  Testing:        pytest
+
+
+SECTION 4 — PROJECT FOLDER STRUCTURE
+─────────────────────────────────────────────────────────────────────────────
+mayim-tools/                          ← GitHub repository root
+│
+├── .gitignore
+├── .pre-commit-config.yaml           (pre-commit disabled — using ruff/black
+│                                      directly due to QGIS Python conflict)
+├── .vscode/
+│   └── settings.json
+├── LICENSE                           (GPL-2.0+)
+├── README.md
+├── pyproject.toml                    (ruff, black, mypy, pytest config)
+│
+└── mayim_tools/                      ← Main plugin package
+    │
+    ├── __init__.py                   classFactory() entry point
+    ├── mayim_tools_plugin.py         Main plugin class (lifecycle management)
+    ├── metadata.txt                  QGIS plugin metadata
+    ├── resources.qrc                 Qt resource file (icons)
+    ├── resources_rc.py               Development resource loader
+    │
+    ├── core/                         ── SHARED CORE UTILITIES ──
+    │   ├── __init__.py
+    │   ├── logger.py                 MayimLogger (wraps QgsMessageLog)
+    │   ├── settings_manager.py       SettingsManager (wraps QSettings)
+    │   ├── event_bus.py              EventBus (pub/sub messaging)
+    │   ├── layer_utils.py            LayerUtils (layer helpers)
+    │   ├── geometry_utils.py         GeometryUtils (geometry helpers)
+    │   ├── crs_manager.py            CRSManager (CRS utilities)
+    │   ├── file_io.py                FileIO (read/write utilities)
+    │   ├── validation_utils.py       ValidationUtils (input validation)
+    │   ├── i18n_manager.py           I18n (translation support)
+    │   └── plugin_manager.py         Plugin lifecycle helpers
+    │
+    ├── categories/                   ── TOOL CATEGORIES ──
+    │   ├── __init__.py               Imports all categories (triggers
+    │   │                             self-registration). Add new category
+    │   │                             imports here.
+    │   ├── base_category.py          BaseCategory (abstract base class)
+    │   ├── category_registry.py      CategoryRegistry (central registry)
+    │   │
+    │   ├── hydrology/                Category: Hydrology Tools
+    │   │   ├── __init__.py           Self-registers HydrologyCategory
+    │   │   ├── category.py           HydrologyCategory descriptor
+    │   │   ├── tools/                Individual tool algorithms
+    │   │   │   └── __init__.py
+    │   │   └── ui/                   Qt Designer .ui files
+    │   │
+    │   └── geometry/                 Category: Geometry Tools
+    │       ├── __init__.py           Self-registers GeometryCategory
+    │       ├── category.py           GeometryCategory descriptor
+    │       └── tools/
+    │           └── __init__.py
+    │
+    ├── processing/                   ── PROCESSING FRAMEWORK ──
+    │   ├── __init__.py
+    │   ├── provider.py               MayimToolsProvider (Processing Provider)
+    │   └── algorithms/
+    │       ├── __init__.py
+    │       └── base_algorithm.py     MayimBaseAlgorithm (abstract base)
+    │
+    ├── ui/                           ── UI COMPONENTS ──
+    │   ├── __init__.py
+    │   ├── main_toolbar.py           MayimToolbar
+    │   ├── main_menu.py              MayimMenu
+    │   ├── dock_widget.py            MayimDockWidget (category browser)
+    │   ├── about_dialog.py           AboutDialog
+    │   ├── base_dialog.py            MayimBaseDialog (base for tool dialogs)
+    │   └── styles/
+    │       ├── mayim_light.qss
+    │       └── mayim_dark.qss
+    │
+    ├── icons/                        ── ICONS ──
+    │   ├── mayim_logo.png            Main plugin icon (32x32 placeholder)
+    │   ├── hydrology.png             Hydrology category icon (placeholder)
+    │   └── geometry.png              Geometry category icon (placeholder)
+    │
+    ├── tests/                        ── TESTS ──
+    │   ├── __init__.py
+    │   ├── conftest.py               pytest fixtures
+    │   ├── test_core/
+    │   │   ├── __init__.py
+    │   │   ├── test_logger.py
+    │   │   └── test_validation_utils.py
+    │   └── test_categories/
+    │       └── __init__.py
+    │
+    ├── docs/                         ── DOCUMENTATION ──
+    │   └── source/
+    │
+    ├── i18n/                         ── TRANSLATIONS ──
+    │
+    └── scripts/                      ── DEVELOPER SCRIPTS ──
+        ├── deploy.py                 Deploys plugin to QGIS plugins folder
+        └── compile_resources.py      Compiles resources.qrc (pyrcc6)
+
+
+SECTION 5 — ARCHITECTURE DESIGN PATTERNS
+─────────────────────────────────────────────────────────────────────────────
+5.1 CATEGORY SELF-REGISTRATION PATTERN
+Each category registers itself automatically when imported:
+
+    # In categories/hydrology/__init__.py:
+    from mayim_tools.categories.category_registry import CategoryRegistry
+    from mayim_tools.categories.hydrology.category import HydrologyCategory
+    CategoryRegistry.register(HydrologyCategory())
+
+    # In categories/__init__.py:
+    CategoryRegistry.clear()                    # prevent duplicates on reload
+    import mayim_tools.categories.hydrology     # triggers self-registration
+    import mayim_tools.categories.geometry      # triggers self-registration
+
+5.2 ADDING A NEW CATEGORY
+To add a new tool category:
+    1. Create folder: mayim_tools/categories/[category_name]/
+    2. Create: __init__.py (self-registers)
+    3. Create: category.py (inherits BaseCategory)
+    4. Create: tools/ folder
+    5. Add import to: mayim_tools/categories/__init__.py
+
+5.3 ADDING A NEW TOOL
+To add a new tool to an existing category:
+    1. Create: mayim_tools/categories/[category]/tools/[tool_name].py
+    2. Inherit from MayimBaseAlgorithm
+    3. Implement: name(), displayName(), group(), groupId(),
+                  initAlgorithm(), processAlgorithm(), createInstance()
+    4. Register in: mayim_tools/categories/[category]/category.py
+                    inside get_algorithms() method
+
+5.4 BASE ALGORITHM PATTERN
+All tools inherit from MayimBaseAlgorithm:
+
+    from mayim_tools.processing.algorithms.base_algorithm import (
+        MayimBaseAlgorithm
+    )
+
+    class MyTool(MayimBaseAlgorithm):
+        def name(self):         return "mytool"
+        def displayName(self):  return "My Tool"
+        def group(self):        return "Hydrology Tools"
+        def groupId(self):      return "hydrology"
+        def createInstance(self): return MyTool()
+
+        def initAlgorithm(self, config=None):
+            # Add input/output parameters here
+            pass
+
+        def processAlgorithm(self, parameters, context, feedback):
+            # Tool logic here
+            return {}
+
+5.5 CORE UTILITIES USAGE
+All core utilities are static classes — import and use directly:
+
+    from mayim_tools.core.logger import MayimLogger
+    from mayim_tools.core.validation_utils import ValidationUtils
+    from mayim_tools.core.layer_utils import LayerUtils
+    from mayim_tools.core.crs_manager import CRSManager
+    from mayim_tools.core.settings_manager import SettingsManager
+
+    MayimLogger.info("message")
+    MayimLogger.warning("message")
+    MayimLogger.critical("message")
+
+    ValidationUtils.is_valid_vector_layer(layer)
+    ValidationUtils.is_positive_number(value)
+    ValidationUtils.is_in_range(value, min, max)
+
+    LayerUtils.get_vector_layers()
+    LayerUtils.get_layer_by_name("name")
+
+    CRSManager.from_epsg(32735)
+    CRSManager.project_crs()
+
+    SettingsManager.set("key", value)
+    SettingsManager.get("key", default)
+
+
+SECTION 6 — DEVELOPER WORKFLOW
+─────────────────────────────────────────────────────────────────────────────
+6.1 POWERSHELL SHORTCUTS (defined in PowerShell profile)
+
+    mayim              Navigate to project folder
+    qpy                Run QGIS Python 3.12
+    qpip               pip install packages
+    qruff              Run ruff linter
+    qblack             Run black formatter
+    mayim-lint         Lint all plugin files
+    mayim-format       Format all plugin files
+    mayim-deploy       Deploy plugin to QGIS plugins folder
+    qtest              Run pytest test suite
+    gs                 git status
+    ga                 git add .
+    gp                 git push
+    gl                 git log
+    gcommit "msg"      git add + commit + push in one command
+
+6.2 DAILY DEVELOPMENT WORKFLOW
+    1. mayim                          navigate to project
+    2. (make code changes in VS Code)
+    3. mayim-format                   format code
+    4. mayim-lint                     check for issues
+    5. mayim-deploy                   deploy to QGIS
+    6. (reload plugin in QGIS)        Plugins > Manage > Installed > reload
+    7. gcommit "description"          commit and push to GitHub
+
+6.3 DEPLOYING THE PLUGIN
+    mayim-deploy
+    This copies mayim_tools/ to:
+    C:\Users\caets\AppData\Roaming\QGIS\QGIS4\profiles\default\
+    python\plugins\mayim_tools\
+
+6.4 RELOADING IN QGIS (after deploy)
+    Option A: Plugins > Manage and Install Plugins >
+              Installed > Mayim Tools > uncheck > check
+    Option B: Use Plugin Reloader plugin (install from QGIS repo)
+    Option C: Restart QGIS (cleanest — no duplicate entries)
+
+6.5 VERIFYING IN QGIS PYTHON CONSOLE
+    from qgis.core import QgsApplication
+    p = QgsApplication.processingRegistry().providerById("mayimtools")
+    print(p.name() if p else "Not found")
+
+    from mayim_tools.categories.category_registry import CategoryRegistry
+    for cat in CategoryRegistry.get_all():
+        print(f"{cat.name} ({cat.id})")
+
+
+SECTION 7 — KNOWN ISSUES & DECISIONS
+─────────────────────────────────────────────────────────────────────────────
+7.1 pre-commit DISABLED
+    pre-commit hooks are disabled due to a conflict between QGIS's Python
+    environment (bin\python.exe) and pre-commit's virtual environment
+    creation. Use mayim-format and mayim-lint manually instead.
+
+7.2 resources_rc.py IS A STUB
+    pyrcc6 is not available in the QGIS 4.0.3 installation. resources_rc.py
+    is a manually created stub for development. Icons are loaded from file
+    paths. Replace with proper compiled resources_rc.py for production.
+
+7.3 ICONS ARE PLACEHOLDERS
+    Current icons are simple 32x32 coloured PNG files created with
+    PowerShell. Replace with proper SVG/PNG icons before public release.
+
+7.4 DEPLOY PATH IS QGIS4 NOT QGIS3
+    QGIS 4.0.3 uses QGIS4 profile folder, not QGIS3:
+    C:\Users\caets\AppData\Roaming\QGIS\QGIS4\profiles\default\...
+    Both QGIS 3.44 and QGIS 4.0.3 are installed on this machine.
+
+7.5 PYTHON PATH
+    Use: C:\Program Files\QGIS 4.0.3\apps\Python312\python.exe
+    NOT: C:\Program Files\QGIS 4.0.3\bin\python.exe
+    (bin\python.exe causes PYTHONHOME errors)
+
+
+SECTION 8 — CURRENT STATUS & NEXT STEPS
+─────────────────────────────────────────────────────────────────────────────
+COMPLETED:
+  ✅ Full plugin architecture designed and implemented
+  ✅ Core framework (9 shared utility modules)
+  ✅ Category system (registry + 2 categories)
+  ✅ Processing Provider registered with QGIS
+  ✅ Full UI (toolbar, menu, dock panel, dialogs)
+  ✅ Test suite scaffolded
+  ✅ Deploy script working
+  ✅ Plugin loading cleanly in QGIS 4.0.3
+  ✅ GitHub repository live and up to date
+
+IN PROGRESS:
+  🔄 Building first real tool (next step)
+
+PENDING:
+  ⏳ Actual tool implementations (0 tools built so far)
+  ⏳ Real icons (placeholders in place)
+  ⏳ GitHub Actions CI/CD pipeline
+  ⏳ Public release on QGIS Plugin Repository
+  ⏳ Documentation (Sphinx/ReadTheDocs)
+  ⏳ Translations (i18n)
+
+NEXT IMMEDIATE STEP:
+  Build the first real processing tool inside an existing category.
+  Follow the pattern in Section 5.3 and 5.4 above.
+  Recommended first tool: A simple Hydrology utility such as
+  catchment area calculation or rainfall depth calculator —
+  something that demonstrates the full tool pattern without
+  requiring complex external dependencies.
+
+
+SECTION 9 — CATEGORIES DETAIL
+─────────────────────────────────────────────────────────────────────────────
+9.1 HYDROLOGY TOOLS (id: "hydrology")
+    Status:     Registered, no tools yet
+    Purpose:    Hydrological analysis tools
+    File:       mayim_tools/categories/hydrology/category.py
+    Tools dir:  mayim_tools/categories/hydrology/tools/
+    Planned tools (not yet built):
+      - Catchment delineation
+      - Flow accumulation
+      - Rainfall analysis
+      - Water balance calculation
+      - Rational method runoff (Q = C.i.A)
+      - Time of concentration
+
+9.2 GEOMETRY TOOLS (id: "geometry")
+    Status:     Registered, no tools yet
+    Purpose:    Geometric and spatial analysis tools
+    File:       mayim_tools/categories/geometry/category.py
+    Tools dir:  mayim_tools/categories/geometry/tools/
+    Planned tools (not yet built):
+      - Polygon splitter
+      - Centreline extractor
+      - Buffer analysis
+      - Shape simplification
+
+
+SECTION 10 — IMPORTANT FILE CONTENTS REFERENCE
+─────────────────────────────────────────────────────────────────────────────
+10.1 metadata.txt (key fields)
+    name                  = Mayim Tools
+    qgisMinimumVersion    = 4.0
+    qgisMaximumVersion    = 4.99
+    version               = 0.1.0          ← current version
+    experimental          = True           ← pre-release flag
+    hasProcessingProvider = True
+    license               = GPL-2.0+
+    repository            = https://github.com/chrismayim/mayim-tools
+
+10.2 Processing Provider ID
+    Provider ID:  "mayimtools"
+    Usage:        processing.run("mayimtools:toolname", {...})
+
+10.3 Plugin Package Name
+    Package:      mayim_tools   (underscore — Python package name)
+    Repository:   mayim-tools   (hyphen — GitHub repository name)
+
+10.4 pyproject.toml settings
+    Python target:    3.12
+    Line length:      88
+    Formatter:        black
+    Linter:           ruff
+
+
+SECTION 11 — CODE CONVENTIONS
+─────────────────────────────────────────────────────────────────────────────
+11.1 GENERAL
+  - All files start with: # -*- coding: utf-8 -*-
+  - All classes and methods have docstrings
+  - Type hints used throughout
+  - Line length: 88 characters (black default)
+  - Indentation: 4 spaces (no tabs)
+
+11.2 NAMING CONVENTIONS
+  - Classes:      PascalCase        (MayimLogger, HydrologyCategory)
+  - Functions:    snake_case        (get_algorithms, is_valid_layer)
+  - Constants:    UPPER_SNAKE_CASE  (PLUGIN_NAME, PROVIDER_ID)
+  - Files:        snake_case        (layer_utils.py, base_algorithm.py)
+  - Categories:   snake_case id     ("hydrology", "geometry")
+
+11.3 IMPORTS ORDER (ruff enforced)
+  1. Standard library imports
+  2. Third-party imports (qgis, PyQt6)
+  3. Local mayim_tools imports
+
+11.4 LOGGING CONVENTION
+  Use MayimLogger — never print() in production code:
+    MayimLogger.info("message")       ← general information
+    MayimLogger.warning("message")    ← non-critical issues
+    MayimLogger.critical("message")   ← errors
+    MayimLogger.success("message")    ← successful operations
+
+11.5 ERROR HANDLING CONVENTION
+  All public methods wrap logic in try/except:
+    try:
+        # logic here
+    except Exception as e:
+        MayimLogger.critical(f"Context: {e}")
+
+
+SECTION 12 — INSTRUCTIONS FOR AI ASSISTANT
+─────────────────────────────────────────────────────────────────────────────
+When assisting with Mayim Tools development, please:
+
+1. ALWAYS follow the established architecture patterns described above.
+   Do not suggest alternative structures — the architecture is fixed.
+
+2. ALWAYS use MayimBaseAlgorithm as the base for new tools.
+   Never create standalone QgsProcessingAlgorithm subclasses.
+
+3. ALWAYS register new tools in the category's get_algorithms() method.
+   Never hard-code tool lists anywhere else.
+
+4. ALWAYS use the core utilities (MayimLogger, ValidationUtils, etc.)
+   Never use print() or raw QgsMessageLog calls in tool code.
+
+5. ALWAYS include complete docstrings on all classes and methods.
+   Follow the existing docstring style in the codebase.
+
+6. ALWAYS use type hints on all function signatures.
+
+7. ALWAYS wrap processing logic in try/except with MayimLogger.critical().
+
+8. WHEN adding a new category:
+   - Create the folder structure
+   - Inherit from BaseCategory
+   - Add import to categories/__init__.py
+   - Add icon to resources.qrc
+
+9. WHEN adding a new tool:
+   - Create in the correct category's tools/ folder
+   - Inherit from MayimBaseAlgorithm
+   - Register in category's get_algorithms()
+   - Write a test in tests/test_categories/
+
+10. CODE STYLE:
+    - Line length: 88 characters
+    - Formatter: black
+    - Linter: ruff
+    - Python: 3.12
+
+11. DEPLOYMENT REMINDER:
+    After any code change, remind the user to run:
+      mayim-deploy
+    And reload the plugin in QGIS.
+
+12. GITHUB REMINDER:
+    After completing any feature or fix, remind the user to run:
+      gcommit "description of change"
+
+13. THE USER IS NOT A PROFESSIONAL DEVELOPER:
+    - Explain concepts clearly and simply
+    - Provide complete, copy-paste ready code (never partial snippets)
+    - Point out when files need to be fully replaced vs partially edited
+    - Always specify which file to open and where to paste code
+    - Anticipate common mistakes and warn about them proactively
+
+14. KNOWN ENVIRONMENT QUIRKS:
+    - Use Python: C:\Program Files\QGIS 4.0.3\apps\Python312\python.exe
+    - QGIS profile: QGIS4 (not QGIS3)
+    - Paths with spaces must be quoted in PowerShell
+    - pre-commit is disabled — use mayim-format and mayim-lint instead
+    - resources_rc.py is a stub — do not attempt to compile it
+
+SECTION 13 — VERSIONING POLICY
+─────────────────────────────────────────────────────────────────────────────
+Format: MAJOR.MINOR.PATCH (e.g. 0.1.0)
+
+MAJOR  Breaking changes — tool renames, output format changes
+MINOR  New features — new tools, new categories
+PATCH  Bug fixes — small tweaks, performance, UI fixes
+
+Current version: 0.1.0
+Experimental:    True (QGIS Plugin Repository pre-release flag)
+
+Roadmap:
+  0.1.0  ✅ Current  Architecture complete, no tools yet
+  0.1.x  🔜 Next     Bug fixes to core framework
+  0.2.0  🔜 Planned  Full hydrology chain complete and tested
+  0.3.0  🔜 Planned  Additional categories added
+  1.0.0  🎯 Target   Public release on QGIS Plugin Repository
+
+Files to update on every version change:
+  1. mayim_tools/metadata.txt        → version=X.X.X
+  2. mayim_tools/ui/about_dialog.py  → PLUGIN_VERSION = "X.X.X"
+  3. CHANGELOG.md                    → add new version section
+
+═══════════════════════════════════════════════════════════════════════════════
+END OF MAYIM TOOLS AI CONTEXT DOCUMENT
+Version 1.0 — Generated 2025
+Update this document whenever significant architectural changes are made.
+═══════════════════════════════════════════════════════════════════════════════
+

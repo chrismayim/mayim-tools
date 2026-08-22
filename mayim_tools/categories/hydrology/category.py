@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Mayim Tools – Hydrology Category
+Mayim Tools — Hydrology Category
 Descriptor class for the Hydrology tool category.
 """
 
@@ -10,7 +10,8 @@ from mayim_tools.categories.base_category import BaseCategory
 class HydrologyCategory(BaseCategory):
     """
     Hydrology Tools category.
-    Contains tools for catchment analysis, flow routing, and rainfall processing.
+    Contains tools for DEM conditioning, catchment analysis,
+    flow routing, and rainfall processing.
     """
 
     @property
@@ -24,8 +25,9 @@ class HydrologyCategory(BaseCategory):
     @property
     def description(self) -> str:
         return (
-            "Tools for hydrological analysis including catchment delineation, "
-            "flow accumulation, rainfall analysis, and water balance calculations."
+            "Tools for hydrological analysis including DEM conditioning, "
+            "catchment delineation, flow accumulation, rainfall analysis, "
+            "and water balance calculations."
         )
 
     @property
@@ -35,12 +37,19 @@ class HydrologyCategory(BaseCategory):
     def get_algorithms(self) -> list:
         """
         Return all Hydrology processing algorithms.
-        Add new tools here as they are developed.
+        Each tool is imported here to avoid circular imports
+        at module load time.
         """
-        # Import here to avoid circular imports at module load time
-        # from mayim_tools.categories.hydrology.tools.catchment_delineation \
-        #     import CatchmentDelineationAlgorithm
-        # return [CatchmentDelineationAlgorithm()]
-
-        # Returning empty list until tools are implemented:
-        return []
+        try:
+            from mayim_tools.categories.hydrology.tools.dem_hydrological_screening import (
+                DEMHydrologicalScreening,
+            )
+            return [
+                DEMHydrologicalScreening(),
+            ]
+        except Exception as e:
+            from mayim_tools.core.logger import MayimLogger
+            MayimLogger.critical(
+                f"Hydrology Tools: Failed to load algorithms: {e}"
+            )
+            return []
