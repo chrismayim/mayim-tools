@@ -24,8 +24,8 @@ class AboutDialog(QDialog):
 
     PLUGIN_NAME    = "Mayim Tools"
     PLUGIN_VERSION = "0.1.0"
-    PLUGIN_AUTHOR  = "Your Name / Organisation"
-    PLUGIN_EMAIL   = "your.email@example.com"
+    PLUGIN_AUTHOR  = "Chris Etsebeth / Mayim Consulting Engineers"
+    PLUGIN_EMAIL   = "chris@mayimconsulting.com"
     PLUGIN_LICENSE = "GNU General Public License v2.0 or later (GPL-2.0+)"
     PLUGIN_REPO    = "https://github.com/chrismayim/mayim-tools"
     PLUGIN_DESC    = (
