@@ -1,13 +1,15 @@
 [tool.ruff]
 line-length = 88
 target-version = "py312"
-select = ["E", "F", "W", "I", "N", "UP"]
-ignore = ["E501"]
 exclude = [
     "resources_rc.py",
     ".git",
     "__pycache__",
 ]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP"]
+ignore = ["E501"]
 
 [tool.mypy]
 python_version = "3.12"

@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-Mayim Tools – Main Toolbar
+Mayim Tools - Main Toolbar
 Creates and manages the Mayim Tools toolbar in the QGIS main window.
 """
 
-from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction, QToolBar
 
@@ -15,7 +14,7 @@ from mayim_tools.resources_rc import get_icon_path
 class MayimToolbar:
     """
     Manages the Mayim Tools toolbar added to the QGIS main window.
-    Provides quick-access buttons for each registered category.
+    Provides quick-access buttons for the plugin and each category.
     """
 
     TOOLBAR_NAME = "Mayim Tools Toolbar"
@@ -26,20 +25,22 @@ class MayimToolbar:
 
         :param iface: QGIS interface instance
         """
-        self.iface = iface
-        self.toolbar: QToolBar = None
-        self.actions: list[QAction] = []
+        self.iface   = iface
+        self.toolbar = None
+        self.actions = []
 
     def setup(self) -> None:
         """
         Create the toolbar and add it to the QGIS main window.
         Called from MayimToolsPlugin.initGui().
         """
-        self.toolbar = self.iface.mainWindow().addToolBar(self.TOOLBAR_NAME)
+        self.toolbar = self.iface.mainWindow().addToolBar(
+            self.TOOLBAR_NAME
+        )
         self.toolbar.setObjectName("MayimToolsToolbar")
         self.toolbar.setToolTip("Mayim Tools")
 
-        # ── Add About action ──
+        # ── Mayim Tools branding button ────────────────────────────────── #
         about_action = QAction(
             QIcon(get_icon_path("mayim_logo.png")),
             "Mayim Tools",
@@ -50,10 +51,10 @@ class MayimToolbar:
         self.toolbar.addAction(about_action)
         self.actions.append(about_action)
 
-        # ── Add separator ──
+        # ── Separator ─────────────────────────────────────────────────── #
         self.toolbar.addSeparator()
 
-        # ── Add category shortcut buttons ──
+        # ── Category buttons ───────────────────────────────────────────── #
         self._add_category_actions()
 
         MayimLogger.info("Mayim Tools toolbar created.")
@@ -70,31 +71,10 @@ class MayimToolbar:
                 category.name,
                 self.iface.mainWindow(),
             )
-            action.setToolTip(category.description)
-            # Connect to open the Processing Toolbox filtered to this category
-            action.triggered.connect(
-                lambda checked, cat=category: self._open_category(cat)
+            action.setToolTip(
+                f"{category.name}\n{category.description}"
             )
-            self.toolbar.addAction(action)
-            self.actions.append(action)
 
-    def _add_category_actions(self) -> None:
-        """
-        Dynamically add a toolbar button for each registered category.
-        Clicking a category button opens the first tool in that category,
-        or shows a message if no tools are available yet.
-        """
-        from mayim_tools.categories.category_registry import CategoryRegistry
-
-        for category in CategoryRegistry.get_all():
-            action = QAction(
-                category.icon,
-                category.name,
-                self.iface.mainWindow(),
-            )
-            action.setToolTip(category.description)
-
-            # Capture category correctly in closure
             def make_handler(cat):
                 def handler():
                     self._open_category(cat)
@@ -106,8 +86,8 @@ class MayimToolbar:
 
     def _open_category(self, category) -> None:
         """
-        Open the first tool in the category, or show a message
-        if no tools are available yet.
+        Open the first tool in the category via the Processing dialog.
+        Shows an informational message if no tools are available yet.
         """
         try:
             import processing
@@ -123,21 +103,23 @@ class MayimToolbar:
                 QMessageBox.information(
                     self.iface.mainWindow(),
                     "Mayim Tools",
-                    f"{category.name} has no tools yet.\n"
-                    f"Tools are being developed and will appear here "
-                    f"in a future release.",
+                    f"{category.name} has no tools yet.\n\n"
+                    f"Tools are being developed and will appear "
+                    f"here in a future release.",
                 )
         except Exception as e:
             MayimLogger.critical(
                 f"Failed to open category {category.name}: {e}"
             )
 
-
     def _show_about(self) -> None:
         """Open the About dialog."""
-        from mayim_tools.ui.about_dialog import AboutDialog
-        dialog = AboutDialog(self.iface.mainWindow())
-        dialog.exec()
+        try:
+            from mayim_tools.ui.about_dialog import AboutDialog
+            dialog = AboutDialog(self.iface.mainWindow())
+            dialog.exec()
+        except Exception as e:
+            MayimLogger.critical(f"Failed to open About dialog: {e}")
 
     def teardown(self) -> None:
         """
@@ -150,4 +132,5 @@ class MayimToolbar:
             self.iface.mainWindow().removeToolBar(self.toolbar)
             self.toolbar.deleteLater()
             self.toolbar = None
+        self.actions = []
         MayimLogger.info("Mayim Tools toolbar removed.")

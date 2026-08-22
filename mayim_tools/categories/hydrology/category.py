@@ -38,19 +38,15 @@ class HydrologyCategory(BaseCategory):
     def get_algorithms(self) -> list:
         """
         Return all Hydrology processing algorithms.
-        Each tool is imported here to avoid circular imports
-        at module load time.
         """
-        try:
-            from mayim_tools.categories.hydrology.tools.dem_hydrological_screening import (
-                DEMHydrologicalScreening,
-            )
-            return [
-                DEMHydrologicalScreening(),
-            ]
-        except Exception as e:
-            from mayim_tools.core.logger import MayimLogger
-            MayimLogger.critical(
-                f"Hydrology Tools: Failed to load algorithms: {e}"
-            )
-            return []
+        from mayim_tools.categories.hydrology.tools.dem_hydrological_screening import (
+            DEMHydrologicalScreening,
+        )
+        from mayim_tools.categories.hydrology.tools.dem_hydrological_smoothing import (
+            DEMHydrologicalSmoothing,
+        )
+
+        return [
+            DEMHydrologicalScreening(),
+            DEMHydrologicalSmoothing(),
+        ]
