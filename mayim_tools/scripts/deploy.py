@@ -16,7 +16,7 @@ PLUGIN_NAME = "mayim_tools"
 
 # Update this path to match your QGIS plugins folder:
 QGIS_PLUGINS_DIR = Path(
-    r"C:\Users\caets\AppData\Roaming\QGIS\QGIS3"
+    r"C:\Users\caets\AppData\Roaming\QGIS\QGIS4"
     r"\profiles\default\python\plugins"
 )
 
