@@ -6,6 +6,7 @@ Enforces a consistent interface for category discovery and registration.
 """
 
 from abc import ABC, abstractmethod
+from pathlib import Path
 
 from qgis.PyQt.QtGui import QIcon
 
@@ -48,16 +49,20 @@ class BaseCategory(ABC):
     @property
     def icon_path(self) -> str:
         """
-        Path to the category icon.
+        Absolute file path to the category icon.
         Override in subclass to provide a custom icon.
-        Defaults to the Mayim Tools generic icon.
         """
-        return ":/icons/mayim_logo.png"
+        from mayim_tools.resources_rc import get_icon_path
+        return get_icon_path("mayim_logo.png")
 
     @property
     def icon(self) -> QIcon:
         """Returns a QIcon for this category."""
-        return QIcon(self.icon_path)
+        from mayim_tools.resources_rc import get_icon_path
+        path = self.icon_path
+        if path and Path(path).exists():
+            return QIcon(path)
+        return QIcon()
 
     @abstractmethod
     def get_algorithms(self) -> list:

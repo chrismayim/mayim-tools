@@ -161,21 +161,37 @@ class MayimDockWidget:
     def _on_item_double_clicked(self, item: QTreeWidgetItem, column: int) -> None:
         """
         Handle double-click on a tree item.
+        If a tool node is double-clicked, open it in the
+        Processing dialog.
         """
         try:
             import processing
-            from qgis.core import QgsProcessingAlgorithm
+            from qgis.core import QgsApplication, QgsProcessingAlgorithm
 
             data = item.data(0, Qt.ItemDataRole.UserRole)
 
             if isinstance(data, QgsProcessingAlgorithm):
-                processing.execAlgorithmDialog(data.id())
-                MayimLogger.info(f"Opened tool: {data.displayName()}")
+                # Build the full algorithm ID: "providerid:algorithmname"
+                provider = QgsApplication.processingRegistry().providerById(
+                    "mayimtools"
+                )
+                if provider:
+                    alg_id = f"mayimtools:{data.name()}"
+                    MayimLogger.info(f"Opening tool: {alg_id}")
+                    processing.execAlgorithmDialog(alg_id)
+                else:
+                    MayimLogger.warning(
+                        "Mayim Tools provider not found in registry."
+                    )
             else:
+                # Top-level category node — toggle expand/collapse
                 item.setExpanded(not item.isExpanded())
 
         except Exception as e:
             MayimLogger.critical(f"Mayim Tools: Failed to open tool: {e}")
+            import traceback
+            traceback.print_exc()
+
 
     def refresh(self) -> None:
         """Refresh the tree widget."""

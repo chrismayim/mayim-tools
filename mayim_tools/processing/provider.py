@@ -37,7 +37,8 @@ class MayimToolsProvider(QgsProcessingProvider):
 
     def icon(self) -> QIcon:
         """Provider icon shown in the Processing Toolbox."""
-        return QIcon(":/icons/mayim_logo.png")
+        from mayim_tools.resources_rc import get_icon_path
+        return QIcon(get_icon_path("mayim_logo.png"))
 
     def loadAlgorithms(self) -> None:
         """

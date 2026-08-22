@@ -5,10 +5,12 @@ Adds Mayim Tools entries to the QGIS Plugins menu.
 Structure: Plugins > Mayim Tools > [Categories] > [Tools]
 """
 
+import processing
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction, QMenu
 
 from mayim_tools.core.logger import MayimLogger
+from mayim_tools.resources_rc import get_icon_path
 
 
 class MayimMenu:
@@ -35,7 +37,7 @@ class MayimMenu:
         """
         # ── Create the top-level Mayim Tools menu ──
         self.menu = QMenu(self.MENU_TITLE, self.iface.mainWindow())
-        self.menu.setIcon(QIcon(":/icons/mayim_logo.png"))
+        self.menu.setIcon(QIcon(get_icon_path("mayim_logo.png")))
 
         # ── Add category submenus ──
         self._add_category_menus()
@@ -43,7 +45,7 @@ class MayimMenu:
         # ── Add separator and About ──
         self.menu.addSeparator()
         about_action = QAction(
-            QIcon(":/icons/mayim_logo.png"),
+            QIcon(get_icon_path("mayim_logo.png")),
             "About Mayim Tools...",
             self.iface.mainWindow(),
         )
@@ -58,26 +60,59 @@ class MayimMenu:
 
     def _add_category_menus(self) -> None:
         """
-        Dynamically add a submenu for each registered category.
+        Dynamically add a submenu for each registered category,
+        with a menu item for each tool in that category.
         """
+        import processing
+        from qgis.core import QgsApplication
+
         from mayim_tools.categories.category_registry import CategoryRegistry
 
         for category in CategoryRegistry.get_all():
             category_menu = QMenu(category.name, self.menu)
             category_menu.setIcon(category.icon)
 
-            # Placeholder action — replaced with real tools as they are added
-            placeholder = QAction(
-                f"Open {category.name} in Processing Toolbox",
-                category_menu,
-            )
-            placeholder.triggered.connect(
-                lambda checked, cat=category: MayimLogger.info(
-                    f"Selected category: {cat.name}"
+            # Get algorithms for this category
+            algorithms = category.get_algorithms()
+
+            if algorithms:
+                for algorithm in algorithms:
+                    # Create a menu action for each tool
+                    tool_action = QAction(
+                        algorithm.displayName(),
+                        category_menu,
+                    )
+                    tool_action.setToolTip(algorithm.shortHelpString())
+
+                    # Capture algorithm name in closure correctly
+                    def make_handler(alg_name: str):
+                        def handler():
+                            try:
+                                alg_id = f"mayimtools:{alg_name}"
+                                processing.execAlgorithmDialog(alg_id)
+                            except Exception as e:
+                                MayimLogger.critical(
+                                    f"Failed to open tool "
+                                    f"{alg_name}: {e}"
+                                )
+                        return handler
+
+                    tool_action.triggered.connect(
+                        make_handler(algorithm.name())
+                    )
+                    category_menu.addAction(tool_action)
+                    self.actions.append(tool_action)
+            else:
+                # Placeholder when no tools exist yet
+                placeholder = QAction(
+                    "No tools available yet",
+                    category_menu,
                 )
-            )
-            category_menu.addAction(placeholder)
+                placeholder.setEnabled(False)
+                category_menu.addAction(placeholder)
+
             self.menu.addMenu(category_menu)
+
 
     def _show_about(self) -> None:
         """Open the About dialog."""
