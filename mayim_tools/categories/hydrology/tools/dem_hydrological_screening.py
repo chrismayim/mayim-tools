@@ -318,6 +318,45 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
             )
         )
 
+        # ------------------------------------------------------------------
+        # Processing outputs
+        # ------------------------------------------------------------------
+
+        self.addOutput(
+            QgsProcessingOutputRasterLayer(
+                self.OUTPUT_DEM,
+                "Screened DEM",
+            )
+        )
+
+        self.addOutput(
+            QgsProcessingOutputRasterLayer(
+                self.OUTPUT_VOID_MASK,
+                "Void classification mask",
+            )
+        )
+
+        self.addOutput(
+            QgsProcessingOutputRasterLayer(
+                self.OUTPUT_ARTIFACT_MASK,
+                "Artifact mask",
+            )
+        )
+
+        self.addOutput(
+            QgsProcessingOutputFile(
+                self.OUTPUT_QA_REPORT,
+                "QA and artifact screening report",
+            )
+        )
+
+        self.addOutput(
+            QgsProcessingOutputFile(
+                self.OUTPUT_PROVENANCE,
+                "Provenance log",
+            )
+        )
+
     # -- Main processing method ------------------------------------------- #
 
     def processAlgorithm(
@@ -1013,6 +1052,99 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
 
     # -- Private helper methods ------------------------------------------- #
 
+    def _load_layers_into_project(
+        self,
+        paths: dict,
+        load_screened_dem: bool,
+        load_void_mask: bool,
+        load_artifact_mask: bool,
+        dem_stem: str,
+        context: QgsProcessingContext,
+        feedback: QgsProcessingFeedback,
+    ) -> None:
+        """
+        Load selected screening outputs directly into the QGIS project.
+
+        Outputs are added to the project root. No Mayim Tools layer group
+        is created.
+
+        :param paths: Dictionary containing output paths.
+        :param load_screened_dem: Whether to load the screened DEM.
+        :param load_void_mask: Whether to load the void mask.
+        :param load_artifact_mask: Whether to load the artifact mask.
+        :param dem_stem: Input DEM filename stem.
+        :param context: QGIS processing context.
+        :param feedback: QGIS processing feedback object.
+        """
+        try:
+            from qgis.core import QgsProject, QgsRasterLayer
+
+            project = QgsProject.instance()
+            layers_loaded = 0
+
+            def load_raster(file_path, layer_name: str) -> None:
+                nonlocal layers_loaded
+
+                layer = QgsRasterLayer(
+                    str(file_path),
+                    layer_name,
+                    "gdal",
+                )
+
+                if not layer.isValid():
+                    self.log_warning(
+                        f"Could not load output layer: {layer_name}",
+                        feedback,
+                    )
+                    return
+
+                # The second argument True places the layer directly
+                # in the normal project layer tree.
+                project.addMapLayer(layer, True)
+
+                layers_loaded += 1
+
+                self.log(
+                    f"Loaded directly into project: {layer_name}",
+                    feedback,
+                )
+
+            if load_screened_dem:
+                load_raster(
+                    paths["screened_dem"],
+                    f"{dem_stem} - Screened DEM",
+                )
+
+            if load_void_mask:
+                load_raster(
+                    paths["void_mask"],
+                    f"{dem_stem} - Void Mask",
+                )
+
+            if load_artifact_mask:
+                load_raster(
+                    paths["artifact_mask"],
+                    f"{dem_stem} - Artifact Mask",
+                )
+
+            if layers_loaded == 0:
+                self.log(
+                    "No output raster layers were selected for loading.",
+                    feedback,
+                )
+            else:
+                self.log(
+                    f"{layers_loaded} output raster layer(s) loaded "
+                    "directly into the project.",
+                    feedback,
+                )
+
+        except Exception as e:
+            self.log_warning(
+                f"Could not load output layers into project: {e}",
+                feedback,
+            )
+
     def _run_mad_filter(
         self,
         dem_array: np.ndarray,
@@ -1296,13 +1428,18 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
 
         # -- Output files ------------------------------------------------- #
         a("-" * 70)
-        a("  OUTPUT FILES")
+        a("OUTPUT FILES")
         a("-" * 70)
-        a(f"  Screened DEM          : {paths['screened_dem'].name}")
-        a(f"  Void mask             : {paths['void_mask'].name}")
-        a(f"  Artifact mask         : {paths['artifact_mask'].name}")
-        a(f"  QA report (this file) : {paths['qa_report_txt'].name}")
-        a(f"  Provenance log (JSON) : {paths['provenance'].name}")
+        a(f"  Screened DEM          : "
+          f"{paths['screened_dem'].name}")
+        a(f"  Void mask             : "
+          f"{paths['void_mask'].name}")
+        a(f"  Artifact mask         : "
+          f"{paths['artifact_mask'].name}")
+        a(f"  QA report             : "
+          f"{paths['qa_report_txt'].name}")
+        a(f"  Provenance log        : "
+          f"{paths['provenance'].name}")
         a("")
 
         # -- Void mask legend --------------------------------------------- #
