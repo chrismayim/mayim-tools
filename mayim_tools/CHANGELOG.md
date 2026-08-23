@@ -27,6 +27,70 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.2.0] — 2026
+
+### Added
+
+- Hydrology Tools: DEM Hydrological Screening tool
+  - Stage 0: DEM Ingestion and QA
+    - CRS validation and geographic CRS warning
+    - Void detection and classification (small/medium/large)
+    - Small void interpolation using mean neighbourhood values
+    - Medium void flagging
+    - Large void analyst alert — not filled
+    - Vertical accuracy assignment per DEM source type
+      with optional user RMSE override
+  - Stage 1: Artifact Screening
+    - DEM source type classification (8 source types)
+    - MAD local outlier filter for speckle and striping detection
+    - LiDAR ground filter flagged as coming in future release
+    - Bare-earth substitution flagged as coming in future release
+  - Outputs: Screened DEM, void mask, artifact mask,
+    QA text report, provenance JSON log
+  - References: Barnes (2014), Pingel (2013),
+    Wang and Liu (2006), Hawker (2022), Leys (2013)
+
+- Hydrology Tools: DEM Hydrological Smoothing tool
+  - Stage 2: Controlled edge-preserving smoothing
+  - Method: Perona-Malik anisotropic diffusion
+  - Resolution-adaptive diffusion strength scaling
+  - Outputs: Smoothed DEM, signed difference raster,
+    smoothing mask, smoothing text report, provenance JSON log
+  - Reference: Perona and Malik (1990)
+
+- Documentation
+  - Architecture Reference Report v0.2.0
+  - User Manual v0.1.0 (initial draft)
+  - AI Context Document updated
+
+### Changed
+
+- Plugin menu removed — tool access via Processing Toolbox,
+  dock panel, and toolbar only
+- Output layers loaded directly into project without a group
+- Ruff configuration updated to use lint section in pyproject.toml
+- PowerShell profile updated with mayim-deploy pointing to
+  correct QGIS4 profile folder
+
+### Fixed
+
+- Duplicate toolbar and menu entries on plugin reload
+- QGIS4 profile folder path in deploy script
+  (QGIS4 not QGIS3)
+- Icon loading via get_icon_path() helper replacing
+  Qt resource path approach
+- Tool launch from dock panel and toolbar category buttons
+- Encoding issues with box-drawing characters in log strings
+
+### Known Issues
+
+- pre-commit hooks remain disabled due to QGIS Python
+  environment conflict
+- resources_rc.py remains a development stub
+- Icons remain placeholder PNG files
+- LiDAR ground filtering not yet implemented in Stage 1
+- Bare-earth substitution not yet implemented in Stage 1
+
 ## [0.1.0] — 2025
 
 ### Added

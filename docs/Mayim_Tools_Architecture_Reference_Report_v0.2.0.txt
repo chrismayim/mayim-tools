@@ -8,7 +8,7 @@ Target Platform: QGIS 4.0.3 | PyQGIS | Qt 6.11.1 | Python 3.12.13
 Distribution:    Public — QGIS Plugin Repository (plugins.qgis.org)
 License:         GNU General Public License v2 or later (GPL-2.0+)
 Report version:  0.2.0
-Plugin version:  0.1.0
+Plugin version:  0.2.0
 Status:          Active Development — Two tools deployed and operational
 Last updated:    2026
 ================================================================================
@@ -505,7 +505,7 @@ NOTE ON CAMELCASE METHOD NAMES:
   Class:        DEMHydrologicalSmoothing
   Algorithm ID: mayimtools:demhydrologicalsmoothing
   Pipeline:     Stage 2 (Controlled Smoothing)
-  Status:       Implemented and deployed (plugin version 0.1.0)
+  Status:       Implemented and deployed (plugin version 0.2.0)
   Dependencies: rasterio 1.5.1 | numpy 2.4.6
 
   PURPOSE
@@ -667,7 +667,7 @@ PIPELINE STAGES AND IMPLEMENTATION STATUS
   ──────────────────────────────────────────────────────────────────────
   0       Ingestion and QA                  IMPLEMENTED (v0.1.0)
   1       Artifact Screening                IMPLEMENTED (v0.1.0)
-  2       Controlled Smoothing              IMPLEMENTED (v0.1.0)
+  2       Controlled Smoothing              IMPLEMENTED (v0.2.0)
   3       Depression Delineation            PLANNED
   4       Depression Classification         PLANNED
   5       Selective Flow Enforcement        PLANNED
@@ -1107,7 +1107,7 @@ Before deploying any tool file, run:
   name                  = Mayim Tools
   qgisMinimumVersion    = 4.0
   qgisMaximumVersion    = 4.99
-  version               = 0.1.0
+  version               = 0.2.0
   author                = Mayim Consulting
   email                 = [contact email]
   description           = A modular suite of engineering and geospatial
@@ -1189,17 +1189,11 @@ Before deploying any tool file, run:
 
   Version  Description                                        Status
   ──────────────────────────────────────────────────────────────────────
-  0.1.0    Architecture complete. Two tools deployed.         CURRENT
-           DEM Hydrological Screening (Stages 0-1).
-           DEM Hydrological Smoothing (Stage 2).
-  0.1.x    Bug fixes to existing tools.                       NEXT
-  0.2.0    Full hydrology chain complete and tested.          PLANNED
-           Stage 3: Depression Delineation.
-           Stage 4: Depression Classification.
-           Stage 5: Selective Flow Enforcement.
-  0.3.0    Additional categories or tools.                    PLANNED
-  1.0.0    Plugin mature. Public release on QGIS              TARGET
-           Plugin Repository. experimental = False.
+  0.1.0  ✅ Complete  Architecture only
+  0.2.0  ✅ Current   Two tools implemented and deployed
+  0.2.x  🔜 Next      Bug fixes to existing tools
+  0.3.0  🔜 Planned   Depression delineation and classification
+  1.0.0  🎯 Target    Public release
 
 13.6 Category Maturity
 
@@ -1776,7 +1770,7 @@ Architecture Reference Report using the following template:
 ════════════════════════════════════════════════════════════════════════════════
 END OF ARCHITECTURE REFERENCE REPORT
 Report version: 0.2.0
-Plugin version: 0.1.0
+Plugin version: 0.2.0
 Last updated:   2026
 Repository:     https://github.com/chrismayim/mayim-tools
 ════════════════════════════════════════════════════════════════════════════════

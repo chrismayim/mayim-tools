@@ -3,9 +3,9 @@ name=Mayim Tools
 qgisMinimumVersion=4.0
 qgisMaximumVersion=4.99
 description=A suite of modular engineering and geospatial tools for QGIS
-version=0.1.0
-author=Your Name / Organisation
-email=your.email@example.com
+version=0.2.0
+author=Chris Etsebeth / Mayim Consulting Engineers
+email=chris@mayimconsulting.com
 about=Mayim Tools provides a categorised collection of engineering and
     geospatial processing tools for QGIS 4+. Categories include Hydrology,
     Geometry, Network Analysis, and more. Designed for extensibility and
