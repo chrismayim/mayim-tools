@@ -1,0 +1,3037 @@
+================================================================================
+                    MAYIM TOOLS - QGIS 4+ PLUGIN
+                  ARCHITECTURE REFERENCE REPORT
+================================================================================
+
+Plugin name:       Mayim Tools
+Plugin version:    0.2.0
+Report version:    0.2.0
+Status:            Active development
+Target platform:   QGIS 4+
+Tested version:    QGIS 4.0.3
+Organisation:      Mayim Consulting
+Repository:        https://github.com/chrismayim/mayim-tools
+Licence:           GNU General Public License v2 or later (GPL-2.0+)
+
+Prepared for:      Technical development, review and future maintenance
+Last updated:     2026
+
+================================================================================
+
+
+DOCUMENT PURPOSE
+================================================================================
+
+This report defines the architecture, implementation status, design principles,
+development conventions and future technical direction of the Mayim Tools QGIS
+plugin.
+
+It is intended to be used by:
+
+  - Plugin developers.
+  - Software architects.
+  - GIS developers.
+  - Hydrologists and water engineers.
+  - Technical reviewers.
+  - Future maintainers.
+  - AI coding assistants supporting the project.
+
+This document is a technical reference. It is not the primary end-user manual.
+Practical user instructions are maintained separately in:
+
+  docs/user_manual/Mayim_Tools_User_Manual.docx
+
+
+IMPORTANT METHODOLOGICAL POSITION
+================================================================================
+
+Mayim Tools is not intended to replicate an existing GIS toolbox or provide
+thin wrappers around WhiteboxTools, RichDEM, TauDEM or another software package.
+
+The project uses established and peer-reviewed algorithms where appropriate, but
+adds an independent methodology layer consisting of:
+
+  - Resolution-adaptive parameterisation.
+  - Vertical-accuracy-aware decision support.
+  - Explicit separation of artifact correction and hydrological enforcement.
+  - Depression classification before elevation modification.
+  - Preservation of genuine closed depressions.
+  - Separate depression-preserving and hydrology-ready outputs.
+  - Analyst-review categories for uncertain cases.
+  - Cell-level modification masks.
+  - Human-readable reports.
+  - Machine-readable provenance records.
+  - Validation and sensitivity checks.
+
+The intended contribution of Mayim Tools is therefore the combination of
+established computational methods with an inspectable, reproducible and
+provenance-aware hydrological conditioning workflow.
+
+External libraries may be used as replaceable computational engines. They must
+not define the Mayim methodology, decision logic or provenance model.
+
+
+================================================================================
+1. EXECUTIVE SUMMARY
+================================================================================
+
+Mayim Tools is a publicly redistributable QGIS 4+ plugin providing modular
+engineering and geospatial processing tools.
+
+The initial focus is hydrology, with particular emphasis on the preparation,
+assessment and conditioning of digital elevation models for terrain-based
+hydrological analysis.
+
+The plugin follows a modular architecture built around the QGIS Processing
+Framework. Tools are organised into categories and are designed to be:
+
+  - Reusable.
+  - Independently testable.
+  - Resolution-aware.
+  - Accuracy-aware.
+  - Transparent.
+  - Reproducible.
+  - Suitable for international DEM sources.
+  - Extensible with additional tools and categories.
+
+The name "Mayim" is derived from the Hebrew word for water, מַיִם, reflecting
+the project's initial focus on water, terrain and hydrological engineering.
+
+CURRENT IMPLEMENTATION STATUS
+
+The following components are implemented and operational in QGIS 4.0.3:
+
+  - Mayim Tools Processing Provider.
+  - Hydrology Tools category.
+  - Geometry Tools category framework.
+  - Shared core utility modules.
+  - DEM Hydrological Screening.
+  - DEM Hydrological Smoothing.
+  - Text reports.
+  - JSON provenance records.
+  - Output layer loading controls.
+  - Direct loading of outputs into the QGIS project.
+  - Local deployment script.
+  - GitHub version control.
+  - User manual structure.
+  - Architecture reference documentation.
+
+IMPLEMENTED TOOLS
+
+  1. DEM Hydrological Screening
+     Pipeline stages: Stage 0 and Stage 1
+
+  2. DEM Hydrological Smoothing
+     Pipeline stage: Stage 2
+
+PLANNED TOOLS
+
+  3. DEM Depression Analysis
+     Pipeline stages: Stage 3 and Stage 4
+
+  4. DEM Hydrological Filling
+     Pipeline stages: Stage 5 and Stage 6
+
+  5. DEM Hydrography Enforcement
+     Pipeline stage: Stage 7, optional
+
+  6. Pipeline Validation and Audit Summary
+     Pipeline stage: Stage 8
+
+
+================================================================================
+2. ARCHITECTURAL VISION
+================================================================================
+
+Mayim Tools implements a provenance-aware, resolution-adaptive DEM
+hydrological-conditioning methodology.
+
+The project is based on the following central proposition:
+
+  No single existing low-level algorithm provides the complete workflow
+  required for transparent DEM preparation across different data sources,
+  resolutions and vertical accuracies.
+
+Mayim Tools therefore combines:
+
+  - Established terrain-analysis algorithms.
+  - Mayim-specific decision logic.
+  - Explicit analyst review.
+  - Resolution-adaptive thresholds.
+  - Vertical-accuracy-aware interpretation.
+  - Separate terrain products for separate use cases.
+  - Persistent evidence of every important modification.
+
+The architecture must allow users and reviewers to answer:
+
+  - What data were used?
+  - What was the source DEM?
+  - What was its CRS and resolution?
+  - What vertical accuracy was assumed?
+  - Which cells were changed?
+  - Why were those cells changed?
+  - Which method changed them?
+  - Which parameters controlled the change?
+  - Which areas were left unresolved?
+  - Can the result be reproduced?
+
+
+================================================================================
+3. ARCHITECTURAL PRINCIPLES
+================================================================================
+
+3.1 Separation of Concerns
+
+The user interface, Processing Framework integration, core utilities,
+hydrological algorithms, file I/O and reporting must remain separate.
+
+A user-interface change must not require rewriting processing logic.
+
+3.2 Processing Toolbox First
+
+The QGIS Processing Toolbox is the primary interface for Mayim Tools.
+
+Processing algorithms should be usable through:
+
+  - Processing Toolbox.
+  - Batch Processing.
+  - Graphical Modeler.
+  - Processing history.
+  - QGIS Python Console.
+  - Automated workflows.
+
+3.3 Modular Building Blocks
+
+Each pipeline stage should be implemented as an independently testable
+component wherever practical.
+
+A higher-level tool may orchestrate several building blocks, but the individual
+components should remain reusable and testable.
+
+3.4 Classify Before Modifying
+
+A depression, artifact or terrain anomaly must be assessed before its elevation
+is modified.
+
+The workflow must not assume that every depression is an error.
+
+3.5 Separate Artifact Correction from Hydrological Enforcement
+
+Artifact correction attempts to improve the representation of the actual terrain.
+
+Hydrological enforcement modifies the terrain representation to establish
+consistent flow connectivity for a particular modelling purpose.
+
+These are different operations and must remain separately identifiable.
+
+3.6 Least-Impact Intervention
+
+Where an elevation modification is justified, the method should seek the
+smallest defensible intervention that achieves the stated objective.
+
+Constrained least-cost breaching is preferred over broad filling where the
+evidence and constraints support it.
+
+Filling is a fallback, not an automatic default.
+
+3.7 Preserve Genuine Closed Basins
+
+Genuine depressions, endorheic basins, potholes, dolines and similar features
+must be preserved where the available evidence supports their interpretation as
+real terrain.
+
+They must not be silently removed merely because they interrupt a flow-routing
+algorithm.
+
+3.8 Resolution-Adaptive Behaviour
+
+Thresholds and algorithm aggressiveness should account for:
+
+  - Horizontal cell size.
+  - Vertical accuracy.
+  - DEM source.
+  - Depression dimensions.
+  - Local terrain gradients.
+  - Processing objective.
+
+A parameter set suitable for a 1 m LiDAR DEM must not automatically be assumed
+to be suitable for a 30 m global DEM.
+
+3.9 Provenance as a Required Deliverable
+
+Every processing tool must produce sufficient information to identify:
+
+  - Input data.
+  - Software version.
+  - Algorithm version.
+  - Parameters.
+  - Decisions.
+  - Warnings.
+  - Outputs.
+  - Statistics.
+  - Modified areas.
+
+Provenance is part of the output, not an optional diagnostic feature.
+
+3.10 Independent and Replaceable Computational Engines
+
+WhiteboxTools, SciPy, GDAL, NumPy and other libraries may be used where they
+provide validated and efficient low-level implementations.
+
+However:
+
+  - Mayim decision logic remains independent.
+  - External tool versions are recorded.
+  - External defaults are not silently relied upon.
+  - Mayim outputs remain standardised.
+  - A future native backend may replace an external backend.
+
+
+================================================================================
+4. LAYERED ARCHITECTURE
+================================================================================
+
+Mayim Tools follows a seven-tier architecture.
+
+  TIER 1 - QGIS HOST ENVIRONMENT
+           QGIS API
+           Processing Framework
+           Qt and PyQt
+           Layer Registry
+           GDAL, GEOS and PROJ
+
+           |
+           v
+
+  TIER 2 - PLUGIN ENTRY POINT
+           metadata.txt
+           __init__.py
+           classFactory()
+           MayimToolsPlugin
+
+           |
+           v
+
+  TIER 3 - CORE PLUGIN FRAMEWORK
+           Plugin lifecycle
+           Settings
+           Logging
+           Events
+           Internationalisation
+
+           |
+           v
+
+  TIER 4 - SHARED UTILITIES
+           Raster and vector helpers
+           Geometry utilities
+           CRS utilities
+           Validation
+           File I/O
+           Provenance helpers
+
+           |
+           v
+
+  TIER 5 - HYDROLOGICAL DOMAIN COMPONENTS
+           DEM screening
+           DEM smoothing
+           Depression analysis
+           Classification
+           Breaching
+           Filling
+           Flat resolution
+           Validation
+
+           |
+           v
+
+  TIER 6 - CATEGORY AND REGISTRY LAYER
+           Category descriptors
+           Category registry
+           Algorithm registration
+           Processing provider
+
+           |
+           v
+
+  TIER 7 - USER INTERFACE AND OUTPUTS
+           Processing Toolbox
+           Mayim Tools dock panel
+           QGIS project layers
+           Text reports
+           JSON provenance
+           Raster and vector outputs
+
+The current implementation uses the Processing Toolbox as the primary interface.
+The Mayim Tools dock panel is retained as a secondary browsing interface.
+
+The toolbar and main plugin menu have been removed to reduce user-interface
+clutter.
+
+
+================================================================================
+5. TECHNOLOGY STACK
+================================================================================
+
+5.1 Confirmed Development Environment
+
+  Component              Version or implementation
+  --------------------------------------------------------------------------
+  Operating system       Windows development workstation
+  QGIS                    4.0.3 Norrköping
+  QGIS revision           70e40ae6
+  Qt                      6.11.1
+  Python                  3.12.13
+  GDAL                    3.13.0
+  GEOS                    3.14.1-CAPI-1.20.5
+  PROJ                    9.8.1
+  PDAL                    2.10.0
+  rasterio                1.5.1
+  NumPy                   2.4.6
+  SciPy                   1.17.1
+  networkx                3.6.1
+  geopandas               1.1.3
+  shapely                 2.1.2
+  WhiteboxTools Python    whitebox 2.3.6
+  Ruff                    0.16.4
+  Black                   26.5.1
+  Git                     GitHub repository
+  IDE                     Visual Studio Code
+
+5.2 Dependency Status
+
+  NumPy
+    Available and used for raster-array operations.
+
+  SciPy
+    Available and used for connected-component and numerical operations.
+
+  rasterio
+    Available and used for raster I/O and raster metadata handling.
+
+  networkx
+    Available and intended for depression hierarchy graphs.
+
+  geopandas and shapely
+    Available and intended for vector context and hydrography handling.
+
+  WhiteboxTools
+    Installed as an optional computational backend.
+
+  richdem
+    Not installed. Installation failed because the package requires a
+    Microsoft Visual C++ compiler to build its native C++ extension.
+    RichDEM is therefore not a mandatory dependency for Mayim Tools.
+
+5.3 Dependency Policy
+
+Dependencies should be:
+
+  - Actively maintained where possible.
+  - Compatible with the supported QGIS and Python versions.
+  - Documented in the user and developer documentation.
+  - Tested in the target QGIS environment.
+  - Recorded in provenance where they affect processing.
+  - Avoided when they create an unnecessary installation barrier.
+
+Where an external dependency is optional, the tool must state:
+
+  - Whether it is required.
+  - What functionality it provides.
+  - Whether a native fallback exists.
+  - What limitations apply without it.
+
+
+================================================================================
+6. REPOSITORY STRUCTURE
+================================================================================
+
+mayim-tools/
+|
+├── .gitignore
+├── .dropboxignore
+├── .pre-commit-config.yaml
+├── .vscode/
+│   └── settings.json
+├── CHANGELOG.md
+├── LICENSE
+├── MAYIM_TOOLS_AI_CONTEXT.txt
+├── README.md
+├── pyproject.toml
+│
+├── docs/
+│   ├── Mayim_Tools_Architecture_Reference_Report_v0.2.0.txt
+│   └── user_manual/
+│       └── Mayim_Tools_User_Manual.docx
+│
+├── Research docs/
+│   ├── Mayim Tools - QGIS architecture.png
+│   └── Research papers/
+│       └── DEM_Hydrological_Conditioning_Research_Paper.docx
+│
+└── mayim_tools/
+    |
+    ├── __init__.py
+    ├── mayim_tools_plugin.py
+    ├── metadata.txt
+    ├── resources.qrc
+    ├── resources_rc.py
+    |
+    ├── core/
+    │   ├── __init__.py
+    │   ├── crs_manager.py
+    │   ├── event_bus.py
+    │   ├── file_io.py
+    │   ├── geometry_utils.py
+    │   ├── i18n_manager.py
+    │   ├── layer_utils.py
+    │   ├── logger.py
+    │   ├── plugin_manager.py
+    │   ├── settings_manager.py
+    │   └── validation_utils.py
+    |
+    ├── categories/
+    │   ├── __init__.py
+    │   ├── base_category.py
+    │   ├── category_registry.py
+    │   |
+    │   ├── hydrology/
+    │   │   ├── __init__.py
+    │   │   ├── category.py
+    │   │   ├── tools/
+    │   │   │   ├── __init__.py
+    │   │   │   ├── dem_hydrological_screening.py
+    │   │   │   └── dem_hydrological_smoothing.py
+    │   │   └── ui/
+    │   │
+    │   └── geometry/
+    │       ├── __init__.py
+    │       ├── category.py
+    │       └── tools/
+    │           └── __init__.py
+    |
+    ├── processing/
+    │   ├── __init__.py
+    │   ├── provider.py
+    │   └── algorithms/
+    │       ├── __init__.py
+    │       └── base_algorithm.py
+    |
+    ├── ui/
+    │   ├── __init__.py
+    │   ├── about_dialog.py
+    │   ├── base_dialog.py
+    │   ├── dock_widget.py
+    │   └── styles/
+    │       ├── mayim_dark.qss
+    │       └── mayim_light.qss
+    |
+    ├── icons/
+    │   ├── mayim_logo.png
+    │   ├── hydrology.png
+    │   └── geometry.png
+    |
+    ├── tests/
+    │   ├── __init__.py
+    │   ├── conftest.py
+    │   ├── test_core/
+    │   │   ├── __init__.py
+    │   │   ├── test_logger.py
+    │   │   └── test_validation_utils.py
+    │   └── test_categories/
+    │       ├── __init__.py
+    │       ├── test_dem_hydrological_screening.py
+    │       └── test_dem_hydrological_smoothing.py
+    │
+    ├── docs/
+    │   └── source/
+    │
+    ├── i18n/
+    │
+    └── scripts/
+        ├── deploy.py
+        └── compile_resources.py
+
+
+================================================================================
+7. CORE FRAMEWORK COMPONENTS
+================================================================================
+
+7.1 Plugin Entry Point
+
+File:
+
+  mayim_tools/__init__.py
+
+Responsibilities:
+
+  - Provides the QGIS classFactory(iface) entry point.
+  - Imports and returns the MayimToolsPlugin instance.
+  - Loads the optional resource module where available.
+
+The classFactory() function is called by QGIS when the plugin is loaded.
+
+7.2 Main Plugin Class
+
+File:
+
+  mayim_tools/mayim_tools_plugin.py
+
+The main class is:
+
+  MayimToolsPlugin
+
+Responsibilities:
+
+  - Stores the QGIS interface reference.
+  - Registers the MayimToolsProvider.
+  - Creates the Mayim Tools dock widget.
+  - Removes registered components during unload.
+  - Prevents duplicate provider and dock-widget registration during reload.
+
+Current user-interface decision:
+
+  - The Processing Toolbox is the primary interface.
+  - The Mayim Tools dock widget is retained as a secondary interface.
+  - The toolbar has been removed.
+  - The main plugin menu has been removed.
+
+7.3 Core Shared Utilities
+
+The core package contains reusable utilities intended to be shared by all
+categories and Processing algorithms.
+
+  Module                  Responsibility
+  --------------------------------------------------------------------------
+  logger.py               Centralised QGIS message logging.
+  settings_manager.py     Persistent settings using QSettings.
+  event_bus.py            Lightweight publish/subscribe communication.
+  layer_utils.py          Layer discovery and type inspection.
+  geometry_utils.py       Geometry validation and transformation.
+  crs_manager.py          CRS creation, inspection and transformation.
+  file_io.py              JSON, CSV and vector file operations.
+  validation_utils.py     Input, layer, path and numeric validation.
+  i18n_manager.py         Internationalisation support.
+  plugin_manager.py       Plugin lifecycle support.
+
+Core utilities should remain broadly reusable and should not contain
+tool-specific hydrological decision logic.
+
+7.4 Category Registry
+
+File:
+
+  mayim_tools/categories/category_registry.py
+
+The CategoryRegistry stores registered category descriptors.
+
+Categories are imported through:
+
+  mayim_tools/categories/__init__.py
+
+The package initialiser:
+
+  - Clears stale registrations where appropriate.
+  - Imports each category package.
+  - Triggers category self-registration.
+  - Makes categories available to the Processing Provider and dock widget.
+
+A category must have:
+
+  - A unique identifier.
+  - A human-readable name.
+  - A description.
+  - An optional icon.
+  - A method returning its Processing algorithms.
+
+7.5 Processing Provider
+
+File:
+
+  mayim_tools/processing/provider.py
+
+Class:
+
+  MayimToolsProvider
+
+Provider ID:
+
+  mayimtools
+
+Provider name:
+
+  Mayim Tools
+
+The provider is registered with:
+
+  QgsApplication.processingRegistry().addProvider(provider)
+
+The provider obtains algorithms from the CategoryRegistry rather than
+maintaining a separate hard-coded list.
+
+This ensures that an algorithm registered in a category becomes available
+through the QGIS Processing Framework.
+
+7.6 Base Algorithm
+
+File:
+
+  mayim_tools/processing/algorithms/base_algorithm.py
+
+Class:
+
+  MayimBaseAlgorithm
+
+All Mayim Tools Processing algorithms inherit from MayimBaseAlgorithm.
+
+The base class provides:
+
+  - Standard algorithm interface.
+  - Shared Mayim logging methods.
+  - Processing feedback integration.
+  - Cancellation checks.
+  - Progress reporting.
+  - Common help and tag behaviour.
+
+QGIS-required override methods retain their QGIS API names, including:
+
+  - displayName()
+  - groupId()
+  - createInstance()
+  - shortHelpString()
+  - initAlgorithm()
+  - processAlgorithm()
+
+These methods should not be renamed to snake_case.
+
+
+================================================================================
+8. HYDROLOGICAL DOMAIN ARCHITECTURE
+================================================================================
+
+8.1 Purpose
+
+The hydrological domain architecture is the core methodological layer of
+Mayim Tools. It combines established terrain-analysis algorithms with
+Mayim-specific classification, decision, validation and provenance logic.
+
+The objective is not to reproduce an existing tool. The objective is to
+provide an independently reproducible workflow in which:
+
+  - The DEM is assessed before it is modified.
+  - Artifact correction is separated from hydrological enforcement.
+  - Depression decisions are inspectable.
+  - Parameters adapt to DEM resolution and vertical accuracy.
+  - Genuine depressions can be preserved.
+  - Hydrology-ready derivatives can be created separately.
+  - Every modification is recorded.
+
+8.2 Domain Processing Stages
+
+  Stage 0  DEM ingestion and QA
+  Stage 1  Artifact correction and artifact screening
+  Stage 2  Controlled edge-preserving smoothing
+  Stage 3  Depression delineation and hierarchy construction
+  Stage 4  Depression classification
+  Stage 5  Selective flow enforcement
+  Stage 6  Flat-area resolution
+  Stage 7  Optional hydrography enforcement
+  Stage 8  Validation and provenance export
+
+8.3 Current Processing Stage
+
+The current implementation covers:
+
+  - Stage 0 and Stage 1 through DEM Hydrological Screening.
+  - Stage 2 through DEM Hydrological Smoothing.
+
+Stages 3 to 8 remain under development, except that per-tool reports and
+provenance outputs already provide a partial Stage 8 capability.
+
+8.4 Planned Domain Components
+
+Future domain components should be separated from QGIS-specific Processing
+algorithm adapters where practical.
+
+Proposed components:
+
+  mayim_tools/hydrology/
+  ├── __init__.py
+  ├── context.py
+  ├── metadata.py
+  ├── uncertainty.py
+  ├── depression_detection.py
+  ├── depression_features.py
+  ├── depression_classification.py
+  ├── enforcement_decision.py
+  ├── validation.py
+  ├── provenance.py
+  └── engines/
+      ├── __init__.py
+      ├── native_priority_flood.py
+      └── whitebox_backend.py
+
+This domain package is planned and is not yet present in the current
+repository structure.
+
+8.5 Computational Engine Policy
+
+Low-level computational engines may include:
+
+  - Native Mayim implementations.
+  - WhiteboxTools.
+  - GDAL.
+  - NumPy and SciPy.
+  - Other independently validated open-source libraries.
+
+A computational engine must not silently determine the Mayim methodology.
+
+The Mayim layer must control and record:
+
+  - Parameter derivation.
+  - Classification.
+  - Decision rules.
+  - Intervention selection.
+  - Validation.
+  - Output generation.
+  - Provenance.
+
+8.6 Method Origin Declaration
+
+Each future tool must document the origin of its method:
+
+  Method origin:
+    Established algorithm / Mayim adaptation / Mayim-specific method
+
+  Computational engine:
+    Native Mayim / WhiteboxTools / GDAL / other
+
+  Mayim contribution:
+    Resolution adaptation, classification, decision logic,
+    validation, reporting, provenance and output structure.
+
+
+================================================================================
+9. IMPLEMENTED PROCESSING TOOLS
+================================================================================
+
+9.1 DEM Hydrological Screening
+
+  Class:        DEMHydrologicalScreening
+  Algorithm ID: mayimtools:demhydrologicalscreening
+  Location:     mayim_tools/categories/hydrology/tools/
+                dem_hydrological_screening.py
+  Pipeline:     Stage 0 and Stage 1
+  Status:       Implemented in plugin version 0.2.0
+
+Purpose:
+
+  Performs the initial ingestion, QA and artifact-screening stages for a
+  DEM before later smoothing or hydrological enforcement.
+
+Main functions:
+
+  - Reads raster metadata.
+  - Reports CRS, resolution, bounds and NoData value.
+  - Applies a user-supplied or source-based vertical accuracy estimate.
+  - Detects connected NoData regions.
+  - Interpolates small voids where valid neighbours are available.
+  - Flags medium voids.
+  - Reports large voids without silently filling them.
+  - Applies a local MAD-based artifact screen.
+  - Produces masks, reports and provenance.
+
+The tool does not currently provide all possible Stage 1 corrections.
+
+Not currently implemented within this tool:
+
+  - SMRF LiDAR ground filtering.
+  - Progressive TIN densification.
+  - XGBoost or other learned bias correction.
+  - Direct bare-earth substitution.
+  - Co-registered land-cover correction.
+
+Outputs:
+
+  <dem>_screened.tif
+  <dem>_void_mask.tif
+  <dem>_artifact_mask.tif
+  <dem>_screening_report.txt
+  <dem>_provenance.json
+
+The screened DEM retains original valid elevation values except where
+small NoData regions have been interpolated.
+
+9.2 DEM Hydrological Smoothing
+
+  Class:        DEMHydrologicalSmoothing
+  Algorithm ID: mayimtools:demhydrologicalsmoothing
+  Location:     mayim_tools/categories/hydrology/tools/
+                dem_hydrological_smoothing.py
+  Pipeline:     Stage 2
+  Status:       Implemented in plugin version 0.2.0
+
+Purpose:
+
+  Applies controlled edge-preserving smoothing where Stage 1 review indicates
+  that residual high-frequency noise is present.
+
+Method:
+
+  Perona-Malik-style anisotropic diffusion.
+
+The current implementation:
+
+  - Preserves the original input DEM.
+  - Treats NoData and non-finite cells as invalid during processing.
+  - Applies four-neighbour anisotropic diffusion.
+  - Reduces diffusion across stronger elevation gradients.
+  - Optionally scales diffusion strength according to DEM resolution.
+  - Produces a signed difference raster.
+  - Produces a smoothing modification mask.
+  - Produces a text report.
+  - Produces a JSON provenance record.
+  - Optionally loads outputs directly into the QGIS project.
+
+Recommended starting values:
+
+  Diffusion iterations:
+    5
+    Valid range: 1-100
+
+  Diffusion strength:
+    0.20
+    Valid range: 0.01-0.25
+
+  Edge threshold:
+    1.0 elevation unit
+    Valid range: greater than zero
+
+The tool should not be applied automatically to every DEM. Users must first
+review the Stage 1 artifact report and mask.
+
+Outputs:
+
+  <dem>_smoothed.tif
+  <dem>_smoothing_difference.tif
+  <dem>_smoothing_mask.tif
+  <dem>_smoothing_report.txt
+  <dem>_smoothing_provenance.json
+
+The current implementation applies diffusion to all valid cells rather than
+restricting the operation to cells flagged by the Stage 1 artifact mask.
+This is a documented limitation and a candidate for a future enhancement.
+
+
+================================================================================
+10. HYDROLOGICAL PIPELINE IMPLEMENTATION PLAN
+================================================================================
+
+10.1 Stage 0 - Ingestion and QA
+
+Implemented through:
+
+  DEM Hydrological Screening
+
+Primary outputs:
+
+  - Validated DEM metadata.
+  - Screened DEM.
+  - Void classification mask.
+  - QA report.
+  - Provenance JSON.
+
+10.2 Stage 1 - Artifact Correction and Screening
+
+Partially implemented through:
+
+  DEM Hydrological Screening
+
+Currently implemented:
+
+  - Source-type selection.
+  - Source-based vertical accuracy defaults.
+  - MAD local outlier screening.
+  - Artifact mask.
+  - Warnings for unsupported correction pathways.
+
+Future implementation:
+
+  - SMRF or equivalent LiDAR ground filtering.
+  - Progressive TIN densification.
+  - Co-registered land-cover correction.
+  - Bare-earth product substitution.
+  - Learned or calibrated bias correction.
+
+10.3 Stage 2 - Controlled Smoothing
+
+Implemented through:
+
+  DEM Hydrological Smoothing
+
+Current method:
+
+  Perona-Malik-style anisotropic diffusion.
+
+Future enhancements:
+
+  - Optional bilateral-filter backend.
+  - Artifact-mask-guided smoothing.
+  - Resolution-scaled iteration strategy.
+  - Sensitivity analysis.
+  - Better handling of anisotropic raster resolution.
+  - Improved safeguards around terrain boundaries.
+
+10.4 Stage 3 - Depression Delineation and Hierarchy
+
+Planned tool:
+
+  DEM Depression Analysis
+
+Expected functionality:
+
+  - Delineate candidate depressions.
+  - Identify pit and spill elevations.
+  - Calculate depth, area and volume indicators.
+  - Identify nested depressions.
+  - Construct a parent-child hierarchy.
+  - Produce a depression ID raster.
+  - Produce a depression inventory.
+  - Produce a hierarchy representation.
+  - Export provenance.
+
+The hierarchy, rather than an unstructured list of pits, must become the
+object used by later classification and enforcement stages.
+
+10.5 Stage 4 - Depression Classification
+
+Planned functionality:
+
+  - Calculate feature-based artifact likelihood.
+  - Use vertical-accuracy-aware thresholds.
+  - Consider area-to-cell-size ratio.
+  - Consider depression depth.
+  - Consider shape and compactness.
+  - Consider roads, railways, culverts and hydrography where available.
+  - Consider land-cover and canopy context where available.
+  - Consider cross-source consistency where multiple DEMs are available.
+  - Assign an inspectable classification score.
+  - Classify depressions as:
+      ARTIFACT
+      REAL_FEATURE
+      REVIEW_REQUIRED
+
+The feature values, weights, thresholds and evidence sources must be exported
+with the classification result.
+
+10.6 Stage 5 - Selective Flow Enforcement
+
+Planned tool:
+
+  DEM Hydrological Filling
+
+The preferred decision sequence is:
+
+  ARTIFACT
+    - Attempt constrained least-cost breaching.
+    - Use confined filling only where breaching cannot resolve the feature.
+
+  REAL_FEATURE
+    - Preserve the depression.
+
+  REVIEW_REQUIRED
+    - Preserve by default.
+    - Export for analyst review.
+    - Do not silently modify.
+
+The tool should produce distinct derivatives where appropriate:
+
+  - Depression-preserving or artifact-corrected DEM.
+  - Fully drained hydrology-ready DEM.
+  - Enforcement method raster.
+  - Cell-level modification mask.
+  - Enforcement report.
+  - Provenance JSON.
+
+10.7 Stage 6 - Flat-Area Resolution
+
+Planned implementation:
+
+  - Resolve flats generated or exposed by depression processing.
+  - Use a documented gradient-resolution method.
+  - Record the introduced gradients.
+  - Preserve terrain edges where possible.
+  - Validate that drainage connectivity has improved without
+    introducing unintended artefacts.
+
+Garbrecht-Martz-style processing is a candidate method, but its final
+implementation and validation remain to be completed.
+
+10.8 Stage 7 - Optional Hydrography Enforcement
+
+Planned tool:
+
+  DEM Hydrography Enforcement
+
+This stage is optional because it requires external vector evidence.
+
+The implementation should avoid naive fixed-depth stream burning and should
+consider:
+
+  - Vector positional accuracy.
+  - Raster resolution.
+  - Stream topology.
+  - Upstream contributing area.
+  - Existing DEM-derived flow paths.
+  - Conflicts where multiple vector features occupy one raster cell.
+  - Adaptive burn depth.
+  - Analyst control over the enforcement scope.
+
+10.9 Stage 8 - Validation and Provenance
+
+Stage 8 is partly implemented within each current tool through:
+
+  - Text reports.
+  - JSON provenance.
+  - Difference rasters.
+  - Modification masks.
+  - Processing feedback.
+  - Warning messages.
+
+A future pipeline-level audit tool should aggregate all stage-level records
+into one package containing:
+
+  - Stage execution order.
+  - Input and output relationships.
+  - Software versions.
+  - Parameters.
+  - Decisions.
+  - Modification summaries.
+  - Validation results.
+  - Warnings.
+  - Unresolved analyst-review items.
+
+
+================================================================================
+11. USER INTERFACE ARCHITECTURE
+================================================================================
+
+11.1 Processing Toolbox
+
+The QGIS Processing Toolbox is the primary interface.
+
+Tools are exposed using the provider and category hierarchy:
+
+  Mayim Tools
+  └── Hydrology Tools
+      ├── DEM Hydrological Screening
+      └── DEM Hydrological Smoothing
+
+The Processing Toolbox enables:
+
+  - Interactive execution.
+  - Batch processing.
+  - Model Builder use.
+  - Processing history.
+  - Python execution.
+  - Standardised parameter handling.
+
+11.2 Mayim Tools Dock Panel
+
+The dock panel provides a secondary browsing interface.
+
+It displays:
+
+  - Registered categories.
+  - Registered tools.
+  - Tool descriptions.
+  - Double-click access to Processing dialogs.
+
+The dock panel does not replace the Processing Toolbox. It provides a
+convenient Mayim-specific navigation view.
+
+11.3 Main Plugin Menu
+
+The main plugin menu has been removed.
+
+Reason:
+
+  - Reduce duplicate access points.
+  - Reduce QGIS interface clutter.
+  - Keep the Processing Toolbox as the authoritative tool interface.
+
+11.4 Toolbar
+
+The Mayim Tools toolbar has been removed.
+
+Reason:
+
+  - The Processing Toolbox is the primary tool interface.
+  - The dock panel provides secondary access.
+  - A toolbar is unnecessary while the number of tools remains small.
+
+The previous toolbar module may remain in the repository temporarily as
+unused legacy code, but it must not be instantiated by the main plugin class.
+
+
+================================================================================
+12. OUTPUT AND PROVENANCE ARCHITECTURE
+================================================================================
+
+12.1 Standard Output Types
+
+Mayim Tools outputs may include:
+
+  - GeoTIFF elevation rasters.
+  - GeoTIFF classification rasters.
+  - GeoTIFF binary masks.
+  - GeoPackage inventories.
+  - JSON hierarchy or provenance files.
+  - Text reports.
+
+Cloud Optimized GeoTIFF outputs may be introduced for large-raster
+production workflows after validation.
+
+12.2 Human-Readable Reports
+
+Each processing tool should produce a text report containing:
+
+  - Tool name and version.
+  - Input dataset.
+  - CRS.
+  - Raster dimensions.
+  - Native resolution.
+  - NoData information.
+  - Vertical-accuracy assumptions.
+  - User parameters.
+  - Derived parameters.
+  - Processing statistics.
+  - Warnings.
+  - Output file names.
+  - Interpretation guidance.
+  - Recommended next steps.
+
+12.3 Machine-Readable Provenance
+
+Each tool should produce a JSON record containing:
+
+  - Tool identifier.
+  - Tool version.
+  - Timestamp.
+  - Input dataset.
+  - Input metadata.
+  - Parameters.
+  - Derived parameters.
+  - Method name.
+  - Computational engine.
+  - External engine version, if used.
+  - Output paths.
+  - Statistics.
+  - Warnings.
+  - Decisions.
+  - Validation results.
+
+12.4 Modification Traceability
+
+Whenever a tool modifies elevation values, it should produce, where relevant:
+
+  - A difference raster.
+  - A modification mask.
+  - A method or decision code raster.
+  - A summary of the number and percentage of cells modified.
+  - The total positive and negative elevation-volume change.
+  - The maximum, minimum and mean absolute elevation change.
+  - The decision or classification that caused each modification.
+  - Any unresolved or analyst-review areas.
+
+12.5 Output Layer Loading
+
+Where a tool provides output-loading controls, each generated raster should
+have an independent Boolean parameter.
+
+Example:
+
+  LOAD_SCREENED_DEM
+  LOAD_VOID_MASK
+  LOAD_ARTIFACT_MASK
+  LOAD_SMOOTHED_DEM
+  LOAD_DIFFERENCE
+  LOAD_SMOOTHING_MASK
+
+Selected outputs are loaded directly into the QGIS project without creating
+an automatic Mayim Tools layer group, unless a future user-interface design
+explicitly requires grouping.
+
+12.6 Report Links
+
+Where a text report is produced, the Processing feedback should display:
+
+  - The absolute report path.
+  - A file URI where supported.
+  - The report filename.
+  - A clear instruction that the report should be reviewed and archived.
+
+Example:
+
+  file:///C:/path/to/dem_screening_report.txt
+
+12.7 Standard Raster Metadata
+
+Output rasters should preserve or explicitly define:
+
+  - CRS.
+  - Affine transform.
+  - Extent.
+  - Width and height.
+  - Cell resolution.
+  - Data type.
+  - NoData value.
+  - Band count.
+  - Compression.
+  - Processing-specific metadata where supported.
+
+Output metadata must be recorded in the provenance file.
+
+
+================================================================================
+13. VERSIONING AND RELEASE MANAGEMENT
+================================================================================
+
+13.1 Semantic Versioning
+
+Mayim Tools follows:
+
+  MAJOR.MINOR.PATCH
+
+MAJOR:
+  Breaking changes that may invalidate existing models, scripts,
+  workflows or output interpretations.
+
+Examples:
+
+  - Renaming an algorithm ID.
+  - Removing an output.
+  - Changing the meaning of an output.
+  - Changing an output data structure incompatibly.
+  - Changing required parameters incompatibly.
+
+MINOR:
+  New functionality that is intended to remain backwards compatible.
+
+Examples:
+
+  - Adding a new Processing algorithm.
+  - Adding a new category.
+  - Adding an optional parameter.
+  - Adding a new report field.
+  - Adding a new optional computational backend.
+
+PATCH:
+  Bug fixes and small improvements that do not intentionally change
+  established behaviour.
+
+Examples:
+
+  - Correcting a NoData-handling defect.
+  - Correcting a report label.
+  - Improving error handling.
+  - Improving performance without changing results.
+  - Correcting documentation.
+
+13.2 Current Version
+
+  Plugin version: 0.2.0
+  Report version: 0.2.0
+  Status:         Active development / technical preview
+  QGIS flag:      experimental=True
+
+13.3 Current Version Contents
+
+Version 0.2.0 contains:
+
+  - Mayim Tools Processing Provider.
+  - Hydrology Tools category.
+  - Geometry Tools category framework.
+  - DEM Hydrological Screening.
+  - DEM Hydrological Smoothing.
+  - Core utilities.
+  - Text reporting.
+  - JSON provenance.
+  - Direct output-layer loading controls.
+  - Local deployment workflow.
+
+13.4 Version Roadmap
+
+  Version  Description                                      Status
+  --------------------------------------------------------------------------
+  0.1.0    Initial architecture and plugin framework         Complete
+  0.2.0    Screening and controlled smoothing tools          Current
+  0.2.x    Bug fixes and refinements                         Planned
+  0.3.0    Depression analysis and classification            Planned
+  0.4.0    Selective breach/fill enforcement                 Planned
+  0.5.0    Flat resolution and expanded validation           Planned
+  0.6.0    Optional hydrography enforcement                  Planned
+  0.9.0    Feature-complete technical preview                Planned
+  1.0.0    Stable public release                             Target
+
+13.5 Version-Controlled Files
+
+For each plugin release, review and update where applicable:
+
+  - mayim_tools/metadata.txt
+  - mayim_tools/ui/about_dialog.py
+  - CHANGELOG.md
+  - MAYIM_TOOLS_AI_CONTEXT.txt
+  - User Manual
+  - Architecture Reference Report
+
+13.6 Release Readiness
+
+A release should not be considered ready for public use merely because it
+executes successfully.
+
+Before a public release, each relevant tool should have:
+
+  - Unit tests.
+  - Integration tests in QGIS.
+  - Test data covering valid and invalid inputs.
+  - NoData test cases.
+  - CRS test cases.
+  - Resolution test cases.
+  - Performance observations.
+  - Documented limitations.
+  - Reproducible example workflows.
+  - A complete provenance record.
+  - A reviewed user-manual chapter.
+  - A documented change history.
+
+
+================================================================================
+14. QUALITY ASSURANCE AND VALIDATION
+================================================================================
+
+14.1 General QA Principles
+
+Mayim Tools is designed to support technical review rather than replace it.
+
+A successful Processing execution confirms only that the software completed
+the requested operation. It does not prove that the input data were suitable
+or that the output is hydrologically correct.
+
+Users should review:
+
+  - The source DEM.
+  - The processing parameters.
+  - The output rasters.
+  - Difference and modification masks.
+  - Text reports.
+  - Provenance JSON.
+  - Warnings.
+  - Hydrological plausibility.
+
+14.2 Stage-Specific Validation
+
+Stage 0:
+  - Confirm CRS and resolution.
+  - Confirm NoData identification.
+  - Review void-region classifications.
+  - Confirm small-void interpolation behaviour.
+  - Investigate large voids.
+
+Stage 1:
+  - Review the artifact mask.
+  - Compare flagged cells with terrain imagery or source data.
+  - Determine whether flagged cells represent noise or genuine terrain.
+  - Do not automatically treat every statistical outlier as an artifact.
+
+Stage 2:
+  - Review the smoothing difference raster.
+  - Review the smoothing mask.
+  - Check for excessive modification.
+  - Confirm that sharp terrain breaks remain visible.
+  - Compare the smoothed surface with the original.
+
+Stage 3:
+  - Confirm depression identification.
+  - Review pit and spill elevations.
+  - Review nested-depression relationships.
+  - Confirm boundary treatment.
+
+Stage 4:
+  - Review classification scores and contributing features.
+  - Identify borderline cases.
+  - Confirm that classification is inspectable.
+
+Stage 5:
+  - Confirm the selected intervention.
+  - Review breach paths and filled areas.
+  - Verify that genuine depressions remain preserved.
+  - Compare modified-cell counts and volume changes.
+
+Stage 6:
+  - Confirm that flats have been resolved.
+  - Confirm that the imposed gradient remains below the supported
+    vertical-resolution threshold.
+  - Check for unintended drainage changes.
+
+Stage 7:
+  - Verify the accuracy and authority of supplied hydrography.
+  - Review areas where vector and raster drainage disagree.
+  - Check for excessive or parallel stream burning.
+
+Stage 8:
+  - Confirm that all stage outputs are present.
+  - Confirm that provenance links the outputs to the inputs and decisions.
+  - Review sensitivity and stability metrics.
+
+14.3 Test Data Requirements
+
+The test suite should eventually include:
+
+  - A flat DEM.
+  - A DEM containing one isolated pit.
+  - A DEM containing nested depressions.
+  - A DEM with a large closed basin.
+  - A DEM containing small and large NoData regions.
+  - A DEM with artificial spikes and wells.
+  - A DEM with sharp terrain breaks.
+  - A projected DEM.
+  - A geographic-coordinate DEM.
+  - A 1 m DEM.
+  - A 5 m DEM.
+  - A 30 m DEM.
+  - A DEM with integer elevations.
+  - A DEM with floating-point elevations.
+
+14.4 Performance Considerations
+
+Tools must be designed with large rasters in mind.
+
+Future improvements may include:
+
+  - Windowed or tiled raster processing.
+  - Block-wise computation.
+  - Memory-use reporting.
+  - Parallel processing where safe.
+  - Progress reporting based on processed blocks.
+  - Cloud Optimized GeoTIFF support.
+  - Avoidance of unnecessary full-array copies.
+  - Optional lower-resolution exploratory runs.
+
+Performance improvements must not silently change the mathematical method
+or output interpretation.
+
+
+================================================================================
+15. SECURITY, PRIVACY AND DATA GOVERNANCE
+================================================================================
+
+15.1 Local Processing
+
+Mayim Tools is intended to process data locally within QGIS unless an
+explicit future feature states otherwise.
+
+The plugin should not upload user data, terrain data, personal information
+or project information to external services without clear user consent.
+
+15.2 External Engines
+
+Where an external executable or library is used:
+
+  - Its name and version must be recorded.
+  - Its processing role must be documented.
+  - Its input and output paths must be controlled.
+  - Temporary files must be handled safely.
+  - Errors must be reported clearly.
+  - User data must not be sent to external web services by default.
+
+15.3 Public Redistribution
+
+Before public release:
+
+  - Confirm the licence compatibility of dependencies.
+  - Review third-party attribution requirements.
+  - Avoid bundling components that cannot be redistributed.
+  - Document optional dependencies separately.
+  - Remove development-only files where appropriate.
+  - Remove credentials, local paths and personal information.
+  - Review all metadata and repository links.
+
+15.4 Data Protection
+
+The plugin should avoid writing personal or confidential information into
+reports or provenance records unless required by the user.
+
+Input paths may reveal local folder names. Users should review provenance
+files before distributing them externally.
+
+
+================================================================================
+16. DOCUMENTATION AND MAINTENANCE
+================================================================================
+
+16.1 Architecture Reference Report
+
+This document describes:
+
+  - The software architecture.
+  - The domain methodology.
+  - The implementation status.
+  - Development conventions.
+  - Quality requirements.
+  - Future technical direction.
+
+Location:
+
+  mayim_tools/docs/
+  Mayim_Tools_Architecture_Reference_Report_v0.2.0.txt
+
+16.2 User Manual
+
+The user manual describes:
+
+  - Installation.
+  - Accessing tools.
+  - Tool parameters.
+  - Recommended values.
+  - Outputs.
+  - Interpretation.
+  - Troubleshooting.
+  - User-facing limitations.
+
+Location:
+
+  docs/user_manual/
+  Mayim_Tools_User_Manual.docx
+
+A new chapter should be added for every released Processing algorithm.
+
+16.3 AI Context Document
+
+The AI context document provides project information to AI assistants used
+for development support.
+
+It should describe:
+
+  - The current architecture.
+  - The current repository structure.
+  - Supported QGIS and Python versions.
+  - Coding conventions.
+  - Current tools.
+  - Known issues.
+  - Versioning policy.
+  - The current development task.
+
+Location:
+
+  MAYIM_TOOLS_AI_CONTEXT.txt
+
+The AI context document is not a substitute for this architecture report.
+It is a practical project briefing derived from it.
+
+16.4 CHANGELOG
+
+The CHANGELOG records:
+
+  - Added features.
+  - Changed behaviour.
+  - Bug fixes.
+  - Removed features.
+  - Known limitations.
+  - Release dates.
+
+Location:
+
+  CHANGELOG.md
+
+16.5 Research Material
+
+Research papers and external reference material are maintained separately
+from the plugin source code.
+
+Current research material includes the Mayim Tools DEM Hydrological
+Conditioning research paper.
+
+The research material informs the methodology but does not automatically
+constitute executable software or validated production behaviour.
+
+
+================================================================================
+17. DEVELOPMENT PROCEDURE FOR NEW TOOLS
+================================================================================
+
+When creating a new tool, follow this sequence:
+
+  1. Define the engineering purpose.
+  2. Identify the pipeline stage.
+  3. Define the expected inputs and outputs.
+  4. Identify established algorithms and references.
+  5. Identify the Mayim-specific methodological contribution.
+  6. Define resolution and accuracy dependencies.
+  7. Define NoData and boundary behaviour.
+  8. Define validation metrics.
+  9. Define provenance fields.
+  10. Create the independent domain components.
+  11. Create the QGIS Processing adapter.
+  12. Register the algorithm in its category.
+  13. Add unit tests.
+  14. Add test data.
+  15. Add a user-manual chapter.
+  16. Update this architecture report.
+  17. Update the AI context document.
+  18. Update the CHANGELOG.
+  19. Run syntax checking.
+  20. Run Ruff and Black.
+  21. Deploy to QGIS.
+  22. Test interactively in QGIS.
+  23. Review reports and provenance.
+  24. Commit and push the change.
+
+Each new tool must be independently reviewable before it is included in
+a higher-level orchestration workflow.
+
+
+================================================================================
+18. FUTURE DEPRESSION-PROCESSING ARCHITECTURE
+================================================================================
+
+18.1 DEM Depression Analysis
+
+The planned DEM Depression Analysis tool should cover:
+
+  - Depression delineation.
+  - Pit and spill-point identification.
+  - Depression depth and area.
+  - Approximate volume.
+  - Nested depression relationships.
+  - Parent-child hierarchy.
+  - Depression ID raster.
+  - Depression inventory.
+  - Hierarchy graph.
+  - Per-depression provenance.
+
+The tool should not modify elevation values.
+
+18.2 Depression Classification
+
+Classification should be explicit and inspectable.
+
+Candidate features may include:
+
+  - Depression area.
+  - Depression depth.
+  - Depression volume.
+  - Shape and compactness.
+  - Local relief.
+  - Local slope.
+  - Roughness.
+  - DEM resolution.
+  - Stated vertical accuracy.
+  - Stage 1 artifact evidence.
+  - Land-cover evidence.
+  - Canopy-height evidence.
+  - Distance to mapped hydrography.
+  - Position relative to roads, bridges and culverts.
+  - Cross-source agreement.
+  - Boundary proximity.
+
+Initial scoring may use an additive weighted model. Where labelled data
+become available, the model may be calibrated using scikit-learn.
+
+Regardless of the classifier used, the tool must export:
+
+  - Input features.
+  - Weights or model information.
+  - Thresholds.
+  - Score contributions.
+  - Final class.
+  - Confidence.
+  - Analyst-review status.
+
+18.3 Selective Enforcement
+
+The planned DEM Hydrological Filling tool should implement:
+
+  - Single-cell de-pitting where appropriate.
+  - Constrained least-cost breaching.
+  - Breach-length limits.
+  - Breach-depth limits.
+  - Bounded search cost.
+  - Filling fallback.
+  - Depression-specific decisions.
+  - Preservation of real depressions.
+  - Analyst deferral for uncertain cases.
+
+The tool should produce:
+
+  - Depression-preserving DEM.
+  - Hydrology-ready DEM.
+  - Method or decision code raster.
+  - Elevation-difference raster.
+  - Modification mask.
+  - Per-depression audit table.
+  - Enforcement report.
+  - Provenance JSON.
+
+18.4 Flat Resolution
+
+Flat resolution should:
+
+  - Operate on residual flats.
+  - Use a documented dual-gradient method.
+  - Scale the synthetic gradient to DEM vertical resolution.
+  - Keep the imposed signal below the supported vertical-resolution level.
+  - Record all cells modified by flat resolution.
+  - Validate drainage connectivity after processing.
+
+18.5 Hydrography Enforcement
+
+Hydrography enforcement should remain optional and off by default.
+
+It should:
+
+  - Accept trusted vector hydrography.
+  - Account for vector positional uncertainty.
+  - Compare vector channels with DEM-derived drainage.
+  - Avoid uniform burning.
+  - Avoid fixed-depth burning as the only strategy.
+  - Use adaptive burn depth.
+  - Record conflicts and unresolved areas.
+  - Produce a separate enforcement report.
+
+
+================================================================================
+19. ARCHITECTURAL DECISION RECORDS
+================================================================================
+
+ADR-001 - Processing Toolbox as primary interface
+
+Decision:
+  Use the QGIS Processing Framework as the primary user interface.
+
+Reason:
+  It supports interactive, batch, model-based, scripted and reproducible use.
+
+Status:
+  Accepted.
+
+ADR-002 - Remove toolbar and main plugin menu
+
+Decision:
+  Remove the Mayim Tools toolbar and main plugin menu.
+
+Reason:
+  Reduce interface clutter and avoid duplicating Processing Toolbox access.
+
+Status:
+  Accepted.
+
+ADR-003 - Separate screening, smoothing and enforcement
+
+Decision:
+  DEM screening, controlled smoothing and hydrological enforcement are
+  separate tools and separate pipeline stages.
+
+Reason:
+  They have different purposes, assumptions, validation criteria and
+  consequences for the terrain surface.
+
+Status:
+  Accepted.
+
+ADR-004 - Classify before modifying
+
+Decision:
+  Depressions must be delineated and classified before selective
+  breaching or filling.
+
+Reason:
+  Genuine terrain depressions must not be destroyed by default.
+
+Status:
+  Accepted.
+
+ADR-005 - Preserve dual DEM products
+
+Decision:
+  Future enforcement should produce both a depression-preserving surface
+  and a hydrology-ready surface.
+
+Reason:
+  These surfaces serve different modelling purposes and preserve the
+  distinction between terrain representation and flow-enforcement needs.
+
+Status:
+  Accepted.
+
+ADR-006 - Provenance is mandatory
+
+Decision:
+  Reports, provenance records and modification evidence are required
+  outputs of processing tools.
+
+Reason:
+  A reviewer must be able to understand and challenge the processing
+  decisions.
+
+Status:
+  Accepted.
+
+ADR-007 - External engines are replaceable
+
+Decision:
+  External tools such as WhiteboxTools may be used as computational
+  backends but must not define the Mayim methodology.
+
+Reason:
+  Mayim Tools must remain independently reproducible and must not become
+  a thin wrapper around another software package.
+
+Status:
+  Accepted.
+
+ADR-008 - RichDEM is not a mandatory dependency
+
+Decision:
+  RichDEM is not required for the current or planned plugin installation.
+
+Reason:
+  Its native extension requires a local C++ compiler in the current
+  Windows/Python environment. This creates an unnecessary installation
+  barrier for public users.
+
+Status:
+  Accepted.
+
+ADR-009 - Use native components where they add methodological value
+
+Decision:
+  Mayim-specific decision logic, classification, adaptation, validation
+  and provenance must be implemented within Mayim Tools.
+
+Reason:
+  These are the components that provide the project's methodological
+  identity and reproducibility.
+
+
+================================================================================
+20. FINAL STATUS
+================================================================================
+
+IMPLEMENTED
+
+  - QGIS 4+ Processing Provider.
+  - Hydrology Tools category.
+  - Geometry Tools category framework.
+  - Category registration.
+  - Core logging.
+  - Settings management.
+  - Event bus.
+  - Layer utilities.
+  - Geometry utilities.
+  - CRS utilities.
+  - File I/O utilities.
+  - Validation utilities.
+  - DEM Hydrological Screening.
+  - DEM Hydrological Smoothing.
+  - Text reports.
+  - JSON provenance.
+  - Difference and modification masks where applicable.
+  - Independent output-loading controls.
+  - Local deployment workflow.
+  - GitHub version control.
+  - User manual framework.
+  - Architecture reference report.
+
+PARTIALLY IMPLEMENTED
+
+  - Full Stage 1 artifact correction.
+  - Full Stage 8 pipeline-level validation.
+  - Automatic report-link presentation in all QGIS output interfaces.
+  - Production resource compilation.
+  - Automated test execution in CI.
+
+PLANNED
+
+  - Native Mayim hydrological context object.
+  - Shared provenance service.
+  - Depression delineation.
+  - Depression hierarchy construction.
+  - Multi-criteria depression classification.
+  - Calibrated classification model.
+  - Selective breach/fill enforcement.
+  - Dual DEM enforcement outputs.
+  - Flat-area resolution.
+  - Optional topology-aware hydrography enforcement.
+  - Pipeline-level validation and audit-summary tool.
+  - Automated GitHub Actions CI/CD.
+  - Production icon set.
+  - Internationalisation and translated user documentation.
+  - Public release through the official QGIS Plugin Repository.
+
+
+================================================================================
+21. REFERENCES
+================================================================================
+
+  Axelsson, P. (2000).
+    DEM generation from laser scanner data using adaptive TIN models.
+    International Archives of Photogrammetry and Remote Sensing, 33(B4),
+    110-117.
+
+  Barnes, R. (2016).
+    Parallel priority-flood depression filling for trillion cell digital
+    elevation models on desktops or clusters.
+    Computers and Geosciences, 96, 56-68.
+
+  Barnes, R., Lehman, C., and Mulla, D. (2014).
+    Priority-flood: An optimal depression-filling and watershed-labeling
+    algorithm for digital elevation models.
+    Computers and Geosciences, 62, 117-127.
+
+  Barnes, R., Callaghan, K. L., and Wickert, A. D. (2020).
+    Computing water flow through complex landscapes - Part 2: Finding
+    hierarchies in depressions and morphological segmentations.
+    Earth Surface Dynamics, 8(2), 431-445.
+
+  Garbrecht, J., and Martz, L. W. (1997).
+    The assignment of drainage direction over flat surfaces in raster
+    digital elevation models.
+    Journal of Hydrology, 193(1-4), 204-213.
+
+  Hawker, L. et al. (2022).
+    A 30 m global map of elevation with forests and buildings removed.
+    Environmental Research Letters, 17(2), 024016.
+
+  Jenson, S. K., and Domingue, J. O. (1988).
+    Extracting topographic structure from digital elevation data for
+    geographic information system analysis.
+    Photogrammetric Engineering and Remote Sensing, 54(11), 1593-1600.
+
+  Leys, C. et al. (2013).
+    Detecting outliers: Do not use standard deviation around the mean,
+    use absolute deviation around the median.
+    Journal of Experimental Social Psychology, 49(4), 764-766.
+
+  O'Callaghan, J. F., and Mark, D. M. (1984).
+    The extraction of drainage networks from digital elevation data.
+    Computer Vision, Graphics, and Image Processing, 28(3), 323-344.
+
+  Perona, P., and Malik, J. (1990).
+    Scale-space and edge detection using anisotropic diffusion.
+    IEEE Transactions on Pattern Analysis and Machine Intelligence,
+    12(7), 629-639.
+
+  Pingel, T. J., Clarke, K. C., and McBride, W. A. (2013).
+    An improved simple morphological filter for the terrain classification
+    of airborne LIDAR data.
+    ISPRS Journal of Photogrammetry and Remote Sensing, 77, 21-30.
+
+  Soille, P., Vogt, P., and Colombo, R. (2003).
+    Carving and adaptive drainage enforcement of grid digital elevation
+    models.
+    Water Resources Research, 39(12).
+
+  Wang, L., and Liu, H. (2006).
+    An efficient method for identifying and filling surface depressions
+    in digital elevation models for hydrologic analysis and modelling.
+    International Journal of Geographical Information Science, 20(2),
+    193-213.
+
+  Mayim Tools Research Paper (2026).
+    Hydrological Conditioning of Digital Elevation Models:
+    A Provenance-Aware, Resolution-Adaptive Framework from Artifact
+    Removal to Flow-Enforced Terrain.
+    GIS and Hydrological Systems Research Group.
+
+
+================================================================================
+22. GLOSSARY
+================================================================================
+
+  Algorithm ID
+    The unique identifier used to call a Processing algorithm.
+    Example: mayimtools:demhydrologicalscreening.
+
+  Anisotropic diffusion
+    An edge-preserving smoothing technique that reduces diffusion across
+    strong gradients.
+
+  Artifact
+    An elevation value or pattern that does not adequately represent the
+    underlying terrain. Examples include vegetation remnants, building
+    remnants, radar noise, striping and interpolation errors.
+
+  Artifact correction
+    Improvement of a DEM so that it more closely represents the underlying
+    terrain surface. It is distinct from hydrological enforcement.
+
+  Bare-earth DEM
+    A DEM representing the ground surface after above-ground objects such
+    as vegetation and buildings have been removed.
+
+  CategoryRegistry
+    The Mayim Tools registry used to store and discover tool categories.
+
+  CRS
+    Coordinate Reference System. Defines how coordinates correspond to
+    positions on the Earth's surface.
+
+  DEM
+    Digital Elevation Model. A raster dataset representing elevation.
+
+  Depression
+    A cell or group of cells from which modelled surface water cannot
+    escape because all available surrounding routes are higher.
+
+  Depression hierarchy
+    A representation of nested and connected depressions, including
+    parent-child relationships and spill connectivity.
+
+  DSM
+    Digital Surface Model. An elevation model that may include vegetation,
+    buildings and other above-ground objects.
+
+  DTM
+    Digital Terrain Model. An elevation model intended to represent the
+    bare-earth terrain surface.
+
+  Edge threshold
+    A parameter controlling the sensitivity of the anisotropic diffusion
+    filter to elevation gradients.
+
+  Endorheic basin
+    A closed basin with no natural surface outlet to an external drainage
+    system.
+
+  Flow accumulation
+    The accumulated upstream contribution routed through each raster cell.
+
+  Flow direction
+    The direction assigned to water movement from each DEM cell.
+
+  Geographic CRS
+    A CRS using angular units, normally degrees of latitude and longitude.
+
+  Hydrological conditioning
+    Preparation or modification of a DEM so that flow-routing operations
+    produce hydrologically consistent results.
+
+  Hydrological enforcement
+    Deliberate modification of a terrain surface to establish or improve
+    modelled drainage connectivity.
+
+  InSAR
+    Interferometric Synthetic Aperture Radar, a radar-based method for
+    deriving elevation information.
+
+  LE90
+    Linear Error at 90 percent confidence, a vertical accuracy measure.
+
+  LiDAR
+    Light Detection and Ranging, an active remote-sensing technique using
+    laser pulses to measure elevation.
+
+  MAD
+    Median Absolute Deviation, a robust measure of local variability:
+
+      MAD = median(|x - median(x)|)
+
+  MayimBaseAlgorithm
+    The shared abstract base class inherited by Mayim Tools Processing
+    algorithms.
+
+  NoData
+    A raster value indicating that no valid observation exists for a cell.
+
+  Perona-Malik diffusion
+    An anisotropic diffusion method that reduces smoothing across larger
+    elevation gradients.
+
+  Priority-Flood
+    An elevation-ordered traversal used for depression identification,
+    watershed labelling and depression filling.
+
+  Processing Provider
+    A QGIS Processing Framework component that exposes related algorithms
+    under a common provider name.
+
+  Projected CRS
+    A CRS using linear units such as metres or feet.
+
+  Provenance
+    A structured record of the input data, parameters, methods, decisions,
+    warnings and outputs associated with a processing operation.
+
+  RMSE
+    Root Mean Square Error, a measure of the magnitude of vertical error.
+
+  SAR
+    Synthetic Aperture Radar, a radar-based remote-sensing technique.
+
+  Screened DEM
+    A DEM output from screening in which small voids may be interpolated
+    and potential artifacts are identified and reported.
+
+  Selective enforcement
+    A decision-based process in which each depression is preserved,
+    breached, filled or deferred according to its classification and
+    explicit constraints.
+
+  SemVer
+    Semantic Versioning using the MAJOR.MINOR.PATCH format.
+
+  Sink
+    A DEM cell or group of cells from which modelled flow cannot escape.
+
+  Spill elevation
+    The lowest elevation at which water can leave a depression.
+
+  Void
+    A NoData area in a raster dataset.
+
+  Void mask
+    A raster identifying valid cells and void classes.
+
+  WhiteboxTools
+    An open-source geospatial processing toolkit that may be used as an
+    optional computational backend for selected Mayim Tools operations.
+
+
+================================================================================
+23. APPENDIX A - PROCESSING PARAMETER CONVENTIONS
+================================================================================
+
+23.1 Parameter Naming
+
+All Processing parameter identifiers use uppercase snake case:
+
+  INPUT_DEM
+  DEM_SOURCE_TYPE
+  OUTPUT_FOLDER
+  LOAD_SCREENED_DEM
+
+Output identifiers use the OUTPUT_ prefix:
+
+  OUTPUT_DEM
+  OUTPUT_VOID_MASK
+  OUTPUT_REPORT
+  OUTPUT_PROVENANCE
+
+23.2 Parameter Guidance
+
+Numeric parameters should communicate:
+
+  - Recommended starting value.
+  - Valid range.
+  - Units.
+  - Relevant interpretation guidance.
+
+Example:
+
+  Diffusion iterations
+    Recommended starting value: 5
+    Valid range: 1-100
+
+  Diffusion strength
+    Recommended starting value: 0.20
+    Valid range: 0.01-0.25
+
+  Edge threshold
+    Recommended starting value: 1.0 elevation unit
+    Valid range: greater than zero
+
+23.3 Optional Parameters
+
+Optional parameters must be explicitly identified in the Processing
+interface and documented in the associated user-manual chapter.
+
+If a numeric sentinel value is used, it must be documented clearly.
+
+Example:
+
+  -1.0 = no user-supplied RMSE; use source-based default
+
+23.4 Temporary Outputs
+
+Temporary output locations may be used for exploratory processing.
+
+Important results should be written to a permanent, project-controlled
+directory because temporary outputs may be removed when QGIS closes or
+temporary processing files are cleaned.
+
+23.5 Output Loading
+
+Tools producing multiple raster outputs may provide one Boolean load option
+per output.
+
+Examples:
+
+  LOAD_SCREENED_DEM
+  LOAD_VOID_MASK
+  LOAD_ARTIFACT_MASK
+  LOAD_SMOOTHED_DEM
+  LOAD_DIFFERENCE
+  LOAD_SMOOTHING_MASK
+
+Selected layers should be loaded directly into the QGIS project unless a
+specific grouping requirement has been documented.
+
+23.6 Output Registration
+
+Where outputs are manually loaded with:
+
+  QgsProject.instance().addMapLayer(layer, True)
+
+the corresponding Processing output may be declared as
+QgsProcessingOutputFile to avoid duplicate automatic and manual layer
+loading.
+
+
+================================================================================
+24. APPENDIX B - OUTPUT NAMING CONVENTIONS
+================================================================================
+
+24.1 General Pattern
+
+  <input_dem_stem>_<descriptor>.<extension>
+
+24.2 Screening Outputs
+
+  <dem>_screened.tif
+  <dem>_void_mask.tif
+  <dem>_artifact_mask.tif
+  <dem>_screening_report.txt
+  <dem>_provenance.json
+
+24.3 Smoothing Outputs
+
+  <dem>_smoothed.tif
+  <dem>_smoothing_difference.tif
+  <dem>_smoothing_mask.tif
+  <dem>_smoothing_report.txt
+  <dem>_smoothing_provenance.json
+
+24.4 Planned Depression Outputs
+
+  <dem>_depression_id.tif
+  <dem>_depression_classification.tif
+  <dem>_depression_inventory.gpkg
+  <dem>_depression_hierarchy.json
+  <dem>_depression_report.txt
+  <dem>_depression_provenance.json
+
+24.5 Planned Enforcement Outputs
+
+  <dem>_preserved_topology.tif
+  <dem>_hydrology_ready.tif
+  <dem>_enforcement_difference.tif
+  <dem>_enforcement_mask.tif
+  <dem>_decision_code.tif
+  <dem>_flat_resolution_mask.tif
+  <dem>_enforcement_report.txt
+  <dem>_enforcement_provenance.json
+
+24.6 Planned Hydrography Outputs
+
+  <dem>_hydrography_enforced.tif
+  <dem>_burn_depth.tif
+  <dem>_hydrography_difference.tif
+  <dem>_hydrography_mask.tif
+  <dem>_hydrography_report.txt
+  <dem>_hydrography_provenance.json
+
+24.7 Raster Data-Type Conventions
+
+  Elevation rasters:
+    float32 where appropriate, preserving spatial reference, extent,
+    resolution and NoData information.
+
+  Difference rasters:
+    float32 with a documented signed difference convention.
+
+  Classification and decision rasters:
+    uint8 or another explicitly documented integer type.
+
+  Binary masks:
+    uint8, normally using 0 for false, 1 for true and 255 for NoData.
+
+All data types and NoData values must be recorded in the provenance output.
+
+
+================================================================================
+25. APPENDIX C - FUTURE TOOL CHAPTER TEMPLATE
+================================================================================
+
+Each new tool must be documented in the Architecture Reference Report and
+the User Manual using the following structure:
+
+  [Tool name]
+
+  File:
+    categories/[category]/tools/[file_name].py
+
+  Class:
+    [ClassName]
+
+  Algorithm ID:
+    mayimtools:[algorithmname]
+
+  Pipeline stage:
+    Stage [number] - [stage name]
+
+  Status:
+    Planned / prototype / implemented / validated
+
+  Purpose:
+    [Describe the engineering purpose.]
+
+  Method:
+    [Describe the mathematical and computational method.]
+
+  Method origin:
+    [Established algorithm / Mayim adaptation / Mayim-specific method]
+
+  Computational engine:
+    [Native Mayim / WhiteboxTools / GDAL / NumPy / SciPy / other]
+
+  Mayim contribution:
+    [Describe the Mayim-specific adaptation, decision logic,
+     resolution scaling, validation and provenance.]
+
+  When to use:
+    [Describe the appropriate conditions.]
+
+  Inputs:
+    [List required and optional inputs.]
+
+  Recommended parameters:
+    [List preferred values, ranges and units.]
+
+  Processing logic:
+    [Describe the processing sequence.]
+
+  Outputs:
+    [List raster, vector, report and provenance outputs.]
+
+  Output interpretation:
+    [Explain how each output should be reviewed.]
+
+  Quality assurance:
+    [List validation checks.]
+
+  Known limitations:
+    [List assumptions and unsupported cases.]
+
+  References:
+    [List academic and technical references.]
+
+
+================================================================================
+26. FINAL ARCHITECTURAL STATUS
+================================================================================
+
+IMPLEMENTED
+
+  - QGIS 4+ Processing Provider.
+  - Hydrology Tools category.
+  - Geometry Tools category framework.
+  - Category registration.
+  - Shared core utilities.
+  - DEM Hydrological Screening.
+  - DEM Hydrological Smoothing.
+  - Direct output-layer loading controls.
+  - Human-readable text reports.
+  - JSON provenance records.
+  - Difference and modification masks.
+  - Local deployment workflow.
+  - GitHub version control.
+  - User manual framework.
+  - Architecture reference documentation.
+  - State-of-the-art methodological direction based on the research paper.
+
+PARTIALLY IMPLEMENTED
+
+  - Full Stage 1 artifact correction.
+  - Full Stage 8 pipeline-level validation.
+  - Automatic clickable report links in every QGIS results interface.
+  - Compiled Qt resource handling.
+  - Automated test execution in CI.
+  - Resolution adaptation beyond diffusion-strength scaling.
+  - Artifact-mask-guided smoothing.
+
+PLANNED
+
+  - Native Mayim hydrological context object.
+  - Shared provenance service.
+  - Shared raster metadata service.
+  - Depression delineation.
+  - Depression hierarchy construction.
+  - Multi-criteria depression classification.
+  - Calibrated classification model.
+  - Selective least-cost breach/fill enforcement.
+  - Dual DEM enforcement outputs.
+  - Flat-area resolution.
+  - Optional topology-aware hydrography enforcement.
+  - Pipeline-level validation and audit-summary tool.
+  - Native or replaceable Priority-Flood components.
+  - Optional WhiteboxTools backend integration.
+  - Large-raster and tiled processing.
+  - Automated GitHub Actions CI/CD.
+  - Production icon set.
+  - Internationalisation.
+  - Public QGIS Plugin Repository release.
+
+
+================================================================================
+27. ARCHITECTURAL DECISION RECORDS
+================================================================================
+
+ADR-001 - Processing Toolbox as primary interface
+
+Decision:
+  Use the QGIS Processing Framework as the primary user interface.
+
+Reason:
+  It supports interactive, batch, model-based, scripted and repeatable use.
+
+Status:
+  Accepted.
+
+ADR-002 - Remove toolbar and main plugin menu
+
+Decision:
+  Do not instantiate the Mayim Tools toolbar or main plugin menu.
+
+Reason:
+  Reduce interface clutter and avoid duplicating Processing Toolbox access.
+
+Status:
+  Accepted.
+
+ADR-003 - Separate screening, smoothing and enforcement
+
+Decision:
+  DEM screening, smoothing and hydrological enforcement are separate
+  pipeline concerns and should normally be separate Processing tools.
+
+Reason:
+  They have different purposes, assumptions, validation requirements and
+  consequences for the terrain surface.
+
+Status:
+  Accepted.
+
+ADR-004 - Classify before modifying
+
+Decision:
+  Depressions must be delineated and classified before selective breaching
+  or filling.
+
+Reason:
+  Genuine terrain depressions must not be destroyed by default.
+
+Status:
+  Accepted.
+
+ADR-005 - Preserve dual terrain products
+
+Decision:
+  Future enforcement should produce both a depression-preserving surface
+  and a hydrology-ready surface.
+
+Reason:
+  These surfaces serve different modelling purposes and preserve the
+  distinction between terrain representation and flow-enforcement needs.
+
+Status:
+  Accepted.
+
+ADR-006 - Provenance is mandatory
+
+Decision:
+  Reports, provenance records and modification evidence are mandatory
+  outputs of the processing workflow.
+
+Reason:
+  A reviewer must be able to understand, reproduce and challenge the
+  processing decisions.
+
+Status:
+  Accepted.
+
+ADR-007 - External engines are replaceable
+
+Decision:
+  External tools such as WhiteboxTools may be used as computational
+  backends, but they must not define the Mayim methodology.
+
+Reason:
+  Mayim Tools must retain independent decision logic, validation,
+  adaptation and provenance.
+
+Status:
+  Accepted.
+
+ADR-008 - RichDEM is not a mandatory dependency
+
+Decision:
+  RichDEM is not required for the current or planned public installation.
+
+Reason:
+  Its native extension requires a local C++ compiler in the current
+  Windows/Python environment, creating an unnecessary installation
+  barrier for users.
+
+Status:
+  Accepted.
+
+ADR-009 - Use native components where they add methodological value
+
+Decision:
+  Mayim-specific decision logic, classification, resolution adaptation,
+  validation and provenance must be implemented within Mayim Tools.
+
+Reason:
+  These components provide the project's methodological identity and
+  reproducibility.
+
+Status:
+  Accepted.
+
+ADR-010 - WhiteboxTools as an optional backend
+
+Decision:
+  WhiteboxTools may be used for mature, computationally intensive
+  operations such as least-cost breaching, flat resolution and optional
+  hydrography enforcement.
+
+Reason:
+  It provides validated and efficient implementations without requiring
+  users to compile RichDEM. Its use must remain transparent and recorded
+  in provenance.
+
+Status:
+  Accepted in principle; implementation pending.
+
+
+================================================================================
+28. MAINTENANCE REQUIREMENTS
+================================================================================
+
+The following items must be reviewed whenever a new tool is added:
+
+  - Processing algorithm registration.
+  - Category documentation.
+  - User-manual chapter.
+  - Architecture Reference Report.
+  - AI Context Document.
+  - CHANGELOG.md.
+  - Unit and integration tests.
+  - Dependency documentation.
+  - Provenance schema, where changed.
+  - Version numbers in metadata and About dialog.
+  - Output naming and compatibility.
+  - Public-facing help text.
+  - Known limitations and warnings.
+
+A new tool is not considered complete until its implementation,
+documentation, tests and provenance behaviour have been reviewed together.
+
+28.1 Tool Completion Checklist
+
+Before marking a tool as implemented, confirm that:
+
+  - The tool has a unique Processing algorithm ID.
+  - The tool is registered in the correct category.
+  - The tool appears in the Processing Toolbox.
+  - The tool can be opened from the Mayim Tools dock panel.
+  - All required parameters are validated.
+  - Recommended parameter values are documented.
+  - Parameter units are stated clearly.
+  - Invalid inputs generate useful error messages.
+  - NoData handling is defined and tested.
+  - CRS handling is defined and tested.
+  - Resolution handling is defined and tested.
+  - Output data types are documented.
+  - Output NoData values are documented.
+  - Outputs preserve spatial metadata.
+  - Output layers can be loaded independently where applicable.
+  - Reports are generated.
+  - Provenance records are generated.
+  - Modified cells are traceable where applicable.
+  - Processing can be cancelled safely.
+  - Progress is reported to the user.
+  - Unit tests have been added.
+  - The user manual chapter has been added.
+  - The Architecture Reference Report has been updated.
+  - The AI Context Document has been updated.
+  - CHANGELOG.md has been updated.
+  - The tool has been tested in QGIS.
+  - The change has been committed to Git.
+
+
+================================================================================
+29. CURRENT DEVELOPMENT WORKFLOW
+================================================================================
+
+29.1 Source and Deployment Locations
+
+Development source:
+
+  D:\Dropbox\MAYIM\6 TEGNIESE DATA EN DOKUMENTE\QGIS\
+  QGIS Plug-ins\Mayim Tools\
+
+QGIS development deployment:
+
+  C:\Users\caets\AppData\Roaming\QGIS\QGIS4\profiles\
+  default\python\plugins\mayim_tools\
+
+The deploy script copies the source plugin package into the QGIS profile
+directory for local testing.
+
+29.2 QGIS Python Executable
+
+The approved development Python executable is:
+
+  C:\Program Files\QGIS 4.0.3\apps\Python312\python.exe
+
+The following executable should not be used for normal package installation
+or plugin development:
+
+  C:\Program Files\QGIS 4.0.3\bin\python.exe
+
+Using the bin executable previously caused Python home and standard-library
+resolution errors.
+
+29.3 PowerShell Commands
+
+The current development profile provides:
+
+  mayim
+    Changes directory to the Mayim Tools repository.
+
+  qpy
+    Runs the QGIS Python interpreter.
+
+  qpip
+    Runs pip using the QGIS Python interpreter.
+
+  qruff
+    Runs Ruff using the QGIS Python environment.
+
+  qblack
+    Runs Black using the QGIS Python environment.
+
+  mayim-format
+    Formats the Mayim Tools source code.
+
+  mayim-lint
+    Runs lint checks across the plugin source.
+
+  mayim-deploy
+    Copies the source package to the QGIS 4 plugin directory.
+
+  qtest
+    Runs the configured test suite.
+
+  gcommit
+    Stages, commits and pushes changes to GitHub.
+
+29.4 Standard Change Procedure
+
+  1. Navigate to the repository:
+
+       mayim
+
+  2. Make changes in the source tree.
+
+  3. Run a syntax check on changed Python files.
+
+  4. Run formatting:
+
+       mayim-format
+
+  5. Run linting:
+
+       mayim-lint
+
+  6. Run tests:
+
+       qtest
+
+  7. Deploy the plugin:
+
+       mayim-deploy
+
+  8. Restart QGIS if the Processing provider, algorithm definitions,
+     imports or user-interface components have changed.
+
+  9. Test the change interactively in QGIS.
+
+  10. Review generated outputs, reports and provenance.
+
+  11. Update the relevant documentation.
+
+  12. Commit and push the change:
+
+       gcommit "description of change"
+
+
+================================================================================
+30. KNOWN LIMITATIONS AND OPEN RISKS
+================================================================================
+
+30.1 Stage 1 Artifact Correction
+
+The current DEM Hydrological Screening tool performs MAD-based statistical
+artifact screening. It does not yet implement all source-specific correction
+methods described in the research methodology.
+
+Not yet implemented:
+
+  - SMRF LiDAR ground filtering.
+  - Progressive TIN densification.
+  - XGBoost or other learned bias correction.
+  - Direct bare-earth product substitution.
+  - Co-registered canopy-height correction.
+  - Co-registered land-cover correction.
+
+The artifact mask is therefore a screening output, not a definitive
+classification of terrain error.
+
+30.2 Stage 2 Smoothing
+
+The current DEM Hydrological Smoothing tool applies anisotropic diffusion
+to all valid cells.
+
+It does not currently restrict smoothing to cells flagged by the Stage 1
+artifact mask.
+
+The following enhancements remain planned:
+
+  - Optional artifact-mask-guided smoothing.
+  - Bilateral-filter implementation.
+  - Quantitative sensitivity analysis.
+  - Improved scaling of iterations with resolution.
+  - Improved treatment of anisotropic cell dimensions.
+  - More detailed terrain-edge validation.
+
+30.3 Depression Processing
+
+Stages 3 to 7 have not yet been implemented.
+
+No current Mayim Tools algorithm should be described as providing complete
+hydrological conditioning until:
+
+  - Depression analysis is implemented.
+  - Classification is implemented.
+  - Selective enforcement is implemented.
+  - Flat resolution is implemented.
+  - Validation is expanded.
+
+30.4 Large Raster Performance
+
+The current implementations read complete raster bands into memory. This is
+acceptable for development and moderate-sized rasters but may not be suitable
+for very large or continental-scale DEMs.
+
+Future large-raster support should consider:
+
+  - Windowed reads.
+  - Tiled processing.
+  - Block-based output writing.
+  - Memory-use reporting.
+  - Parallel execution where safe.
+  - Cloud Optimized GeoTIFF support.
+
+30.5 External Data Accuracy
+
+The methodology may use external land-cover, canopy-height, hydrography,
+bridge, culvert or terrain datasets.
+
+Mayim Tools cannot automatically guarantee the positional or thematic
+accuracy of these external datasets. Their source, date, scale, CRS and
+known limitations must be recorded and reviewed by the analyst.
+
+30.6 Classification Uncertainty
+
+A depression classifier can only be as reliable as the evidence supplied to
+it. Missing, outdated or incorrect metadata may result in incorrect
+classification.
+
+The REVIEW_REQUIRED class is therefore essential. It prevents uncertainty
+from being hidden behind a forced binary decision.
+
+30.7 External Computational Engines
+
+Where WhiteboxTools or another external engine is used, the result depends
+partly on that engine's implementation and version.
+
+The provenance record must identify:
+
+  - Engine name.
+  - Engine version.
+  - Operation invoked.
+  - Parameters supplied.
+  - Input and output paths.
+  - Any warnings returned by the engine.
+
+30.8 Engineering Interpretation
+
+A tool completing without a software error does not demonstrate that the
+result is hydrologically or engineeringly appropriate.
+
+Results must be reviewed against:
+
+  - Survey information.
+  - Aerial imagery.
+  - Known drainage.
+  - Field observations.
+  - Existing hydrography.
+  - Catchment boundaries.
+  - Local engineering knowledge.
+  - Applicable project requirements.
+
+
+================================================================================
+31. PUBLIC RELEASE READINESS
+================================================================================
+
+Mayim Tools is currently an active development and technical-preview project.
+It is not yet ready to be presented as a mature general-purpose hydrological
+conditioning product.
+
+Before public release through the QGIS Plugin Repository, the following
+should be completed or reviewed:
+
+  - Complete metadata validation.
+  - Licence and dependency compatibility review.
+  - Removal of development-only local paths.
+  - Replacement of placeholder icons.
+  - Resource compilation strategy.
+  - Automated test execution.
+  - Public installation testing.
+  - Clean installation testing on a separate machine.
+  - Documentation review.
+  - User-manual completion.
+  - Error-message review.
+  - Performance testing.
+  - Large-raster testing.
+  - NoData testing.
+  - CRS testing.
+  - Multi-resolution testing.
+  - Reproducibility testing.
+  - Review of external-engine licences.
+  - Review of third-party attributions.
+  - Security review of file and subprocess handling.
+  - Completion of the hydrological pipeline stages.
+  - Release notes and changelog finalisation.
+
+The plugin should remain marked experimental until the project owners consider
+the implemented tools sufficiently stable for wider use.
+
+
+================================================================================
+32. SUMMARY OF ARCHITECTURAL POSITION
+================================================================================
+
+Mayim Tools is a modular QGIS Processing plugin designed to provide an
+independent, reproducible and auditable DEM hydrological-conditioning
+workflow.
+
+Its distinctive methodological position is the combination of:
+
+  - Established and peer-reviewed low-level algorithms.
+  - Explicit resolution- and accuracy-adaptive behaviour.
+  - Artifact correction separated from hydrological enforcement.
+  - Depression classification before elevation modification.
+  - Preservation of genuine closed basins.
+  - Selective and least-impact interventions.
+  - Separate depression-preserving and hydrology-ready terrain products.
+  - Cell-level modification evidence.
+  - Human-readable reporting.
+  - Machine-readable provenance.
+  - Replaceable computational backends.
+  - Analyst-review pathways for uncertain cases.
+
+The project does not claim to have invented Priority-Flood, anisotropic
+diffusion, least-cost breaching, depression hierarchies or flat-resolution
+methods.
+
+Its contribution is to integrate these established methods into a coherent
+workflow that makes decisions explicit, adapts to heterogeneous DEM data and
+produces the evidence required for technical review and reproducibility.
+
+
+================================================================================
+33. FINAL STATUS
+================================================================================
+
+Plugin:
+
+  Mayim Tools
+
+Current version:
+
+  0.2.0
+
+Current status:
+
+  Active development / technical preview
+
+Implemented categories:
+
+  - Hydrology Tools.
+  - Geometry Tools framework.
+
+Implemented tools:
+
+  - DEM Hydrological Screening.
+  - DEM Hydrological Smoothing.
+
+Implemented pipeline stages:
+
+  - Stage 0: Ingestion and QA.
+  - Stage 1: Artifact screening.
+  - Stage 2: Controlled smoothing.
+
+Partially implemented:
+
+  - Per-tool reports.
+  - Per-tool provenance.
+  - Output modification masks.
+  - Resolution-aware processing.
+  - Independent output-layer loading.
+
+Planned:
+
+  - Stage 3: Depression delineation and hierarchy.
+  - Stage 4: Depression classification.
+  - Stage 5: Selective breach/fill enforcement.
+  - Stage 6: Flat-area resolution.
+  - Stage 7: Optional hydrography enforcement.
+  - Stage 8: Pipeline-level validation and audit summary.
+  - Native Mayim hydrological context.
+  - Shared provenance service.
+  - Large-raster processing.
+  - Automated CI/CD.
+  - Production release.
+
+
+================================================================================
+END OF ARCHITECTURE REFERENCE REPORT
+================================================================================
+
+Report version: 0.2.0
+Plugin version: 0.2.0
+Status:         Active development / technical preview
+Repository:     https://github.com/chrismayim/mayim-tools
+Licence:        GNU General Public License v2 or later
+
+This report should be updated whenever the architecture, methodology,
+technology stack, tool inventory, versioning policy or implementation status
+changes.
+
+
