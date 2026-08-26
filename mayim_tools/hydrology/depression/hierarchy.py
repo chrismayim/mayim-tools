@@ -221,12 +221,72 @@ class DepressionHierarchy:
         """
         Establish a parent-child relationship.
 
+        A node cannot be its own parent, and the relationship cannot
+        create a cycle in the hierarchy.
+
         :param child_id: ID of the child depression.
         :param parent_id: ID of the parent depression.
         :raises KeyError: If either ID does not exist.
+        :raises ValueError: If the relationship creates a cycle.
         """
-        child  = self._nodes[child_id]
+        if child_id not in self._nodes:
+            raise KeyError(
+                f"Child depression ID {child_id} does not exist."
+            )
+
+        if parent_id not in self._nodes:
+            raise KeyError(
+                f"Parent depression ID {parent_id} does not exist."
+            )
+
+        if child_id == parent_id:
+            raise ValueError(
+                f"Depression {child_id} cannot be its own parent."
+            )
+
+        # Walk upward from the proposed parent. If the child is found,
+        # assigning this relationship would create a cycle.
+        current = self._nodes[parent_id]
+        visited_ids = set()
+
+        while current.parent_id is not None:
+            if current.depression_id in visited_ids:
+                raise ValueError(
+                    "Existing cycle detected in the hierarchy."
+                )
+
+            visited_ids.add(current.depression_id)
+
+            if current.parent_id == child_id:
+                raise ValueError(
+                    f"Setting {child_id} as a child of {parent_id} "
+                    "would create a cycle."
+                )
+
+            parent = self._nodes.get(current.parent_id)
+
+            if parent is None:
+                raise ValueError(
+                    f"Depression {current.depression_id} references "
+                    f"missing parent {current.parent_id}."
+                )
+
+            current = parent
+
+        child = self._nodes[child_id]
         parent = self._nodes[parent_id]
+
+        # If the child already has another parent, remove the old
+        # reverse reference before assigning the new parent.
+        if child.parent_id is not None and child.parent_id != parent_id:
+            old_parent = self._nodes.get(child.parent_id)
+
+            if old_parent is not None:
+                old_parent.child_ids = [
+                    existing_child
+                    for existing_child in old_parent.child_ids
+                    if existing_child != child_id
+                ]
 
         child.parent_id = parent_id
 
