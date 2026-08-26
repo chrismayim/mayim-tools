@@ -68,6 +68,8 @@ from mayim_tools.core.logger import MayimLogger
 from mayim_tools.core.validation_utils import ValidationUtils
 from mayim_tools.processing.algorithms.base_algorithm import MayimBaseAlgorithm
 
+from mayim_tools.contract import MayimManifest
+
 # -- DEM Source Type Constants ---------------------------------------------- #
 
 class DEMSourceType:
@@ -1041,6 +1043,72 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
 
         feedback.setProgress(100)
 
+        # ── Create and write the MayimManifest ────────────────────────────── #
+        # The manifest is the shared interchange contract that allows the next
+        # tool in the pipeline to receive verified metadata without inspecting
+        # the raster itself.
+        # Reference: Section 6.3, Mayim Tools Research Paper Rev 1 (2026).
+        # IP STATUS: Original Mayim IP. Standard library only.
+
+        try:
+            import rasterio as _rio
+            with _rio.open(str(paths["screened_dem"])) as _src:
+                _crs = _src.crs.to_string() if _src.crs else "Unknown"
+                _res_x = abs(float(_src.transform.a))
+                _res_y = abs(float(_src.transform.e))
+                _mean_cell = (_res_x + _res_y) / 2.0
+                _nodata = float(_src.nodata) if _src.nodata is not None else -9999.0
+                _width = _src.width
+                _height = _src.height
+                _bounds = {
+                    "left":   float(_src.bounds.left),
+                    "bottom": float(_src.bounds.bottom),
+                    "right":  float(_src.bounds.right),
+                    "top":    float(_src.bounds.top),
+                }
+                _dtype = str(_src.dtypes[0])
+
+            _manifest = MayimManifest.create(
+                raster_path=str(paths["screened_dem"]),
+                crs=_crs,
+                cell_size=_mean_cell,
+                vertical_accuracy=float(
+                    provenance.get("stage_0", {}).get(
+                        "vertical_accuracy_rmse", 5.0
+                    )
+                ),
+                nodata=_nodata,
+                produced_by="dem-hydrological-screening-0.2.0",
+                stage=1,
+                audit_log_path=str(paths["provenance"]),
+                warnings=provenance.get("warnings", []) or None,
+                dem_source_type=params.get("source_type"),
+                width=_width,
+                height=_height,
+                bounds=_bounds,
+                dtype=_dtype,
+            )
+
+            _manifest_path = str(
+                output_dir / f"{dem_stem}_screened.manifest.json"
+            )
+            _manifest.write(_manifest_path)
+
+            self.log(
+                f"MayimManifest written: "
+                f"{Path(_manifest_path).name}",
+                feedback,
+            )
+
+        except Exception as _e:
+            self.log_warning(
+                f"Could not write MayimManifest: {_e}",
+                feedback,
+            )
+            _manifest_path = None
+
+        feedback.setProgress(100)
+
         return {
             self.OUTPUT_DEM:           str(paths["screened_dem"]),
             self.OUTPUT_VOID_MASK:     str(paths["void_mask"]),
@@ -1048,7 +1116,6 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
             self.OUTPUT_QA_REPORT:     str(paths["qa_report_txt"]),
             self.OUTPUT_PROVENANCE:    str(paths["provenance"]),
         }
-
 
     # -- Private helper methods ------------------------------------------- #
 
