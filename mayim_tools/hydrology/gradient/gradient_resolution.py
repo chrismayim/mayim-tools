@@ -1,41 +1,38 @@
 """
-Mayim Tools - Garbrecht-Martz Flat Resolution
-==============================================
+Mayim Tools - Region-Aware Gradient Resolution
+===============================================
 
-Implements Stage 6 flat-area gradient resolution.
+Implements the native Stage 6 flat-area gradient-resolution component.
 
-The Garbrecht-Martz method imposes two superimposed synthetic gradients
-across each flat surface:
+The implementation applies a region-aware, two-distance synthetic
+gradient to connected flat regions:
 
-    Gradient A:
-        Pushes flow away from higher terrain at the flat inflow boundary.
-        Computed as BFS distance from higher-boundary cells.
+    - A distance from higher-elevation boundary cells.
+    - A distance from lower-elevation outlet cells.
 
-    Gradient B:
-        Pulls flow toward the flat outflow point.
-        Computed as BFS distance from lower-boundary cells.
+The two distances are combined into a small correction. The correction
+magnitude is limited by the supplied vertical accuracy and cell size.
 
-    Combined correction:
-        correction = (2 * gradient_B + gradient_A) * step
-
-    where step is scaled so the imposed gradient stays below the DEM's
-    vertical resolution.
-
-This produces an unambiguous downhill gradient across the flat without
-modifying terrain outside the flat footprint.
+This module does not use WhiteboxTools, RichDEM, TauDEM or NetworkX.
+It does not modify cells outside the supplied flat regions and does not
+modify the input DEM in place.
 
 Methodology basis
 -----------------
-Garbrecht, J. and Martz, L. W. (1997).
-The assignment of drainage direction over flat surfaces in raster
-digital elevation models.
+Garbrecht, J. and Martz, L. W. (1997). The assignment of drainage
+direction over flat surfaces in raster digital elevation models.
 Journal of Hydrology, 193(1-4), 204-213.
 
 IP status
 ---------
-Original Mayim implementation based on the published paper.
-No WhiteboxTools, RichDEM, TauDEM or other third-party hydrological
-implementation is used at runtime.
+Original Mayim implementation based on the published methodology.
+No third-party hydrological source code is used at runtime.
+
+Important qualification
+-----------------------
+The present implementation is a native Mayim Stage 6 component.
+Further validation is required for complex flats, multiple outlets,
+floating-point tolerance, rectangular pixels and very large rasters.
 """
 
 from __future__ import annotations
@@ -43,6 +40,13 @@ from __future__ import annotations
 from collections import deque
 
 import numpy as np
+
+_CARDINAL = [
+    (-1, 0),
+    (0, -1),
+    (0, 1),
+    (1, 0),
+]
 
 
 def resolve_flats(
@@ -53,49 +57,49 @@ def resolve_flats(
     cell_size: float,
     vertical_accuracy: float,
     nodata: float,
+    region_ids: np.ndarray | None = None,
 ) -> tuple[np.ndarray, dict]:
     """
-    Apply the Garbrecht-Martz dual-gradient method to flat cells.
+    Resolve connected flat regions independently.
 
-    Only cells inside flat_mask are modified. All other cells are
-    copied unchanged from the input DEM.
+    When ``region_ids`` is supplied, each positive region ID is processed
+    independently. This prevents BFS distances and audit statistics from
+    being mixed between disconnected flat regions.
 
-    The imposed gradient step is:
-
-        step = min(vertical_accuracy, cell_size) / (
-            2.0 * max(gradient_away.max(), gradient_toward.max(), 1)
-        )
-
-    This ensures the imposed signal stays below the DEM's vertical
-    resolution and does not introduce a slope larger than the data
-    can support.
+    When ``region_ids`` is None, the complete flat mask is treated as one
+    backward-compatible region.
 
     Parameters
     ----------
     dem:
         Two-dimensional DEM array.
     flat_mask:
-        Boolean mask identifying flat cells.
+        Boolean mask identifying candidate flat cells.
     higher_boundary:
         Boolean mask identifying flat cells adjacent to higher terrain.
     lower_boundary:
         Boolean mask identifying flat cells adjacent to lower terrain.
     cell_size:
-        Mean cell size in map units.
+        Cell size in map units.
     vertical_accuracy:
-        DEM vertical accuracy in metres.
+        DEM vertical accuracy or supported vertical-resolution estimate.
     nodata:
         NoData sentinel value.
+    region_ids:
+        Optional integer raster identifying connected flat regions.
+        Zero identifies non-flat cells. Positive integers identify
+        individual flat regions.
 
     Returns
     -------
     tuple[np.ndarray, dict]
-        Gradient-resolved DEM and audit dictionary.
+        Resolved DEM and audit dictionary.
 
     Raises
     ------
     ValueError
-        If inputs are invalid or the flat has no valid outlet.
+        If any input is invalid or a non-empty flat region has no valid
+        lower boundary.
     """
     _validate_inputs(
         dem=dem,
@@ -104,67 +108,190 @@ def resolve_flats(
         lower_boundary=lower_boundary,
         cell_size=cell_size,
         vertical_accuracy=vertical_accuracy,
+        region_ids=region_ids,
     )
 
     result = dem.astype(np.float64, copy=True)
 
-    if not np.any(flat_mask):
+    valid_mask = (
+        np.isfinite(dem)
+        & (dem != nodata)
+    )
+
+    active_flat_mask = flat_mask & valid_mask
+
+    if not np.any(active_flat_mask):
         return result, _empty_audit()
 
-    if not np.any(lower_boundary):
-        raise ValueError(
-            "The flat surface has no valid lower boundary. "
-            "It cannot be resolved without a drainage outlet."
+    if region_ids is None:
+        working_region_ids = np.zeros(
+            dem.shape,
+            dtype=np.int32,
+        )
+        working_region_ids[active_flat_mask] = 1
+    else:
+        working_region_ids = region_ids.copy()
+        working_region_ids[~active_flat_mask] = 0
+
+    region_values = sorted(
+        int(region_id)
+        for region_id in np.unique(working_region_ids)
+        if region_id > 0
+    )
+
+    if not region_values:
+        return result, _empty_audit()
+
+    region_audits = []
+
+    for region_id in region_values:
+        region_mask = (
+            active_flat_mask
+            & (working_region_ids == region_id)
         )
 
-    gradient_away = _bfs_distance(
-        flat_mask=flat_mask,
-        seeds=higher_boundary,
-    )
+        if not np.any(region_mask):
+            continue
 
-    gradient_toward = _bfs_distance(
-        flat_mask=flat_mask,
-        seeds=lower_boundary,
-    )
+        region_higher_boundary = (
+            higher_boundary
+            & region_mask
+        )
 
-    max_away = float(gradient_away[flat_mask].max()) if np.any(flat_mask) else 1.0
-    max_toward = float(gradient_toward[flat_mask].max()) if np.any(flat_mask) else 1.0
-    max_distance = max(max_away, max_toward, 1.0)
+        region_lower_boundary = (
+            lower_boundary
+            & region_mask
+        )
 
-    step = min(
-        float(vertical_accuracy),
-        float(cell_size),
-    ) / (2.0 * max_distance)
+        if not np.any(region_lower_boundary):
+            raise ValueError(
+                f"Flat region {region_id} has no valid lower boundary."
+            )
 
-    correction = (
-        2.0 * gradient_toward
-        + gradient_away
-    ) * step
+        distance_away = _bfs_distance(
+            flat_mask=region_mask,
+            seeds=region_higher_boundary,
+        )
 
-    result[flat_mask] = (
-        dem[flat_mask].astype(np.float64)
-        + correction[flat_mask]
-    )
+        distance_toward = _bfs_distance(
+            flat_mask=region_mask,
+            seeds=region_lower_boundary,
+        )
 
-    modified_cells = int(np.sum(flat_mask))
-    total_change = float(
-        np.sum(result[flat_mask] - dem[flat_mask])
-    )
-    maximum_change = float(
-        np.max(result[flat_mask] - dem[flat_mask])
-    )
+        max_distance_away = float(
+            np.max(distance_away[region_mask])
+        )
+
+        max_distance_toward = float(
+            np.max(distance_toward[region_mask])
+        )
+
+        max_distance = max(
+            max_distance_away,
+            max_distance_toward,
+            1.0,
+        )
+
+        # Keep the synthetic signal strictly bounded by the smaller
+        # of the supplied vertical accuracy and cell size.
+        step = min(
+            float(vertical_accuracy),
+            float(cell_size),
+        ) / (2.0 * max_distance)
+
+        correction = (
+            2.0 * distance_toward
+            + distance_away
+        ) * step
+
+        original_region_values = dem[region_mask].astype(
+            np.float64,
+            copy=True,
+        )
+
+        result[region_mask] = (
+            original_region_values
+            + correction[region_mask]
+        )
+
+        region_changes = (
+            result[region_mask]
+            - original_region_values
+        )
+
+        region_modified = np.abs(region_changes) > 0.0
+
+        region_audits.append(
+            {
+                "region_id": region_id,
+                "flat_cells": int(np.sum(region_mask)),
+                "higher_boundary_cells": int(
+                    np.sum(region_higher_boundary)
+                ),
+                "lower_boundary_cells": int(
+                    np.sum(region_lower_boundary)
+                ),
+                "step": float(step),
+                "max_gradient_away": max_distance_away,
+                "max_gradient_toward": max_distance_toward,
+                "total_elevation_change": float(
+                    np.sum(region_changes)
+                ),
+                "maximum_elevation_change": float(
+                    np.max(region_changes)
+                ) if region_changes.size else 0.0,
+                "minimum_elevation_change": float(
+                    np.min(region_changes)
+                ) if region_changes.size else 0.0,
+                "modified_cells": int(
+                    np.sum(region_modified)
+                ),
+            }
+        )
+
+    all_changes = result[active_flat_mask] - dem[active_flat_mask]
 
     audit = {
         "method": "garbrecht_martz_flat_resolution",
-        "flat_cells": modified_cells,
-        "higher_boundary_cells": int(np.sum(higher_boundary)),
-        "lower_boundary_cells": int(np.sum(lower_boundary)),
-        "step": float(step),
-        "max_gradient_away": float(max_away),
-        "max_gradient_toward": float(max_toward),
-        "total_elevation_change": total_change,
-        "maximum_elevation_change": maximum_change,
-        "modified_cells": modified_cells,
+        "region_count": len(region_audits),
+        "regions": region_audits,
+        "flat_cells": int(np.sum(active_flat_mask)),
+        "higher_boundary_cells": int(
+            np.sum(higher_boundary & active_flat_mask)
+        ),
+        "lower_boundary_cells": int(
+            np.sum(lower_boundary & active_flat_mask)
+        ),
+        "step": float(
+            max(
+                region["step"]
+                for region in region_audits
+            )
+        ) if region_audits else 0.0,
+        "max_gradient_away": float(
+            max(
+                region["max_gradient_away"]
+                for region in region_audits
+            )
+        ) if region_audits else 0.0,
+        "max_gradient_toward": float(
+            max(
+                region["max_gradient_toward"]
+                for region in region_audits
+            )
+        ) if region_audits else 0.0,
+        "total_elevation_change": float(
+            np.sum(all_changes)
+        ) if all_changes.size else 0.0,
+        "maximum_elevation_change": float(
+            np.max(all_changes)
+        ) if all_changes.size else 0.0,
+        "minimum_elevation_change": float(
+            np.min(all_changes)
+        ) if all_changes.size else 0.0,
+        "modified_cells": int(
+            np.sum(np.abs(all_changes) > 0.0)
+        ) if all_changes.size else 0,
     }
 
     return result, audit
@@ -175,48 +302,81 @@ def _bfs_distance(
     seeds: np.ndarray,
 ) -> np.ndarray:
     """
-    Compute BFS distances from seed cells within the flat mask.
+    Calculate cardinal BFS distance from seed cells.
 
-    Non-flat cells and unvisited flat cells receive a distance of zero.
+    Distances are calculated only inside ``flat_mask``. Seed cells have
+    distance 1. Unreachable cells remain zero.
 
-    :param flat_mask: Boolean flat-cell mask.
-    :param seeds: Boolean seed-cell mask.
-    :returns: Integer distance array.
+    Parameters
+    ----------
+    flat_mask:
+        Boolean mask of one connected flat region.
+    seeds:
+        Boolean mask of seed cells inside the flat region.
+
+    Returns
+    -------
+    np.ndarray
+        Integer distance array.
     """
     rows, cols = flat_mask.shape
-    distance = np.zeros((rows, cols), dtype=np.int32)
-    visited = np.zeros((rows, cols), dtype=bool)
+
+    distances = np.zeros(
+        flat_mask.shape,
+        dtype=np.int32,
+    )
+
+    visited = np.zeros(
+        flat_mask.shape,
+        dtype=bool,
+    )
 
     queue = deque()
 
-    seed_positions = np.argwhere(seeds & flat_mask)
+    seed_positions = np.argwhere(
+        seeds & flat_mask
+    )
 
     for position in seed_positions:
-        row, col = int(position[0]), int(position[1])
+        row = int(position[0])
+        col = int(position[1])
+
+        if visited[row, col]:
+            continue
+
         visited[row, col] = True
-        distance[row, col] = 1
+        distances[row, col] = 1
         queue.append((row, col))
 
     while queue:
         row, col = queue.popleft()
 
-        for row_offset, col_offset in [
-            (-1, 0), (1, 0), (0, -1), (0, 1),
-        ]:
-            nr = row + row_offset
-            nc = col + col_offset
+        for row_offset, col_offset in _CARDINAL:
+            neighbour_row = row + row_offset
+            neighbour_col = col + col_offset
 
-            if not (0 <= nr < rows and 0 <= nc < cols):
+            if not (
+                0 <= neighbour_row < rows
+                and 0 <= neighbour_col < cols
+            ):
                 continue
 
-            if visited[nr, nc] or not flat_mask[nr, nc]:
+            if not flat_mask[neighbour_row, neighbour_col]:
                 continue
 
-            visited[nr, nc] = True
-            distance[nr, nc] = distance[row, col] + 1
-            queue.append((nr, nc))
+            if visited[neighbour_row, neighbour_col]:
+                continue
 
-    return distance
+            visited[neighbour_row, neighbour_col] = True
+            distances[neighbour_row, neighbour_col] = (
+                distances[row, col] + 1
+            )
+            queue.append(
+                (neighbour_row, neighbour_col)
+            )
+
+    return distances
+
 
 def _validate_inputs(
     dem: np.ndarray,
@@ -225,73 +385,112 @@ def _validate_inputs(
     lower_boundary: np.ndarray,
     cell_size: float,
     vertical_accuracy: float,
+    region_ids: np.ndarray | None,
 ) -> None:
     """
     Validate gradient-resolution inputs.
-
-    :raises ValueError: If any input is invalid.
     """
-    if not isinstance(dem, np.ndarray) or dem.ndim != 2:
+    if not isinstance(dem, np.ndarray):
+        raise ValueError("dem must be a NumPy array.")
+
+    if dem.ndim != 2:
         raise ValueError(
-            "dem must be a two-dimensional NumPy array."
+            "dem must be a two-dimensional array."
         )
 
-    if not isinstance(flat_mask, np.ndarray):
-        raise ValueError(
-            "flat_mask must be a NumPy array."
-        )
+    _validate_boolean_mask(
+        flat_mask,
+        dem.shape,
+        "flat_mask",
+    )
 
-    if flat_mask.shape != dem.shape:
-        raise ValueError(
-            "flat_mask must have the same shape as dem."
-        )
+    _validate_boolean_mask(
+        higher_boundary,
+        dem.shape,
+        "higher_boundary",
+    )
 
-    if flat_mask.dtype != np.bool_:
-        raise ValueError(
-            "flat_mask must have Boolean dtype."
-        )
+    _validate_boolean_mask(
+        lower_boundary,
+        dem.shape,
+        "lower_boundary",
+    )
 
-    if not isinstance(higher_boundary, np.ndarray):
-        raise ValueError(
-            "higher_boundary must be a NumPy array."
-        )
-
-    if higher_boundary.shape != dem.shape:
-        raise ValueError(
-            "higher_boundary must have the same shape as dem."
-        )
-
-    if not isinstance(lower_boundary, np.ndarray):
-        raise ValueError(
-            "lower_boundary must be a NumPy array."
-        )
-
-    if lower_boundary.shape != dem.shape:
-        raise ValueError(
-            "lower_boundary must have the same shape as dem."
-        )
-
-    if not np.isfinite(float(cell_size)) or cell_size <= 0:
+    if not np.isfinite(float(cell_size)) or cell_size <= 0.0:
         raise ValueError(
             "cell_size must be finite and greater than zero."
         )
 
-    if not np.isfinite(float(vertical_accuracy)) or vertical_accuracy <= 0:
+    if (
+        not np.isfinite(float(vertical_accuracy))
+        or vertical_accuracy <= 0.0
+    ):
         raise ValueError(
             "vertical_accuracy must be finite and greater than zero."
+        )
+
+    if region_ids is not None:
+        if not isinstance(region_ids, np.ndarray):
+            raise ValueError(
+                "region_ids must be a NumPy array or None."
+            )
+
+        if region_ids.ndim != 2:
+            raise ValueError(
+                "region_ids must be a two-dimensional array."
+            )
+
+        if region_ids.shape != dem.shape:
+            raise ValueError(
+                "region_ids must have the same shape as dem."
+            )
+
+        if not np.issubdtype(
+            region_ids.dtype,
+            np.integer,
+        ):
+            raise ValueError(
+                "region_ids must have an integer dtype."
+            )
+
+
+def _validate_boolean_mask(
+    mask: np.ndarray,
+    expected_shape: tuple[int, int],
+    name: str,
+) -> None:
+    """
+    Validate a Boolean mask.
+    """
+    if not isinstance(mask, np.ndarray):
+        raise ValueError(
+            f"{name} must be a NumPy array."
+        )
+
+    if mask.ndim != 2:
+        raise ValueError(
+            f"{name} must be a two-dimensional array."
+        )
+
+    if mask.shape != expected_shape:
+        raise ValueError(
+            f"{name} must have the same shape as dem."
+        )
+
+    if mask.dtype != np.bool_:
+        raise ValueError(
+            f"{name} must have Boolean dtype."
         )
 
 
 def _empty_audit() -> dict:
     """
-    Return an audit record for a no-op flat resolution.
-
-    Used when the flat mask is empty and no modification is required.
-
-    :returns: Audit dictionary.
+    Return an audit record for a no-op operation.
     """
     return {
         "method": "garbrecht_martz_flat_resolution",
+        "region_count": 0,
+        "regions": [],
         "flat_cells": 0,
         "higher_boundary_cells": 0,
         "lower_boundary_cells": 0,
@@ -300,5 +499,6 @@ def _empty_audit() -> dict:
         "max_gradient_toward": 0.0,
         "total_elevation_change": 0.0,
         "maximum_elevation_change": 0.0,
+        "minimum_elevation_change": 0.0,
         "modified_cells": 0,
     }
