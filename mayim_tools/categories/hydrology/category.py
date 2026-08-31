@@ -41,20 +41,24 @@ class HydrologyCategory(BaseCategory):
         at module load time.
         """
         try:
-            from mayim_tools.categories.hydrology.tools.dem_depression_analysis import (
-                DEMDepressionAnalysis,
-            )
             from mayim_tools.categories.hydrology.tools.dem_hydrological_screening import (
                 DEMHydrologicalScreening,
             )
             from mayim_tools.categories.hydrology.tools.dem_hydrological_smoothing import (
                 DEMHydrologicalSmoothing,
             )
+            from mayim_tools.categories.hydrology.tools.dem_depression_analysis import (
+                DEMDepressionAnalysis,
+            )
+            from mayim_tools.categories.hydrology.tools.dem_hydrological_filling import (
+                DEMHydrologicalFilling,
+            )
 
             return [
                 DEMHydrologicalScreening(),
                 DEMHydrologicalSmoothing(),
                 DEMDepressionAnalysis(),
+                DEMHydrologicalFilling(),
             ]
 
         except Exception as e:
