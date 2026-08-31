@@ -35,23 +35,22 @@ class HydrologyCategory(BaseCategory):
         return get_icon_path("hydrology.png")
 
     def get_algorithms(self) -> list:
-        """
-        Return all Hydrology processing algorithms.
-        Each tool is imported here to avoid circular imports
-        at module load time.
-        """
+        """Return all Hydrology processing algorithms."""
         try:
+            from mayim_tools.categories.hydrology.tools.dem_depression_analysis import (
+                DEMDepressionAnalysis,
+            )
+            from mayim_tools.categories.hydrology.tools.dem_gradient_resolution import (
+                DEMGradientResolution,
+            )
+            from mayim_tools.categories.hydrology.tools.dem_hydrological_filling import (
+                DEMHydrologicalFilling,
+            )
             from mayim_tools.categories.hydrology.tools.dem_hydrological_screening import (
                 DEMHydrologicalScreening,
             )
             from mayim_tools.categories.hydrology.tools.dem_hydrological_smoothing import (
                 DEMHydrologicalSmoothing,
-            )
-            from mayim_tools.categories.hydrology.tools.dem_depression_analysis import (
-                DEMDepressionAnalysis,
-            )
-            from mayim_tools.categories.hydrology.tools.dem_hydrological_filling import (
-                DEMHydrologicalFilling,
             )
 
             return [
@@ -59,11 +58,13 @@ class HydrologyCategory(BaseCategory):
                 DEMHydrologicalSmoothing(),
                 DEMDepressionAnalysis(),
                 DEMHydrologicalFilling(),
+                DEMGradientResolution(),
             ]
 
-        except Exception as e:
+        except Exception as error:
             from mayim_tools.core.logger import MayimLogger
+
             MayimLogger.critical(
-                f"Hydrology Tools: Failed to load algorithms: {e}"
+                f"Hydrology Tools: Failed to load algorithms: {error}"
             )
             return []
