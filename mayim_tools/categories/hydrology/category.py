@@ -43,6 +43,9 @@ class HydrologyCategory(BaseCategory):
             from mayim_tools.categories.hydrology.tools.dem_gradient_resolution import (
                 DEMGradientResolution,
             )
+            from mayim_tools.categories.hydrology.tools.dem_hydrography_enforcement import (
+                DEMHydrographyEnforcement,
+            )
             from mayim_tools.categories.hydrology.tools.dem_hydrological_filling import (
                 DEMHydrologicalFilling,
             )
@@ -59,6 +62,7 @@ class HydrologyCategory(BaseCategory):
                 DEMDepressionAnalysis(),
                 DEMHydrologicalFilling(),
                 DEMGradientResolution(),
+                DEMHydrographyEnforcement(),
             ]
 
         except Exception as error:
