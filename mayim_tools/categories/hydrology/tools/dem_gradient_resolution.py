@@ -585,9 +585,27 @@ class DEMGradientResolution(MayimBaseAlgorithm):
                 vertical_accuracy=vertical_accuracy,
                 nodata=nodata,
                 region_ids=region_ids,
+                allow_unresolved=True,
             )
 
+            unresolved_regions = resolution_audit.get(
+                "unresolved_regions",
+                [],
+            )
+
+            if unresolved_regions:
+                warning = (
+                    f"{len(unresolved_regions)} flat region(s) could "
+                    "not be resolved because no valid lower boundary "
+                    "was detected. They were preserved unchanged and "
+                    "recorded for analyst review."
+                )
+
+                provenance["warnings"].append(warning)
+                self.log_warning(warning, feedback)
+
             difference = resolved_dem - dem
+
 
             valid_mask = (
                 np.isfinite(dem)

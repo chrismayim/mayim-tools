@@ -48,7 +48,6 @@ _CARDINAL = [
     (1, 0),
 ]
 
-
 def resolve_flats(
     dem: np.ndarray,
     flat_mask: np.ndarray,
@@ -58,6 +57,7 @@ def resolve_flats(
     vertical_accuracy: float,
     nodata: float,
     region_ids: np.ndarray | None = None,
+    allow_unresolved: bool = False,
 ) -> tuple[np.ndarray, dict]:
     """
     Resolve connected flat regions independently.
@@ -89,6 +89,10 @@ def resolve_flats(
         Optional integer raster identifying connected flat regions.
         Zero identifies non-flat cells. Positive integers identify
         individual flat regions.
+    allow_unresolved:
+        If False, a flat region without a valid lower boundary raises
+        ValueError. If True, the region is preserved, recorded as
+        unresolved and processing continues for other regions.
 
     Returns
     -------
@@ -143,6 +147,7 @@ def resolve_flats(
         return result, _empty_audit()
 
     region_audits = []
+    unresolved_regions = []
 
     for region_id in region_values:
         region_mask = (
@@ -164,9 +169,25 @@ def resolve_flats(
         )
 
         if not np.any(region_lower_boundary):
-            raise ValueError(
-                f"Flat region {region_id} has no valid lower boundary."
-            )
+            unresolved_record = {
+                "region_id": region_id,
+                "flat_cells": int(np.sum(region_mask)),
+                "higher_boundary_cells": int(
+                    np.sum(region_higher_boundary)
+                ),
+                "lower_boundary_cells": 0,
+                "status": "unresolved",
+                "reason": "no valid lower boundary",
+                "modified_cells": 0,
+            }
+
+            if not allow_unresolved:
+                raise ValueError(
+                    f"Flat region {region_id} has no valid lower boundary."
+                )
+
+            unresolved_regions.append(unresolved_record)
+            continue
 
         distance_away = _bfs_distance(
             flat_mask=region_mask,
@@ -254,7 +275,11 @@ def resolve_flats(
     audit = {
         "method": "garbrecht_martz_flat_resolution",
         "region_count": len(region_audits),
+        "resolved_region_count": len(region_audits),
+        "unresolved_region_count": len(unresolved_regions),
         "regions": region_audits,
+        "unresolved_regions": unresolved_regions,
+        "allow_unresolved": allow_unresolved,
         "flat_cells": int(np.sum(active_flat_mask)),
         "higher_boundary_cells": int(
             np.sum(higher_boundary & active_flat_mask)
