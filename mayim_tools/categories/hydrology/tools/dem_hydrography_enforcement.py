@@ -4,9 +4,8 @@
 # Mayim Tools | Hydrology Category
 #
 # Phase 1: Grid alignment and rasterisation — complete.
-# Phase 2: Divergence analysis — connected in this version.
-# Phase 3: Enforcement — not yet connected.
-# No elevation modification occurs in this version.
+# Phase 2: Divergence analysis — complete.
+# Phase 3: Adaptive enforcement — connected in this version.
 #
 # IP STATUS: CLEAR WITH CLEAN-ROOM RECORD KEEPING
 # Uses QGIS, rasterio, NumPy, Shapely and native Mayim modules as infrastructure.
@@ -26,23 +25,13 @@
 """
 Stage 7E — DEM Hydrography Enforcement Adapter.
 
-Validates, prepares, grid-aligns and analyses divergence for adaptive,
-topology-aware hydrography enforcement following Soille, Vogt & Colombo
-(2003) and Lindsay's (2016) TopologicalBreachBurn.
+Validates, prepares, grid-aligns, analyses divergence and applies
+adaptive, topology-aware hydrography enforcement following Soille,
+Vogt & Colombo (2003) and Lindsay's (2016) TopologicalBreachBurn.
 
-Phase 1 (complete):
-    - Reads DEM grid metadata.
-    - Rasterises vector hydrography onto the exact DEM grid.
-    - Reads and verifies the flow-evidence raster.
-
-Phase 2 (this version):
-    - Derives Boolean masks from Phase 1 arrays.
-    - Derives NoData mask from DEM metadata.
-    - Calls analyse_hydrography_divergence().
-    - Records divergence statistics and masks in the report and provenance.
-
-Phase 3 (enforcement) is not yet connected.
-No elevation modification occurs in this version.
+Phase 1 (complete): Grid alignment and rasterisation.
+Phase 2 (complete): Divergence analysis.
+Phase 3 (this version): Adaptive enforcement.
 """
 
 from __future__ import annotations
@@ -67,8 +56,8 @@ from qgis.core import (
 )
 
 from mayim_tools.core.logger import MayimLogger
-from mayim_tools.hydrology.hydrography.divergence import (
-    analyse_hydrography_divergence,
+from mayim_tools.hydrology.hydrography.enforcement import (
+    enforce_hydrography,
 )
 from mayim_tools.hydrology.hydrography.topology import (
     prepare_hydrography_topology,
@@ -91,11 +80,8 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
 
     Burning is applied only where the DEM-derived flow path diverges
     materially from the mapped channel. Burn depth scales continuously
-    with contributing area. This stage is optional and off by default.
-
-    Phase 1 (complete): Grid alignment and rasterisation.
-    Phase 2 (current):  Divergence analysis.
-    Phase 3:            Enforcement — not yet connected.
+    with contributing area when upstream area is supplied.
+    This stage is optional and off by default.
     """
 
     # ── Parameter identifiers ─────────────────────────────────────────────────
@@ -105,6 +91,8 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
     INPUT_FLOW_EVIDENCE = "INPUT_FLOW_EVIDENCE"
     ENDPOINT_TOLERANCE = "ENDPOINT_TOLERANCE"
     POSITIONAL_TOLERANCE_CELLS = "POSITIONAL_TOLERANCE_CELLS"
+    VERTICAL_ACCURACY = "VERTICAL_ACCURACY"
+    MAXIMUM_BURN_DEPTH = "MAXIMUM_BURN_DEPTH"
     OUTPUT_FOLDER = "OUTPUT_FOLDER"
 
     # ── Output identifiers ────────────────────────────────────────────────────
@@ -116,11 +104,16 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
 
     DEFAULT_ENDPOINT_TOLERANCE = 1.0
     DEFAULT_POSITIONAL_TOLERANCE_CELLS = 3
+    DEFAULT_VERTICAL_ACCURACY = 0.5
+    DEFAULT_MAXIMUM_BURN_DEPTH = 2.0
 
     # ── Algorithm identity ────────────────────────────────────────────────────
 
     def name(self) -> str:  # noqa: N802
         return "demhydrographyenforcement"
+
+    def createInstance(self):  # noqa: N802
+        return DEMHydrographyEnforcement()
 
     def displayName(self) -> str:  # noqa: N802
         return "DEM Hydrography Enforcement"
@@ -136,13 +129,11 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
             "Stage 7E — Adaptive, topology-aware hydrography enforcement.\n\n"
             "Burning is applied only where the DEM-derived flow path diverges "
             "materially from the mapped channel, following Soille, Vogt & Colombo "
-            "(2003) and Lindsay's (2016) TopologicalBreachBurn. Burn depth scales "
-            "continuously with contributing area.\n\n"
-            "This stage is optional and off by default.\n\n"
-            "Phase 1 (complete): Grid alignment and rasterisation.\n"
-            "Phase 2 (current):  Divergence analysis.\n"
-            "Phase 3:            Enforcement — not yet connected.\n\n"
-            "No elevation modification occurs in this version."
+            "(2003) and Lindsay's (2016) TopologicalBreachBurn.\n\n"
+            "Burn depth is bounded by the lesser of vertical accuracy and maximum "
+            "burn depth. Area-scaled burning is available when a flow accumulation "
+            "raster is connected in a future phase.\n\n"
+            "This stage is optional and off by default."
         )
 
     # ── Parameter definition ──────────────────────────────────────────────────
@@ -191,6 +182,26 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
         )
 
         self.addParameter(
+            QgsProcessingParameterNumber(
+                self.VERTICAL_ACCURACY,
+                "DEM vertical accuracy (elevation units)",
+                type=QgsProcessingParameterNumber.Double,
+                defaultValue=self.DEFAULT_VERTICAL_ACCURACY,
+                minValue=0.001,
+            )
+        )
+
+        self.addParameter(
+            QgsProcessingParameterNumber(
+                self.MAXIMUM_BURN_DEPTH,
+                "Maximum burn depth (elevation units)",
+                type=QgsProcessingParameterNumber.Double,
+                defaultValue=self.DEFAULT_MAXIMUM_BURN_DEPTH,
+                minValue=0.001,
+            )
+        )
+
+        self.addParameter(
             QgsProcessingParameterFolderDestination(
                 self.OUTPUT_FOLDER,
                 "Output folder",
@@ -200,14 +211,14 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
         self.addOutput(
             QgsProcessingOutputFile(
                 self.OUTPUT_REPORT,
-                "Preparation and divergence report",
+                "Enforcement report",
             )
         )
 
         self.addOutput(
             QgsProcessingOutputFile(
                 self.OUTPUT_PROVENANCE,
-                "Preparation and divergence provenance",
+                "Enforcement provenance",
             )
         )
 
@@ -261,6 +272,14 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
             parameters, self.POSITIONAL_TOLERANCE_CELLS, context
         )
 
+        vertical_accuracy = self.parameterAsDouble(
+            parameters, self.VERTICAL_ACCURACY, context
+        )
+
+        maximum_burn_depth = self.parameterAsDouble(
+            parameters, self.MAXIMUM_BURN_DEPTH, context
+        )
+
         output_folder = Path(
             self.parameterAsString(
                 parameters, self.OUTPUT_FOLDER, context
@@ -274,13 +293,14 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
         feedback.pushInfo(f"Flow evidence source        : {flow_evidence_source}")
         feedback.pushInfo(f"Endpoint tolerance          : {endpoint_tolerance}")
         feedback.pushInfo(f"Positional tolerance cells  : {positional_tolerance_cells}")
+        feedback.pushInfo(f"Vertical accuracy           : {vertical_accuracy}")
+        feedback.pushInfo(f"Maximum burn depth          : {maximum_burn_depth}")
         feedback.pushInfo(f"Output folder               : {output_folder}")
 
         # ── CRS check ─────────────────────────────────────────────────────────
 
         dem_crs = dem_layer.crs()
         hydrography_crs = hydrography_layer.crs()
-
         crs_match = dem_crs.authid() == hydrography_crs.authid()
 
         if not crs_match:
@@ -326,7 +346,6 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
         # ── DEM extent check ──────────────────────────────────────────────────
 
         dem_extent = dem_layer.extent()
-
         features_inside = 0
         features_outside = 0
 
@@ -388,7 +407,7 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
 
         # ── Phase 1: DEM grid metadata ────────────────────────────────────────
 
-        feedback.setProgress(15)
+        feedback.setProgress(10)
         feedback.pushInfo("── Phase 1: Grid alignment ──────────────────────")
 
         dem_metadata = self._read_dem_metadata(
@@ -396,9 +415,23 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
             feedback=feedback,
         )
 
+        # ── Phase 1: Read full DEM array ──────────────────────────────────────
+
+        import rasterio
+
+        feedback.pushInfo("Reading full DEM array for enforcement.")
+
+        with rasterio.open(dem_source) as dem_dataset:
+            dem_array = dem_dataset.read(1).astype(np.float64)
+
+        feedback.pushInfo(
+            f"DEM array read. Shape: "
+            f"{dem_array.shape[0]} x {dem_array.shape[1]}."
+        )
+
         # ── Phase 1: Hydrography rasterisation ───────────────────────────────
 
-        feedback.setProgress(30)
+        feedback.setProgress(20)
 
         hydrography_raster = self._rasterise_hydrography(
             hydrography_layer=hydrography_layer,
@@ -411,7 +444,7 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
 
         # ── Phase 1: Flow-evidence raster ─────────────────────────────────────
 
-        feedback.setProgress(45)
+        feedback.setProgress(30)
 
         flow_evidence_array = self._read_flow_evidence(
             flow_evidence_path=flow_evidence_source,
@@ -423,11 +456,10 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
 
         # ── Phase 2: Derive Boolean masks ─────────────────────────────────────
 
-        feedback.setProgress(55)
+        feedback.setProgress(40)
         feedback.pushInfo("── Phase 2: Divergence analysis ─────────────────")
 
         hydrography_mask = hydrography_raster.astype(bool)
-
         dem_flow_mask = flow_evidence_array > 0
 
         nodata_mask = None
@@ -442,8 +474,12 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
 
         # ── Phase 2: Divergence analysis ──────────────────────────────────────
 
-        feedback.setProgress(65)
+        feedback.setProgress(50)
         feedback.pushInfo("Calling analyse_hydrography_divergence.")
+
+        from mayim_tools.hydrology.hydrography.divergence import (
+            analyse_hydrography_divergence,
+        )
 
         try:
             divergence_result = analyse_hydrography_divergence(
@@ -458,53 +494,174 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
             ) from exc
 
         divergence_stats = divergence_result["statistics"]
-
-        # Masks retained for Phase 3 enforcement — not yet consumed.
-        _divergence_mask = divergence_result["divergence_mask"]
-        _aligned_mask = divergence_result["aligned_mask"]
-        _tolerated_mask = divergence_result["tolerated_mask"]
-        _conflict_mask = divergence_result["conflict_mask"]
+        conflict_mask = divergence_result["conflict_mask"].astype(bool)
 
         feedback.pushInfo(
             f"Divergence analysis complete. "
-            f"Aligned cells          : {divergence_stats['aligned_cells']}. "
+            f"Aligned cells        : {divergence_stats['aligned_cells']}."
         )
         feedback.pushInfo(
-            f"Tolerated cells        : {divergence_stats['tolerated_cells']}."
+            f"Tolerated cells      : {divergence_stats['tolerated_cells']}."
         )
         feedback.pushInfo(
-            f"Material divergence    : "
+            f"Material divergence  : "
             f"{divergence_stats['material_divergence_cells']} cells."
         )
         feedback.pushInfo(
-            f"Conflict cells         : {divergence_stats['conflict_cells']}."
-        )
-        feedback.pushInfo(
-            "NOTE: Phase 3 (enforcement) is not yet connected. "
-            "No elevation modification has occurred."
+            f"Conflict cells       : {divergence_stats['conflict_cells']}."
         )
 
-        # ── Derive output file stems ──────────────────────────────────────────
+        feedback.pushInfo("Phase 2 complete.")
+
+        # ── Phase 3: Build eligible mask ──────────────────────────────────────
+
+        feedback.setProgress(60)
+        feedback.pushInfo("── Phase 3: Enforcement ─────────────────────────")
+
+        # Eligible cells are hydrography-only divergence cells.
+        # Aligned, tolerated and conflict cells are excluded.
+        # The native enforce_hydrography() further excludes conflict
+        # cells even when eligible_mask is True.
+
+        hydrography_only_mask = (
+            divergence_result["divergence_mask"].astype(bool)
+            & hydrography_mask
+            & ~divergence_result["aligned_mask"].astype(bool)
+            & ~divergence_result["tolerated_mask"].astype(bool)
+        )
+
+        eligible_mask = hydrography_only_mask & ~conflict_mask
+
+        eligible_cell_count = int(np.sum(eligible_mask))
+        feedback.pushInfo(
+            f"Eligible cells for enforcement: {eligible_cell_count}."
+        )
+
+        if eligible_cell_count == 0:
+            warnings.append(
+                "No cells are eligible for enforcement. "
+                "The enforced DEM will be identical to the input DEM. "
+                "Consider adjusting positional tolerance or reviewing "
+                "the hydrography and flow-evidence inputs."
+            )
+            feedback.pushWarning(warnings[-1])
+
+        # ── Phase 3: Resolve NoData sentinel ─────────────────────────────────
+
+        nodata_sentinel = (
+            float(dem_metadata["nodata"])
+            if dem_metadata["nodata"] is not None
+            else -9999.0
+        )
+
+        # ── Phase 3: Cell size ────────────────────────────────────────────────
+
+        cell_size = float(
+            (dem_metadata["resolution_x"] + dem_metadata["resolution_y"])
+            / 2.0
+        )
+
+        # ── Phase 3: Call enforce_hydrography ─────────────────────────────────
+
+        feedback.setProgress(70)
+        feedback.pushInfo(
+            f"Calling enforce_hydrography. "
+            f"Cell size: {cell_size:.4f}. "
+            f"Vertical accuracy: {vertical_accuracy}. "
+            f"Maximum burn depth: {maximum_burn_depth}."
+        )
+
+        try:
+            enforced_dem, difference, enforcement_mask, audit = (
+                enforce_hydrography(
+                    dem=dem_array,
+                    hydrography_mask=hydrography_mask,
+                    eligible_mask=eligible_mask,
+                    cell_size=cell_size,
+                    vertical_accuracy=vertical_accuracy,
+                    maximum_burn_depth=maximum_burn_depth,
+                    nodata=nodata_sentinel,
+                    upstream_area=None,
+                    reference_upstream_area=None,
+                    conflict_mask=conflict_mask,
+                )
+            )
+        except ValueError as exc:
+            raise QgsProcessingException(
+                f"Hydrography enforcement failed: {exc}"
+            ) from exc
+
+        feedback.pushInfo(
+            f"Enforcement complete. "
+            f"Modified cells   : {audit['modified_cells']}. "
+        )
+        feedback.pushInfo(
+            f"Total lowering   : {audit['total_lowering']:.4f}. "
+        )
+        feedback.pushInfo(
+            f"Maximum lowering : {audit['maximum_lowering']:.4f}. "
+        )
+        feedback.pushInfo(
+            f"Mean lowering    : {audit['mean_lowering']:.4f}."
+        )
+
+        # ── Phase 3: Write enforced DEM raster ───────────────────────────────
+
+        feedback.setProgress(80)
 
         dem_stem = Path(dem_source).stem
 
+        enforced_dem_path = (
+            output_folder / f"{dem_stem}_hydrography_enforced.tif"
+        )
+        difference_path = (
+            output_folder / f"{dem_stem}_hydrography_difference.tif"
+        )
+        enforcement_mask_path = (
+            output_folder / f"{dem_stem}_hydrography_enforcement_mask.tif"
+        )
+
+        with rasterio.open(dem_source) as dem_dataset:
+            profile = dem_dataset.profile.copy()
+
+        profile.update(dtype=np.float64, count=1, compress="deflate")
+
+        with rasterio.open(enforced_dem_path, "w", **profile) as dst:
+            dst.write(enforced_dem, 1)
+
+        feedback.pushInfo(f"Enforced DEM written: {enforced_dem_path}")
+
+        with rasterio.open(difference_path, "w", **profile) as dst:
+            dst.write(difference, 1)
+
+        feedback.pushInfo(f"Difference raster written: {difference_path}")
+
+        mask_profile = profile.copy()
+        mask_profile.update(dtype=np.uint8, nodata=255)
+
+        with rasterio.open(enforcement_mask_path, "w", **mask_profile) as dst:
+            dst.write(enforcement_mask, 1)
+
+        feedback.pushInfo(
+            f"Enforcement mask written: {enforcement_mask_path}"
+        )
+
+        # ── Build report ──────────────────────────────────────────────────────
+
+        feedback.setProgress(88)
+
         report_path = (
-            output_folder
-            / f"{dem_stem}_hydrography_preparation_report.txt"
+            output_folder / f"{dem_stem}_hydrography_enforcement_report.txt"
         )
         provenance_path = (
             output_folder
-            / f"{dem_stem}_hydrography_preparation_provenance.json"
+            / f"{dem_stem}_hydrography_enforcement_provenance.json"
         )
-
-        # ── Build preparation and divergence report ───────────────────────────
-
-        feedback.setProgress(80)
 
         report_lines = [
             "═" * 72,
             "  MAYIM TOOLS — Stage 7E: DEM Hydrography Enforcement",
-            "  Preparation, Grid Alignment and Divergence Analysis Report",
+            "  Full Enforcement Report",
             "═" * 72,
             "",
             f"  Run timestamp (UTC) : {run_timestamp}",
@@ -516,6 +673,8 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
             f"  Flow evidence source        : {flow_evidence_source}",
             f"  Endpoint tolerance          : {endpoint_tolerance}",
             f"  Positional tolerance cells  : {positional_tolerance_cells}",
+            f"  Vertical accuracy           : {vertical_accuracy}",
+            f"  Maximum burn depth          : {maximum_burn_depth}",
             "",
             "── CRS ──────────────────────────────────────────────────────────",
             f"  DEM CRS             : {dem_crs.authid()}",
@@ -588,6 +747,41 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
             f"  Positional tolerance used   : "
             f"{divergence_stats['positional_tolerance_cells']} cells",
             "",
+            "── Phase 3: Enforcement ─────────────────────────────────────────",
+            f"  Cell size                       : {cell_size:.4f}",
+            f"  Vertical accuracy               : {vertical_accuracy}",
+            f"  Maximum burn depth configured   : {maximum_burn_depth}",
+            f"  Base burn depth applied         : "
+            f"{audit['base_burn_depth']:.4f}",
+            f"  Eligible cells                  : {eligible_cell_count}",
+            f"  Authorised hydrography cells    : "
+            f"{audit['authorised_hydrography_cells']}",
+            f"  Modified cells                  : {audit['modified_cells']}",
+            f"  Conflict excluded cells         : "
+            f"{audit['conflict_excluded_cells']}",
+            f"  Total lowering                  : "
+            f"{audit['total_lowering']:.4f}",
+            f"  Maximum lowering                : "
+            f"{audit['maximum_lowering']:.4f}",
+            f"  Mean lowering                   : "
+            f"{audit['mean_lowering']:.4f}",
+            f"  Minimum lowering                : "
+            f"{audit['minimum_lowering']:.4f}",
+            f"  Area scaling used               : "
+            f"{audit['area_scaling_used']}",
+            "",
+            "── Outputs ──────────────────────────────────────────────────────",
+            f"  Enforced DEM        : {enforced_dem_path}",
+            f"  Difference raster   : {difference_path}",
+            f"  Enforcement mask    : {enforcement_mask_path}",
+            "",
+            "── Enforcement Mask Legend ──────────────────────────────────────",
+            "  0   — unchanged non-hydrography cell",
+            "  1   — hydrography enforced (elevation lowered)",
+            "  2   — hydrography present but not enforced",
+            "  3   — conflict/review excluded",
+            "  255 — NoData",
+            "",
             "── Warnings ─────────────────────────────────────────────────────",
         ])
 
@@ -600,8 +794,10 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
         report_lines.extend([
             "",
             "── Enforcement Status ───────────────────────────────────────────",
-            "  No elevation modification has occurred in this run.",
-            "  Phase 3 (enforcement) is not yet connected.",
+            "  Elevation modification applied.",
+            f"  {audit['modified_cells']} cell(s) were lowered.",
+            "  Area-scaled burning: not yet connected.",
+            "  Review modified_cell_records in provenance for cell detail.",
             "",
             "═" * 72,
             "  End of report.",
@@ -614,10 +810,12 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
 
         # ── Build provenance record ───────────────────────────────────────────
 
+        feedback.setProgress(94)
+
         provenance = {
             "tool": "DEMHydrographyEnforcement",
             "stage": "7E",
-            "phase": "Phase 2 — Divergence Analysis",
+            "phase": "Phase 3 — Adaptive Enforcement",
             "run_timestamp_utc": run_timestamp,
             "inputs": {
                 "dem_source": dem_source,
@@ -625,6 +823,8 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
                 "flow_evidence_source": flow_evidence_source,
                 "endpoint_tolerance": endpoint_tolerance,
                 "positional_tolerance_cells": positional_tolerance_cells,
+                "vertical_accuracy": vertical_accuracy,
+                "maximum_burn_depth": maximum_burn_depth,
             },
             "crs": {
                 "dem_crs": dem_crs.authid(),
@@ -679,15 +879,43 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
                     "positional_tolerance_cells"
                 ],
             },
-            "enforcement_status": {
-                "elevation_modified": False,
-                "phase_3_enforcement_connected": False,
+            "phase_3_enforcement": {
+                "cell_size": cell_size,
+                "vertical_accuracy": vertical_accuracy,
+                "maximum_burn_depth_configured": maximum_burn_depth,
+                "base_burn_depth_applied": audit["base_burn_depth"],
+                "eligible_cells": eligible_cell_count,
+                "authorised_hydrography_cells": audit[
+                    "authorised_hydrography_cells"
+                ],
+                "modified_cells": audit["modified_cells"],
+                "conflict_excluded_cells": audit[
+                    "conflict_excluded_cells"
+                ],
+                "eligible_not_modified_cells": audit[
+                    "eligible_not_modified_cells"
+                ],
+                "total_lowering": audit["total_lowering"],
+                "maximum_lowering": audit["maximum_lowering"],
+                "mean_lowering": audit["mean_lowering"],
+                "minimum_lowering": audit["minimum_lowering"],
+                "total_signed_change": audit["total_signed_change"],
+                "area_scaling_used": audit["area_scaling_used"],
+                "modified_cell_records": audit["modified_cell_records"],
             },
-            "warnings": warnings,
+            "enforcement_status": {
+                "elevation_modified": audit["modified_cells"] > 0,
+                "modified_cells": audit["modified_cells"],
+                "area_scaling_connected": False,
+            },
             "outputs": {
+                "enforced_dem": str(enforced_dem_path),
+                "difference_raster": str(difference_path),
+                "enforcement_mask": str(enforcement_mask_path),
                 "report": str(report_path),
                 "provenance": str(provenance_path),
             },
+            "warnings": warnings,
         }
 
         provenance_path.write_text(
@@ -698,8 +926,10 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
 
         feedback.setProgress(100)
         feedback.pushInfo(
-            "Stage 7E Phase 2 complete. "
-            "Review the divergence report before proceeding to Phase 3."
+            "Stage 7E complete. "
+            f"{audit['modified_cells']} cell(s) enforced. "
+            "Review the enforcement report and provenance before "
+            "proceeding to downstream conditioning stages."
         )
 
         return {
@@ -869,3 +1099,4 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
         )
 
         return flow_array
+
