@@ -11,6 +11,7 @@ from mayim_tools.categories.category_registry import CategoryRegistry
 CategoryRegistry.clear()
 
 # ── Import each category to trigger self-registration ──
-import mayim_tools.categories.geometry  # noqa: F401
+import mayim_tools.categories.geometry   # noqa: F401
 import mayim_tools.categories.hydrology  # noqa: F401
-# import mayim_tools.categories.network      # noqa: F401
+import mayim_tools.categories.rainfall   # noqa: F401
+# import mayim_tools.categories.network  # noqa: F401
