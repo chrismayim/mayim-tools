@@ -1,0 +1,20 @@
+[general]
+name=Huff Curves
+qgisMinimumVersion=3.38
+qgisMaximumVersion=4.99
+description=Derives Huff curves (dimensionless storm temporal distribution, classified into quartiles with percentile bundles) from a CSV rainfall time series, following a reproducible event-based methodology.
+version=0.1.0
+author=Chris
+email=
+
+about=Given a CSV with a timestamp column and a precipitation-depth column, delineates storm events using a configurable minimum inter-event time, classifies each event into a Huff quartile, and produces percentile curves (10th-90th) per quartile using Hyndman-Fan type 8 empirical quantiles. Missing rainfall is never silently treated as zero; MIT is recommended (not silently imposed) with a sensitivity scan recorded in the metadata output. Scoped v1 of a larger methodology - see dev/MISSING_FEATURES.md for what's deferred (bootstrap uncertainty, stratification, regional pooling, clustering, design hyetographs, comparison methods).
+
+tracker=
+repository=
+category=Analysis
+tags=hydrology,rainfall,huff,temporal distribution,design storm,statistics
+
+experimental=True
+deprecated=False
+
+hasProcessingProvider=yes

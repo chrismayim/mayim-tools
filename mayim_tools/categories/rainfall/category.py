@@ -45,9 +45,13 @@ class RainfallCategory(BaseCategory):
             from mayim_tools.categories.rainfall.tools.design_rainfall_point import (
                 MayimDesignRainfallPoint,
             )
+            from mayim_tools.categories.rainfall.tools.huff_curves_from_csv import (
+                MayimHuffCurvesFromCSV,
+            )
 
             return [
                 MayimDesignRainfallPoint(),
+                MayimHuffCurvesFromCSV(),
             ]
 
         except Exception as error:
@@ -57,3 +61,4 @@ class RainfallCategory(BaseCategory):
                 f"Rainfall Analysis Tools: Failed to load algorithms: {error}"
             )
             return []
+
