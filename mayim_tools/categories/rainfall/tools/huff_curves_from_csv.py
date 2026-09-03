@@ -40,16 +40,16 @@ class MayimHuffCurvesFromCSV(HuffCurvesAlgorithm):
     Mayim Tools.
     """
 
-    def group(self) -> str:  # noqa: N802
+    def group(self) -> str:
         return "Rainfall Analysis Tools"
 
-    def groupId(self) -> str:  # noqa: N802
+    def groupId(self) -> str:
         return "rainfallanalysistools"
 
-    def createInstance(self):  # noqa: N802
+    def createInstance(self):
         return MayimHuffCurvesFromCSV()
 
-    def icon(self):  # noqa: N802
+    def icon(self):
         """Return the Mayim Tools icon."""
         from qgis.PyQt.QtGui import QIcon
 

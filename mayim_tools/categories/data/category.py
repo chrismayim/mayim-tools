@@ -57,7 +57,7 @@ class DataCategory(BaseCategory):
                 MayimGribToCsv(),
             ]
 
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001
             from mayim_tools.core.logger import MayimLogger
 
             MayimLogger.critical(

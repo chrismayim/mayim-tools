@@ -46,16 +46,16 @@ class MayimGribToCsv(GribToCsvAlgorithm):
     the tool in the Data Tools category within Mayim Tools.
     """
 
-    def group(self) -> str:  # noqa: N802
+    def group(self) -> str:
         return "Data Tools"
 
-    def groupId(self) -> str:  # noqa: N802
+    def groupId(self) -> str:
         return "datatools"
 
-    def createInstance(self):  # noqa: N802
+    def createInstance(self):
         return MayimGribToCsv()
 
-    def icon(self):  # noqa: N802
+    def icon(self):
         """Return the Mayim Tools icon."""
         from qgis.PyQt.QtGui import QIcon
 
