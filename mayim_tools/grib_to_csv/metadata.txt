@@ -1,0 +1,20 @@
+[general]
+name=GRIB to CSV Export
+qgisMinimumVersion=3.38
+qgisMaximumVersion=4.99
+description=Exports a variable from a GRIB file (e.g. ERA5 rainfall reanalysis) to CSV - one row per grid-cell/time combination. Uses eccodes (via xarray/cfgrib) for decoding, not GDAL's built-in GRIB driver, since GDAL is dramatically slower on ECMWF-style complex-packed GRIB2 files with many messages.
+version=0.2.0
+author=Chris
+email=
+
+about=Reads a GRIB1/GRIB2 file via xarray+cfgrib (eccodes) and flattens the chosen variable to CSV for use outside GIS tools. Includes ERA5-specific handling (metre-to-millimetre precipitation conversion). Requires eccodes/cfgrib/xarray installed in QGIS's Python. Built alongside the Design Rainfall Estimation plugin and intended for eventual integration into the same suite.
+
+tracker=
+repository=
+category=Raster
+tags=grib,rainfall,era5,raster,csv,export,meteorology,eccodes
+
+experimental=True
+deprecated=False
+
+hasProcessingProvider=yes
