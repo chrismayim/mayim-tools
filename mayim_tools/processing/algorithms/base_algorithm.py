@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Mayim Tools – Base Algorithm
 Abstract base class that all Mayim Tools processing algorithms must inherit.
@@ -36,6 +35,19 @@ class MayimBaseAlgorithm(QgsProcessingAlgorithm):
         - icon()
         - tags()
     """
+
+    def icon(self):  # noqa: N802
+        """Return the Mayim Tools icon for all algorithms."""
+        from qgis.PyQt.QtGui import QIcon
+
+        from mayim_tools.resources_rc import get_icon_path
+
+        icon = QIcon(get_icon_path("mayim_logo.png"))
+
+        if icon.isNull():
+            return super().icon()
+
+        return icon
 
     # ── Abstract Methods — Must be implemented by every tool ── #
 

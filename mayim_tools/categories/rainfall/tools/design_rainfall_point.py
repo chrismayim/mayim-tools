@@ -39,6 +39,19 @@ class MayimDesignRainfallPoint(DesignRainfallPointAlgorithm):
     Rainfall Analysis Tools category within Mayim Tools.
     """
 
+    def icon(self):  # noqa: N802
+        """Return the Mayim Tools icon."""
+        from qgis.PyQt.QtGui import QIcon
+
+        from mayim_tools.resources_rc import get_icon_path
+
+        icon = QIcon(get_icon_path("mayim_logo.png"))
+
+        if icon.isNull():
+            return super().icon()
+
+        return icon
+
     def group(self) -> str:  # noqa: N802
         return "Rainfall Analysis Tools"
 
