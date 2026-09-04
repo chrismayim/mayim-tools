@@ -81,19 +81,19 @@ class DepressionNode:
         depression.
     """
 
-    depression_id:    int
-    pit_row:          int
-    pit_col:          int
-    pit_elevation:    float
-    spill_elevation:  float
-    depth:            float
-    area_cells:       int
-    area_map_units:   float
-    perimeter_cells:  int
-    volume_estimate:  float
+    depression_id: int
+    pit_row: int
+    pit_col: int
+    pit_elevation: float
+    spill_elevation: float
+    depth: float
+    area_cells: int
+    area_map_units: float
+    perimeter_cells: int
+    volume_estimate: float
     touches_boundary: bool
-    parent_id:        int | None       = None
-    child_ids:        list[int]        = field(default_factory=list)
+    parent_id: int | None = None
+    child_ids: list[int] = field(default_factory=list)
 
     # ── Derived properties ─────────────────────────────────────────── #
 
@@ -126,9 +126,7 @@ class DepressionNode:
         """
         if self.perimeter_cells <= 0:
             return 0.0
-        ratio = (4.0 * self.area_cells) / max(
-            self.perimeter_cells ** 2, 1
-        )
+        ratio = (4.0 * self.area_cells) / max(self.perimeter_cells**2, 1)
         return float(min(ratio, 1.0))
 
     def to_dict(self) -> dict:
@@ -140,22 +138,22 @@ class DepressionNode:
         :returns: Dictionary representation of this node.
         """
         return {
-            "depression_id":    self.depression_id,
-            "pit_row":          self.pit_row,
-            "pit_col":          self.pit_col,
-            "pit_elevation":    self.pit_elevation,
-            "spill_elevation":  self.spill_elevation,
-            "depth":            self.depth,
-            "area_cells":       self.area_cells,
-            "area_map_units":   self.area_map_units,
-            "perimeter_cells":  self.perimeter_cells,
-            "volume_estimate":  self.volume_estimate,
+            "depression_id": self.depression_id,
+            "pit_row": self.pit_row,
+            "pit_col": self.pit_col,
+            "pit_elevation": self.pit_elevation,
+            "spill_elevation": self.spill_elevation,
+            "depth": self.depth,
+            "area_cells": self.area_cells,
+            "area_map_units": self.area_map_units,
+            "perimeter_cells": self.perimeter_cells,
+            "volume_estimate": self.volume_estimate,
             "touches_boundary": self.touches_boundary,
             "elongation_index": self.elongation_index,
-            "parent_id":        self.parent_id,
-            "child_ids":        self.child_ids,
-            "is_root":          self.is_root,
-            "is_leaf":          self.is_leaf,
+            "parent_id": self.parent_id,
+            "child_ids": self.child_ids,
+            "is_root": self.is_root,
+            "is_leaf": self.is_leaf,
         }
 
 
@@ -230,19 +228,13 @@ class DepressionHierarchy:
         :raises ValueError: If the relationship creates a cycle.
         """
         if child_id not in self._nodes:
-            raise KeyError(
-                f"Child depression ID {child_id} does not exist."
-            )
+            raise KeyError(f"Child depression ID {child_id} does not exist.")
 
         if parent_id not in self._nodes:
-            raise KeyError(
-                f"Parent depression ID {parent_id} does not exist."
-            )
+            raise KeyError(f"Parent depression ID {parent_id} does not exist.")
 
         if child_id == parent_id:
-            raise ValueError(
-                f"Depression {child_id} cannot be its own parent."
-            )
+            raise ValueError(f"Depression {child_id} cannot be its own parent.")
 
         # Walk upward from the proposed parent. If the child is found,
         # assigning this relationship would create a cycle.
@@ -251,9 +243,7 @@ class DepressionHierarchy:
 
         while current.parent_id is not None:
             if current.depression_id in visited_ids:
-                raise ValueError(
-                    "Existing cycle detected in the hierarchy."
-                )
+                raise ValueError("Existing cycle detected in the hierarchy.")
 
             visited_ids.add(current.depression_id)
 
@@ -301,10 +291,7 @@ class DepressionHierarchy:
 
         :returns: List of root DepressionNodes.
         """
-        return [
-            node for node in self._nodes.values()
-            if node.is_root
-        ]
+        return [node for node in self._nodes.values() if node.is_root]
 
     def leaves(self) -> list[DepressionNode]:
         """
@@ -312,10 +299,7 @@ class DepressionHierarchy:
 
         :returns: List of leaf DepressionNodes.
         """
-        return [
-            node for node in self._nodes.values()
-            if node.is_leaf
-        ]
+        return [node for node in self._nodes.values() if node.is_leaf]
 
     def children(self, depression_id: int) -> list[DepressionNode]:
         """
@@ -327,11 +311,7 @@ class DepressionHierarchy:
         node = self._nodes.get(depression_id)
         if node is None:
             return []
-        return [
-            self._nodes[cid]
-            for cid in node.child_ids
-            if cid in self._nodes
-        ]
+        return [self._nodes[cid] for cid in node.child_ids if cid in self._nodes]
 
     def ancestors(self, depression_id: int) -> list[DepressionNode]:
         """
@@ -359,7 +339,7 @@ class DepressionHierarchy:
         :param depression_id: Integer depression ID.
         :returns: List of descendant DepressionNodes.
         """
-        result   = []
+        result = []
         frontier = list(self.children(depression_id))
         while frontier:
             node = frontier.pop(0)
@@ -425,13 +405,10 @@ class DepressionHierarchy:
         return {
             "summary": {
                 "total_depressions": self.total_depressions,
-                "root_count":        self.root_count,
-                "max_depth":         self.max_depth,
+                "root_count": self.root_count,
+                "max_depth": self.max_depth,
             },
-            "nodes": {
-                str(did): node.to_dict()
-                for did, node in self._nodes.items()
-            },
+            "nodes": {str(did): node.to_dict() for did, node in self._nodes.items()},
         }
 
     def to_list(self) -> list[dict]:
@@ -500,14 +477,11 @@ def build_hierarchy(
     Finding hierarchies in depressions and morphological
     segmentations. Earth Surface Dynamics, 8(2), 431-445.
     """
-    rows, cols  = dem.shape
-    cell_area   = cell_size ** 2
-    hierarchy   = DepressionHierarchy()
+    rows, cols = dem.shape
+    cell_area = cell_size**2
+    hierarchy = DepressionHierarchy()
 
-    unique_ids = [
-        int(did) for did in np.unique(depression_ids)
-        if did > 0
-    ]
+    unique_ids = [int(did) for did in np.unique(depression_ids) if did > 0]
 
     # ── Build one node per depression ─────────────────────────────── #
     for did in unique_ids:
@@ -520,9 +494,7 @@ def build_hierarchy(
         if len(pit_locs) == 0:
             # Fallback: use the lowest cell in the depression
             masked_dem = np.where(mask, dem, np.inf)
-            pit_loc = np.unravel_index(
-                np.argmin(masked_dem), dem.shape
-            )
+            pit_loc = np.unravel_index(np.argmin(masked_dem), dem.shape)
         else:
             pit_loc = tuple(pit_locs[0])
 
@@ -531,24 +503,22 @@ def build_hierarchy(
         pit_elev = float(dem[pit_row, pit_col])
 
         spill_elev = float(spill_points.get(did, pit_elev))
-        depth      = max(0.0, spill_elev - pit_elev)
+        depth = max(0.0, spill_elev - pit_elev)
 
         # Area and volume
         area_cells = int(np.sum(mask))
-        area_map   = area_cells * cell_area
+        area_map = area_cells * cell_area
 
         # Volume estimate: sum of (spill - cell_elev) for all cells
         cells_in = dem[mask]
-        vol_est  = float(
-            np.sum(np.maximum(0.0, spill_elev - cells_in)) * cell_area
-        )
+        vol_est = float(np.sum(np.maximum(0.0, spill_elev - cells_in)) * cell_area)
 
         # Perimeter: cells in the depression that have at least one
         # neighbour outside the depression
         perimeter = 0
         dep_rows, dep_cols = np.where(mask)
         for r, c in zip(dep_rows.tolist(), dep_cols.tolist()):
-            for dr, dc in [(-1,0),(1,0),(0,-1),(0,1)]:
+            for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
                 nr, nc = r + dr, c + dc
                 if (
                     not (0 <= nr < rows and 0 <= nc < cols)
@@ -642,5 +612,3 @@ def build_hierarchy(
             current = parent
 
     return hierarchy
-
-

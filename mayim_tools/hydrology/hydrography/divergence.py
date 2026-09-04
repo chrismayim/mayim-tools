@@ -114,15 +114,9 @@ def analyse_hydrography_divergence(
     if nodata_mask is not None:
         assessable &= ~nodata_mask
 
-    hydrography_cells = (
-        hydrography_mask
-        & assessable
-    )
+    hydrography_cells = hydrography_mask & assessable
 
-    dem_flow_cells = (
-        dem_flow_mask
-        & assessable
-    )
+    dem_flow_cells = dem_flow_mask & assessable
 
     tolerance = int(positional_tolerance_cells)
 
@@ -136,50 +130,23 @@ def analyse_hydrography_divergence(
         radius=tolerance,
     )
 
-    exact_alignment = (
-        hydrography_cells
-        & dem_flow_cells
-    )
+    exact_alignment = hydrography_cells & dem_flow_cells
 
-    hydrography_supported = (
-        hydrography_cells
-        & dem_neighbourhood
-    )
+    hydrography_supported = hydrography_cells & dem_neighbourhood
 
-    dem_flow_supported = (
-        dem_flow_cells
-        & hydrography_neighbourhood
-    )
+    dem_flow_supported = dem_flow_cells & hydrography_neighbourhood
 
-    tolerated_hydrography = (
-        hydrography_supported
-        & ~exact_alignment
-    )
+    tolerated_hydrography = hydrography_supported & ~exact_alignment
 
-    tolerated_dem_flow = (
-        dem_flow_supported
-        & ~exact_alignment
-    )
+    tolerated_dem_flow = dem_flow_supported & ~exact_alignment
 
-    tolerated = (
-        tolerated_hydrography
-        | tolerated_dem_flow
-    )
+    tolerated = tolerated_hydrography | tolerated_dem_flow
 
-    hydrography_only = (
-        hydrography_cells
-        & ~dem_neighbourhood
-    )
+    hydrography_only = hydrography_cells & ~dem_neighbourhood
 
-    dem_only = (
-        dem_flow_cells
-        & ~hydrography_neighbourhood
-    )
+    dem_only = dem_flow_cells & ~hydrography_neighbourhood
 
-    material_divergence = (
-        hydrography_only
-        | dem_only
-    )
+    material_divergence = hydrography_only | dem_only
 
     aligned_output = np.zeros(
         hydrography_mask.shape,
@@ -240,15 +207,9 @@ def analyse_hydrography_divergence(
         "tolerated_cells": int(np.sum(tolerated)),
         "hydrography_only_cells": int(np.sum(hydrography_only)),
         "dem_only_cells": int(np.sum(dem_only)),
-        "material_divergence_cells": int(
-            np.sum(material_divergence)
-        ),
-        "conflict_cells": int(
-            np.sum(conflict_output == 1)
-        ),
-        "outside_extent_cells": int(
-            np.sum(outside_extent_output == 1)
-        ),
+        "material_divergence_cells": int(np.sum(material_divergence)),
+        "conflict_cells": int(np.sum(conflict_output == 1)),
+        "outside_extent_cells": int(np.sum(outside_extent_output == 1)),
         "positional_tolerance_cells": tolerance,
     }
 
@@ -318,18 +279,13 @@ def _dilate(
             neighbour_row = row + row_offset
             neighbour_col = col + col_offset
 
-            if not (
-                0 <= neighbour_row < rows
-                and 0 <= neighbour_col < cols
-            ):
+            if not (0 <= neighbour_row < rows and 0 <= neighbour_col < cols):
                 continue
 
             if distance[neighbour_row, neighbour_col] != -1:
                 continue
 
-            distance[neighbour_row, neighbour_col] = (
-                current_distance + 1
-            )
+            distance[neighbour_row, neighbour_col] = current_distance + 1
             result[neighbour_row, neighbour_col] = True
             queue.append((neighbour_row, neighbour_col))
 
@@ -368,14 +324,9 @@ def _build_review_records(
     """
     records = []
 
-    material = (
-        hydrography_only
-        | dem_only
-    )
+    material = hydrography_only | dem_only
 
-    rows, cols = np.where(
-        material & assessable
-    )
+    rows, cols = np.where(material & assessable)
 
     for row, col in zip(rows.tolist(), cols.tolist()):
         if hydrography_only[row, col]:
@@ -411,57 +362,39 @@ def _validate_inputs(
         (dem_flow_mask, "dem_flow_mask"),
     ):
         if not isinstance(mask, np.ndarray):
-            raise ValueError(
-                f"{name} must be a NumPy array."
-            )
+            raise ValueError(f"{name} must be a NumPy array.")
 
         if mask.ndim != 2:
-            raise ValueError(
-                f"{name} must be two-dimensional."
-            )
+            raise ValueError(f"{name} must be two-dimensional.")
 
         if mask.dtype != np.bool_:
-            raise ValueError(
-                f"{name} must have Boolean dtype."
-            )
+            raise ValueError(f"{name} must have Boolean dtype.")
 
     if hydrography_mask.shape != dem_flow_mask.shape:
         raise ValueError(
-            "hydrography_mask and dem_flow_mask must have "
-            "the same shape."
+            "hydrography_mask and dem_flow_mask must have " "the same shape."
         )
 
     if not isinstance(
         positional_tolerance_cells,
         (int, np.integer),
     ):
-        raise ValueError(
-            "positional_tolerance_cells must be an integer."
-        )
+        raise ValueError("positional_tolerance_cells must be an integer.")
 
     if positional_tolerance_cells < 0:
-        raise ValueError(
-            "positional_tolerance_cells must be non-negative."
-        )
+        raise ValueError("positional_tolerance_cells must be non-negative.")
 
     if nodata_mask is not None:
         if not isinstance(nodata_mask, np.ndarray):
-            raise ValueError(
-                "nodata_mask must be a NumPy array or None."
-            )
+            raise ValueError("nodata_mask must be a NumPy array or None.")
 
         if nodata_mask.ndim != 2:
-            raise ValueError(
-                "nodata_mask must be two-dimensional."
-            )
+            raise ValueError("nodata_mask must be two-dimensional.")
 
         if nodata_mask.shape != hydrography_mask.shape:
             raise ValueError(
-                "nodata_mask must have the same shape as "
-                "the input masks."
+                "nodata_mask must have the same shape as " "the input masks."
             )
 
         if nodata_mask.dtype != np.bool_:
-            raise ValueError(
-                "nodata_mask must have Boolean dtype."
-            )
+            raise ValueError("nodata_mask must have Boolean dtype.")

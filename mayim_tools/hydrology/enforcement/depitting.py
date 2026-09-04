@@ -90,8 +90,7 @@ def depit_single_cell(
         neighbour_col = col + col_offset
 
         if not (
-            0 <= neighbour_row < dem.shape[0]
-            and 0 <= neighbour_col < dem.shape[1]
+            0 <= neighbour_row < dem.shape[0] and 0 <= neighbour_col < dem.shape[1]
         ):
             continue
 
@@ -103,9 +102,7 @@ def depit_single_cell(
         neighbours.append(float(value))
 
     if not neighbours:
-        raise ValueError(
-            "The pit has no valid neighbours."
-        )
+        raise ValueError("The pit has no valid neighbours.")
 
     original_elevation = float(dem[row, col])
     lowest_neighbour = min(neighbours)
@@ -141,9 +138,7 @@ def _validate_dem(dem: np.ndarray) -> None:
         raise ValueError("dem must be a NumPy array.")
 
     if dem.ndim != 2:
-        raise ValueError(
-            "dem must be a two-dimensional array."
-        )
+        raise ValueError("dem must be a two-dimensional array.")
 
 
 def _validate_pit_coordinate(
@@ -159,9 +154,7 @@ def _validate_pit_coordinate(
     :raises ValueError: If the coordinate is invalid or outside the DEM.
     """
     if not isinstance(pit, tuple) or len(pit) != 2:
-        raise ValueError(
-            "pit must be a (row, column) tuple."
-        )
+        raise ValueError("pit must be a (row, column) tuple.")
 
     row, col = pit
 
@@ -169,19 +162,12 @@ def _validate_pit_coordinate(
         col,
         (int, np.integer),
     ):
-        raise ValueError(
-            "Pit coordinates must be integers."
-        )
+        raise ValueError("Pit coordinates must be integers.")
 
     row = int(row)
     col = int(col)
 
-    if not (
-        0 <= row < dem.shape[0]
-        and 0 <= col < dem.shape[1]
-    ):
-        raise ValueError(
-            f"Pit coordinate ({row}, {col}) is outside the DEM."
-        )
+    if not (0 <= row < dem.shape[0] and 0 <= col < dem.shape[1]):
+        raise ValueError(f"Pit coordinate ({row}, {col}) is outside the DEM.")
 
     return row, col

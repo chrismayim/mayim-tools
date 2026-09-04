@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Mayim Tools – Hydrology Category Initialiser
 Automatically registers the Hydrology category with the CategoryRegistry

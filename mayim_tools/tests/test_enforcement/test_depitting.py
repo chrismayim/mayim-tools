@@ -35,12 +35,8 @@ class TestDepitSingleCell:
         assert result[1, 1] == 8.0
         assert result[1, 2] == 8.0
         assert np.array_equal(
-            result[
-                np.arange(result.shape[0]) != 1
-            ],
-            dem[
-                np.arange(dem.shape[0]) != 1
-            ],
+            result[np.arange(result.shape[0]) != 1],
+            dem[np.arange(dem.shape[0]) != 1],
         )
 
         assert audit["row"] == 1

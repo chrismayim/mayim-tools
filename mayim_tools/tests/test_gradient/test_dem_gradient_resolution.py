@@ -54,8 +54,7 @@ class TestDEMGradientResolution:
         algorithm.initAlgorithm()
 
         parameter_names = {
-            parameter.name()
-            for parameter in algorithm.parameterDefinitions()
+            parameter.name() for parameter in algorithm.parameterDefinitions()
         }
 
         assert "INPUT_DEM" in parameter_names
@@ -69,8 +68,7 @@ class TestDEMGradientResolution:
         algorithm.initAlgorithm()
 
         parameter_names = {
-            parameter.name()
-            for parameter in algorithm.parameterDefinitions()
+            parameter.name() for parameter in algorithm.parameterDefinitions()
         }
 
         assert "LOAD_RESOLVED_DEM" in parameter_names
@@ -82,10 +80,7 @@ class TestDEMGradientResolution:
         """Expected Stage 6 outputs are present."""
         algorithm.initAlgorithm()
 
-        output_names = {
-            output.name()
-            for output in algorithm.outputDefinitions()
-        }
+        output_names = {output.name() for output in algorithm.outputDefinitions()}
 
         assert "OUTPUT_RESOLVED_DEM" in output_names
         assert "OUTPUT_FLAT_MASK" in output_names

@@ -36,7 +36,7 @@ class MayimBaseAlgorithm(QgsProcessingAlgorithm):
         - tags()
     """
 
-    def icon(self):  # noqa: N802
+    def icon(self):
         """Return the Mayim Tools icon for all algorithms."""
         from qgis.PyQt.QtGui import QIcon
 

@@ -1,11 +1,8 @@
-# -*- coding: utf-8 -*-
 """
 Tests for mayim_tools.core.logger
 """
 
-from unittest.mock import call, patch
-
-import pytest
+from unittest.mock import patch
 
 from mayim_tools.core.logger import MayimLogger
 

@@ -1,12 +1,11 @@
-# -*- coding: utf-8 -*-
 """
 Mayim Tools – Validation Utilities
 Input validation helpers used across all tools and categories.
 """
 
-from typing import Any, Optional
+from typing import Any
 
-from qgis.core import QgsMapLayer, QgsRasterLayer, QgsVectorLayer
+from qgis.core import QgsRasterLayer, QgsVectorLayer
 
 
 class ValidationUtils:
@@ -76,9 +75,7 @@ class ValidationUtils:
         :returns: True if valid vector layer, False otherwise
         """
         return (
-            layer is not None
-            and isinstance(layer, QgsVectorLayer)
-            and layer.isValid()
+            layer is not None and isinstance(layer, QgsVectorLayer) and layer.isValid()
         )
 
     @staticmethod
@@ -90,9 +87,7 @@ class ValidationUtils:
         :returns: True if valid raster layer, False otherwise
         """
         return (
-            layer is not None
-            and isinstance(layer, QgsRasterLayer)
-            and layer.isValid()
+            layer is not None and isinstance(layer, QgsRasterLayer) and layer.isValid()
         )
 
     @staticmethod
@@ -105,6 +100,7 @@ class ValidationUtils:
         :returns: True if valid, False otherwise
         """
         from pathlib import Path
+
         if not path or not path.strip():
             return False
         if must_exist:
@@ -133,10 +129,7 @@ class ValidationUtils:
         :param layer: QgsVectorLayer to check
         :returns: True if layer has features, False if empty
         """
-        return (
-            ValidationUtils.is_valid_vector_layer(layer)
-            and layer.featureCount() > 0
-        )
+        return ValidationUtils.is_valid_vector_layer(layer) and layer.featureCount() > 0
 
     @staticmethod
     def layer_has_field(layer: QgsVectorLayer, field_name: str) -> bool:

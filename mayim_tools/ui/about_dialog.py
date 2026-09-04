@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Mayim Tools – About Dialog
 Displays plugin version, author, and license information.
@@ -24,13 +23,13 @@ class AboutDialog(QDialog):
     Shows version, description, author, license, and repository link.
     """
 
-    PLUGIN_NAME    = "Mayim Tools"
+    PLUGIN_NAME = "Mayim Tools"
     PLUGIN_VERSION = "0.2.0"
-    PLUGIN_AUTHOR  = "Chris Etsebeth / Mayim Consulting Engineers"
-    PLUGIN_EMAIL   = "chris@mayimconsulting.com"
+    PLUGIN_AUTHOR = "Chris Etsebeth / Mayim Consulting Engineers"
+    PLUGIN_EMAIL = "chris@mayimconsulting.com"
     PLUGIN_LICENSE = "GNU General Public License v2.0 or later (GPL-2.0+)"
-    PLUGIN_REPO    = "https://github.com/chrismayim/mayim-tools"
-    PLUGIN_DESC    = (
+    PLUGIN_REPO = "https://github.com/chrismayim/mayim-tools"
+    PLUGIN_DESC = (
         "Mayim Tools is a modular QGIS 4+ plugin providing a suite of "
         "engineering and geospatial processing tools. Organised into "
         "clearly defined categories, each tool is accessible via the "
@@ -62,7 +61,8 @@ class AboutDialog(QDialog):
         logo_label = QLabel()
         logo_label.setPixmap(
             QPixmap(get_icon_path("mayim_logo.png")).scaled(
-                64, 64,
+                64,
+                64,
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )
@@ -97,15 +97,12 @@ class AboutDialog(QDialog):
             f"<tr><td><b>License:&nbsp;</b></td><td>{self.PLUGIN_LICENSE}</td></tr>"
             f"</table>"
         )
-        details.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
-        )
+        details.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         main_layout.addWidget(details)
 
         # ── Repository button ──
         repo_button = QPushButton(
-            QIcon(get_icon_path("mayim_logo.png")),
-            "  View on GitHub"
+            QIcon(get_icon_path("mayim_logo.png")), "  View on GitHub"
         )
         repo_button.setToolTip(self.PLUGIN_REPO)
         repo_button.clicked.connect(

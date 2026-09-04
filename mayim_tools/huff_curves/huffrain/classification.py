@@ -48,9 +48,16 @@ def classify_quartile(event: RainfallEvent, intervals: "pd.DataFrame") -> Rainfa
     t0 = event.start
     D = event.wet_duration_s
     # midpoint of each interval, relative to event start, as a fraction of D
-    midpoint_frac = ((wet_only["timestamp_start"] + (wet_only["timestamp_end"] - wet_only["timestamp_start"]) / 2)
-                      - t0).dt.total_seconds() / D
-    midpoint_frac = midpoint_frac.clip(0.0, 0.999999)  # keep the last instant inside quartile 4, not a 5th bucket
+    midpoint_frac = (
+        (
+            wet_only["timestamp_start"]
+            + (wet_only["timestamp_end"] - wet_only["timestamp_start"]) / 2
+        )
+        - t0
+    ).dt.total_seconds() / D
+    midpoint_frac = midpoint_frac.clip(
+        0.0, 0.999999
+    )  # keep the last instant inside quartile 4, not a 5th bucket
     quartile_bucket = np.floor(midpoint_frac * 4).astype(int) + 1  # 1..4
 
     depths = wet_only["depth_mm"].to_numpy()

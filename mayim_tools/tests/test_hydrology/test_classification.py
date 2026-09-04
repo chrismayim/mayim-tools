@@ -383,4 +383,3 @@ class TestClassifyDepressions:
                 depression_features=[],
                 vertical_accuracy=1.0,
             )
-

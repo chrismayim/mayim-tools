@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Mayim Tools – Category Registry
 Central registry for all tool categories.

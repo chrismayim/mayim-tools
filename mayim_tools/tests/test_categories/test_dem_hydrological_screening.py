@@ -1,11 +1,8 @@
-# -*- coding: utf-8 -*-
 """
 Tests for DEMHydrologicalScreening tool.
 Tests the tool registration, parameter definition,
 and algorithm metadata — without requiring a live QGIS instance.
 """
-
-import pytest
 
 
 class TestDEMHydrologicalScreeningMetadata:
@@ -16,6 +13,7 @@ class TestDEMHydrologicalScreeningMetadata:
         from mayim_tools.categories.hydrology.tools.dem_hydrological_screening import (
             DEMHydrologicalScreening,
         )
+
         tool = DEMHydrologicalScreening()
         assert tool.name() == "demhydrologicalscreening"
 
@@ -24,6 +22,7 @@ class TestDEMHydrologicalScreeningMetadata:
         from mayim_tools.categories.hydrology.tools.dem_hydrological_screening import (
             DEMHydrologicalScreening,
         )
+
         tool = DEMHydrologicalScreening()
         assert tool.displayName() == "DEM Hydrological Screening"
 
@@ -32,6 +31,7 @@ class TestDEMHydrologicalScreeningMetadata:
         from mayim_tools.categories.hydrology.tools.dem_hydrological_screening import (
             DEMHydrologicalScreening,
         )
+
         tool = DEMHydrologicalScreening()
         assert tool.group() == "Hydrology Tools"
         assert tool.groupId() == "hydrology"
@@ -41,6 +41,7 @@ class TestDEMHydrologicalScreeningMetadata:
         from mayim_tools.categories.hydrology.tools.dem_hydrological_screening import (
             DEMHydrologicalScreening,
         )
+
         tool = DEMHydrologicalScreening()
         instance = tool.createInstance()
         assert isinstance(instance, DEMHydrologicalScreening)
@@ -51,6 +52,7 @@ class TestDEMHydrologicalScreeningMetadata:
         from mayim_tools.categories.hydrology.tools.dem_hydrological_screening import (
             DEMHydrologicalScreening,
         )
+
         tool = DEMHydrologicalScreening()
         tags = tool.tags()
         assert "dem" in tags
@@ -62,6 +64,7 @@ class TestDEMHydrologicalScreeningMetadata:
         from mayim_tools.categories.hydrology.tools.dem_hydrological_screening import (
             DEMSourceType,
         )
+
         assert len(DEMSourceType.LABELS) == 8
         assert DEMSourceType.LABELS[0] == "Auto-detect"
         assert DEMSourceType.LABELS[3] == "SRTM (30m / 90m)"
@@ -71,29 +74,25 @@ class TestDEMHydrologicalScreeningMetadata:
         from mayim_tools.categories.hydrology.tools.dem_hydrological_screening import (
             DEMSourceType,
         )
+
         for key, value in DEMSourceType.DEFAULT_RMSE.items():
             if key != DEMSourceType.AUTO_DETECT:
-                assert value is not None, (
-                    f"Source type {key} has no default RMSE"
-                )
-                assert value > 0, (
-                    f"Source type {key} RMSE must be positive"
-                )
+                assert value is not None, f"Source type {key} has no default RMSE"
+                assert value > 0, f"Source type {key} RMSE must be positive"
 
     def test_void_class_values(self):
         """VoidClass values must be distinct and correct."""
         from mayim_tools.categories.hydrology.tools.dem_hydrological_screening import (
             VoidClass,
         )
+
         values = [
             VoidClass.VALID,
             VoidClass.SMALL,
             VoidClass.MEDIUM,
             VoidClass.LARGE,
         ]
-        assert len(values) == len(set(values)), (
-            "VoidClass values must all be unique"
-        )
+        assert len(values) == len(set(values)), "VoidClass values must all be unique"
         assert VoidClass.VALID == 0
 
     def test_category_registers_tool(self):
@@ -102,6 +101,7 @@ class TestDEMHydrologicalScreeningMetadata:
         from mayim_tools.categories.hydrology.tools.dem_hydrological_screening import (
             DEMHydrologicalScreening,
         )
+
         cat = HydrologyCategory()
         algorithms = cat.get_algorithms()
         assert len(algorithms) == 1

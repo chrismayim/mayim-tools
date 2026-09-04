@@ -101,9 +101,7 @@ class TestPrepareHydrographyTopology:
 
         assert result["valid"] is True
         assert len(result["intersections"]) == 1
-        assert result["intersections"][0]["intersection_type"] == (
-            "crossing"
-        )
+        assert result["intersections"][0]["intersection_type"] == ("crossing")
         assert result["topology_conflicts"]
 
     def test_crossing_lines_are_not_automatically_connected(self):
@@ -131,9 +129,7 @@ class TestPrepareHydrographyTopology:
         )
 
         assert len(result["intersections"]) == 1
-        assert result["intersections"][0]["intersection_type"] == (
-            "overlap"
-        )
+        assert result["intersections"][0]["intersection_type"] == ("overlap")
 
     def test_duplicate_segments_are_reported(self):
         """Equivalent duplicate segments are identified."""

@@ -155,35 +155,23 @@ class ClassificationConfig:
             raise ValueError("margin must be between 0.0 and 1.0.")
 
         if self.threshold - self.margin < 0.0:
-            raise ValueError(
-                "threshold minus margin cannot be less than 0.0."
-            )
+            raise ValueError("threshold minus margin cannot be less than 0.0.")
 
         if self.threshold + self.margin > 1.0:
-            raise ValueError(
-                "threshold plus margin cannot exceed 1.0."
-            )
+            raise ValueError("threshold plus margin cannot exceed 1.0.")
 
         if self.area_reference_cells <= 0:
-            raise ValueError(
-                "area_reference_cells must be greater than zero."
-            )
+            raise ValueError("area_reference_cells must be greater than zero.")
 
         if self.depth_transition_ratio <= 0:
-            raise ValueError(
-                "depth_transition_ratio must be greater than zero."
-            )
+            raise ValueError("depth_transition_ratio must be greater than zero.")
 
         for name, value in numeric_values.items():
             if name.startswith("weight_") and value < 0.0:
-                raise ValueError(
-                    f"Classification weight '{name}' cannot be negative."
-                )
+                raise ValueError(f"Classification weight '{name}' cannot be negative.")
 
         if self.total_weight <= 0.0:
-            raise ValueError(
-                "At least one classification weight must be positive."
-            )
+            raise ValueError("At least one classification weight must be positive.")
 
     @property
     def total_weight(self) -> float:
@@ -199,10 +187,7 @@ class ClassificationConfig:
 
     def to_dict(self) -> dict[str, float]:
         """Return the configuration as a serialisable dictionary."""
-        return {
-            key: float(value)
-            for key, value in asdict(self).items()
-        }
+        return {key: float(value) for key, value in asdict(self).items()}
 
 
 @dataclass(frozen=True)
@@ -354,14 +339,10 @@ def classify_depression(
     elongation_index = float(features["elongation_index"])
 
     if depth < 0.0:
-        raise ValueError(
-            f"Depression {depression_id} depth cannot be negative."
-        )
+        raise ValueError(f"Depression {depression_id} depth cannot be negative.")
 
     if area_cells <= 0.0:
-        raise ValueError(
-            f"Depression {depression_id} area_cells must be positive."
-        )
+        raise ValueError(f"Depression {depression_id} area_cells must be positive.")
 
     if not 0.0 <= elongation_index <= 1.0:
         raise ValueError(
@@ -421,11 +402,7 @@ def classify_depression(
         contributions["dsm_bias"] = config.weight_dsm_bias
         supplied_evidence_weight += config.weight_dsm_bias
 
-    base_weight = (
-        config.weight_depth
-        + config.weight_area
-        + config.weight_shape
-    )
+    base_weight = config.weight_depth + config.weight_area + config.weight_shape
 
     denominator = base_weight + supplied_evidence_weight
     raw_score = sum(contributions.values()) / denominator
@@ -468,10 +445,7 @@ def classify_depression(
         infrastructure_evidence=infrastructure,
         known_basin_evidence=known_basin,
         dsm_bias_evidence=dsm_bias,
-        score_contributions={
-            key: float(value)
-            for key, value in contributions.items()
-        },
+        score_contributions={key: float(value) for key, value in contributions.items()},
         explanation=explanation,
     )
 
@@ -519,9 +493,7 @@ def classify_depressions(
         Results sorted by integer depression ID.
     """
     if not isinstance(depression_features, dict):
-        raise ValueError(
-            "depression_features must be a dictionary keyed by ID."
-        )
+        raise ValueError("depression_features must be a dictionary keyed by ID.")
 
     evidence_values = evidence if isinstance(evidence, dict) else {}
 
@@ -535,8 +507,7 @@ def classify_depressions(
         features.setdefault("depression_id", int(depression_id))
 
         if isinstance(evidence, dict) and (
-            depression_id in evidence
-            or str(depression_id) in evidence
+            depression_id in evidence or str(depression_id) in evidence
         ):
             per_depression_evidence = evidence.get(
                 depression_id,
@@ -571,17 +542,14 @@ def _build_config(
         return ClassificationConfig()
 
     if not isinstance(thresholds, dict):
-        raise ValueError(
-            "thresholds must be a dictionary or None."
-        )
+        raise ValueError("thresholds must be a dictionary or None.")
 
     valid_keys = set(ClassificationConfig.__dataclass_fields__)
     unknown_keys = set(thresholds) - valid_keys
 
     if unknown_keys:
         raise ValueError(
-            "Unknown classification configuration key(s): "
-            f"{sorted(unknown_keys)}"
+            "Unknown classification configuration key(s): " f"{sorted(unknown_keys)}"
         )
 
     return ClassificationConfig(**thresholds)
@@ -608,8 +576,7 @@ def _validate_features(features: dict) -> None:
 
     if missing_keys:
         raise ValueError(
-            "Missing required depression feature(s): "
-            f"{sorted(missing_keys)}"
+            "Missing required depression feature(s): " f"{sorted(missing_keys)}"
         )
 
     for key in (
@@ -620,14 +587,10 @@ def _validate_features(features: dict) -> None:
         try:
             value = float(features[key])
         except (TypeError, ValueError) as error:
-            raise ValueError(
-                f"Depression feature '{key}' must be numeric."
-            ) from error
+            raise ValueError(f"Depression feature '{key}' must be numeric.") from error
 
         if not isfinite(value):
-            raise ValueError(
-                f"Depression feature '{key}' must be finite."
-            )
+            raise ValueError(f"Depression feature '{key}' must be finite.")
 
 
 def _validate_vertical_accuracy(
@@ -642,14 +605,10 @@ def _validate_vertical_accuracy(
     try:
         value = float(vertical_accuracy)
     except (TypeError, ValueError) as error:
-        raise ValueError(
-            "vertical_accuracy must be numeric."
-        ) from error
+        raise ValueError("vertical_accuracy must be numeric.") from error
 
     if not isfinite(value) or value <= 0.0:
-        raise ValueError(
-            "vertical_accuracy must be finite and greater than zero."
-        )
+        raise ValueError("vertical_accuracy must be finite and greater than zero.")
 
 
 def _depth_artifact_score(
@@ -697,9 +656,7 @@ def _area_artifact_score(
     :param reference_cells: Reference area in cells.
     :returns: Score from 0.0 to 1.0.
     """
-    score = reference_cells / (
-        reference_cells + max(area_cells, 0.0)
-    )
+    score = reference_cells / (reference_cells + max(area_cells, 0.0))
 
     return float(np.clip(score, 0.0, 1.0))
 
@@ -831,9 +788,7 @@ def _build_explanation(
     elif classification == REAL_FEATURE:
         decision_text = "Low artifact likelihood"
     else:
-        decision_text = (
-            "Evidence is borderline and requires analyst review"
-        )
+        decision_text = "Evidence is borderline and requires analyst review"
 
     return (
         f"{decision_text}; score={artifact_score:.3f}, "

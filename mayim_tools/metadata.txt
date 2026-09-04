@@ -2,18 +2,19 @@
 name=Mayim Tools
 qgisMinimumVersion=4.0
 qgisMaximumVersion=4.99
-description=A suite of modular engineering and geospatial tools for QGIS
-version=0.2.0
+description=A suite of modular engineering and geospatial tools for QGIS — Hydrology, Rainfall Analysis and Data Tools
+version=0.3.0
 author=Chris Etsebeth / Mayim Consulting Engineers
 email=chris@mayimconsulting.com
 about=Mayim Tools provides a categorised collection of engineering and
-    geospatial processing tools for QGIS 4+. Categories include Hydrology,
-    Geometry, Network Analysis, and more. Designed for extensibility and
-    public redistribution.
-tracker=https://github.com/yourname/mayim-tools/issues
-repository=https://github.com/yourname/mayim-tools
-tags=water,hydrology,geometry,engineering,tools,processing
-homepage=https://github.com/yourname/mayim-tools
+    geospatial processing tools for QGIS 4+. Categories include Hydrology
+    Tools (DEM conditioning pipeline), Rainfall Analysis Tools (Design
+    Rainfall estimation and Huff Curves), and Data Tools (GRIB to CSV
+    export). Designed for extensibility and public redistribution.
+tracker=https://github.com/chrismayim/mayim-tools/issues
+repository=https://github.com/chrismayim/mayim-tools
+tags=water,hydrology,geometry,engineering,tools,processing,rainfall,design rainfall,huff curves,DEM conditioning,GRIB,ERA5
+homepage=https://github.com/chrismayim/mayim-tools
 category=Plugins
 icon=icons/mayim_logo.png
 experimental=True
@@ -21,3 +22,10 @@ deprecated=False
 server=False
 hasProcessingProvider=True
 license=GPL-2.0+
+changelog=0.3.0 - Added DEM Depression Analysis, DEM Hydrological Filling,
+    DEM Gradient Resolution, DEM Hydrography Enforcement, DEM Conditioning
+    Workflow, Rainfall Analysis Tools category (Design Rainfall at Point(s),
+    Huff Curves from CSV), Data Tools category (Convert GRIB to CSV),
+    plugin and algorithm icons.
+    0.2.0 - Internal development release.
+    0.1.0 - Initial release with DEM Hydrological Screening and Smoothing.

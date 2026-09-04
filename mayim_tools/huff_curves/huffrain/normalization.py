@@ -17,7 +17,9 @@ import pandas as pd
 from .schemas import EventCurve, RainfallEvent
 
 
-def normalize_event(event: RainfallEvent, intervals: "pd.DataFrame") -> EventCurve | None:
+def normalize_event(
+    event: RainfallEvent, intervals: "pd.DataFrame"
+) -> EventCurve | None:
     if event.contains_missing:
         return None
     if event.wet_duration_s <= 0 or event.total_depth_mm <= 0:
@@ -46,15 +48,20 @@ def normalize_event(event: RainfallEvent, intervals: "pd.DataFrame") -> EventCur
     x_raw[-1] = 1.0
     y_raw[-1] = 1.0
 
-    nominal_interval_s = float(np.median(wet_only["duration_s"])) if len(wet_only) else D
+    nominal_interval_s = (
+        float(np.median(wet_only["duration_s"])) if len(wet_only) else D
+    )
     n_eff = D / nominal_interval_s if nominal_interval_s > 0 else float(len(wet_only))
 
     return EventCurve(
         event_id=event.event_id,
         quartile=event.quartile,
-        x_raw=tuple(x_raw), y_raw=tuple(y_raw),
-        x_grid=(), y_grid=(),  # filled in by resample_to_grid
-        n_eff=n_eff, resolution_warning=False,
+        x_raw=tuple(x_raw),
+        y_raw=tuple(y_raw),
+        x_grid=(),
+        y_grid=(),  # filled in by resample_to_grid
+        n_eff=n_eff,
+        resolution_warning=False,
     )
 
 
@@ -73,7 +80,7 @@ def resample_to_grid(curve: EventCurve, grid: np.ndarray) -> EventCurve:
     # cumulative) y at each unique x, since np.interp requires strictly
     # increasing x.
     if len(np.unique(x_raw)) < len(x_raw):
-        x_raw, idx = np.unique(x_raw, return_index=False), None
+        x_raw = np.unique(x_raw)
         # rebuild y by taking the max y at each unique x
         y_dedup = []
         xr = np.asarray(curve.x_raw)
@@ -91,8 +98,12 @@ def resample_to_grid(curve: EventCurve, grid: np.ndarray) -> EventCurve:
     resolution_warning = curve.n_eff > 0 and (len(grid) - 1) > curve.n_eff
 
     return EventCurve(
-        event_id=curve.event_id, quartile=curve.quartile,
-        x_raw=curve.x_raw, y_raw=curve.y_raw,
-        x_grid=tuple(grid), y_grid=tuple(y_grid),
-        n_eff=curve.n_eff, resolution_warning=bool(resolution_warning),
+        event_id=curve.event_id,
+        quartile=curve.quartile,
+        x_raw=curve.x_raw,
+        y_raw=curve.y_raw,
+        x_grid=tuple(grid),
+        y_grid=tuple(y_grid),
+        n_eff=curve.n_eff,
+        resolution_warning=bool(resolution_warning),
     )

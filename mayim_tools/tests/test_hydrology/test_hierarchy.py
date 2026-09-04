@@ -331,7 +331,4 @@ class TestDepressionHierarchy:
 
         serialised = hierarchy.to_list()
 
-        assert [
-            item["depression_id"]
-            for item in serialised
-        ] == [2, 5, 9]
+        assert [item["depression_id"] for item in serialised] == [2, 5, 9]

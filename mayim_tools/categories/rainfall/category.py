@@ -61,4 +61,3 @@ class RainfallCategory(BaseCategory):
                 f"Rainfall Analysis Tools: Failed to load algorithms: {error}"
             )
             return []
-

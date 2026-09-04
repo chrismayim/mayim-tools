@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Mayim Tools – Settings Manager
 Provides a clean interface to QSettings for persistent plugin configuration.

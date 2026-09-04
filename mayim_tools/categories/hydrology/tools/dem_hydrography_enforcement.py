@@ -109,22 +109,22 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
 
     # ── Algorithm identity ────────────────────────────────────────────────────
 
-    def name(self) -> str:  # noqa: N802
+    def name(self) -> str:
         return "demhydrographyenforcement"
 
-    def createInstance(self):  # noqa: N802
+    def createInstance(self):
         return DEMHydrographyEnforcement()
 
-    def displayName(self) -> str:  # noqa: N802
+    def displayName(self) -> str:
         return "DEM Hydrography Enforcement"
 
-    def group(self) -> str:  # noqa: N802
+    def group(self) -> str:
         return "Hydrology Tools"
 
-    def groupId(self) -> str:  # noqa: N802
+    def groupId(self) -> str:
         return "hydrologytools"
 
-    def shortHelpString(self) -> str:  # noqa: N802
+    def shortHelpString(self) -> str:
         return (
             "Stage 7E — Adaptive, topology-aware hydrography enforcement.\n\n"
             "Burning is applied only where the DEM-derived flow path diverges "
@@ -138,7 +138,7 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
 
     # ── Parameter definition ──────────────────────────────────────────────────
 
-    def initAlgorithm(self, config=None) -> None:  # noqa: N802
+    def initAlgorithm(self, config=None) -> None:
         self.addParameter(
             QgsProcessingParameterRasterLayer(
                 self.INPUT_DEM,
@@ -224,7 +224,7 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
 
     # ── Main processing ───────────────────────────────────────────────────────
 
-    def processAlgorithm(  # noqa: N802
+    def processAlgorithm(
         self,
         parameters: dict,
         context: QgsProcessingContext,
@@ -238,9 +238,7 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
 
         # ── Resolve inputs ────────────────────────────────────────────────────
 
-        dem_layer = self.parameterAsRasterLayer(
-            parameters, self.INPUT_DEM, context
-        )
+        dem_layer = self.parameterAsRasterLayer(parameters, self.INPUT_DEM, context)
         if dem_layer is None or not dem_layer.isValid():
             raise QgsProcessingException(
                 "Input DEM is not valid or could not be loaded."
@@ -281,9 +279,7 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
         )
 
         output_folder = Path(
-            self.parameterAsString(
-                parameters, self.OUTPUT_FOLDER, context
-            )
+            self.parameterAsString(parameters, self.OUTPUT_FOLDER, context)
         )
         output_folder.mkdir(parents=True, exist_ok=True)
 
@@ -339,9 +335,7 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
         feedback.pushInfo(f"Hydrography feature count: {feature_count}")
 
         if feature_count == 0:
-            raise QgsProcessingException(
-                "Hydrography layer contains no features."
-            )
+            raise QgsProcessingException("Hydrography layer contains no features.")
 
         # ── DEM extent check ──────────────────────────────────────────────────
 
@@ -360,12 +354,8 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
             else:
                 features_outside += 1
 
-        feedback.pushInfo(
-            f"Features intersecting DEM extent : {features_inside}"
-        )
-        feedback.pushInfo(
-            f"Features outside DEM extent      : {features_outside}"
-        )
+        feedback.pushInfo(f"Features intersecting DEM extent : {features_inside}")
+        feedback.pushInfo(f"Features outside DEM extent      : {features_outside}")
 
         if features_inside == 0:
             raise QgsProcessingException(
@@ -425,8 +415,7 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
             dem_array = dem_dataset.read(1).astype(np.float64)
 
         feedback.pushInfo(
-            f"DEM array read. Shape: "
-            f"{dem_array.shape[0]} x {dem_array.shape[1]}."
+            f"DEM array read. Shape: " f"{dem_array.shape[0]} x {dem_array.shape[1]}."
         )
 
         # ── Phase 1: Hydrography rasterisation ───────────────────────────────
@@ -464,12 +453,9 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
 
         nodata_mask = None
         if dem_metadata["nodata"] is not None:
-            nodata_mask = (
-                flow_evidence_array == dem_metadata["nodata"]
-            )
+            nodata_mask = flow_evidence_array == dem_metadata["nodata"]
             feedback.pushInfo(
-                f"NoData mask derived. "
-                f"NoData cells: {int(np.sum(nodata_mask))}."
+                f"NoData mask derived. " f"NoData cells: {int(np.sum(nodata_mask))}."
             )
 
         # ── Phase 2: Divergence analysis ──────────────────────────────────────
@@ -489,9 +475,7 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
                 nodata_mask=nodata_mask,
             )
         except ValueError as exc:
-            raise QgsProcessingException(
-                f"Divergence analysis failed: {exc}"
-            ) from exc
+            raise QgsProcessingException(f"Divergence analysis failed: {exc}") from exc
 
         divergence_stats = divergence_result["statistics"]
         conflict_mask = divergence_result["conflict_mask"].astype(bool)
@@ -533,9 +517,7 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
         eligible_mask = hydrography_only_mask & ~conflict_mask
 
         eligible_cell_count = int(np.sum(eligible_mask))
-        feedback.pushInfo(
-            f"Eligible cells for enforcement: {eligible_cell_count}."
-        )
+        feedback.pushInfo(f"Eligible cells for enforcement: {eligible_cell_count}.")
 
         if eligible_cell_count == 0:
             warnings.append(
@@ -557,8 +539,7 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
         # ── Phase 3: Cell size ────────────────────────────────────────────────
 
         cell_size = float(
-            (dem_metadata["resolution_x"] + dem_metadata["resolution_y"])
-            / 2.0
+            (dem_metadata["resolution_x"] + dem_metadata["resolution_y"]) / 2.0
         )
 
         # ── Phase 3: Call enforce_hydrography ─────────────────────────────────
@@ -572,19 +553,17 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
         )
 
         try:
-            enforced_dem, difference, enforcement_mask, audit = (
-                enforce_hydrography(
-                    dem=dem_array,
-                    hydrography_mask=hydrography_mask,
-                    eligible_mask=eligible_mask,
-                    cell_size=cell_size,
-                    vertical_accuracy=vertical_accuracy,
-                    maximum_burn_depth=maximum_burn_depth,
-                    nodata=nodata_sentinel,
-                    upstream_area=None,
-                    reference_upstream_area=None,
-                    conflict_mask=conflict_mask,
-                )
+            enforced_dem, difference, enforcement_mask, audit = enforce_hydrography(
+                dem=dem_array,
+                hydrography_mask=hydrography_mask,
+                eligible_mask=eligible_mask,
+                cell_size=cell_size,
+                vertical_accuracy=vertical_accuracy,
+                maximum_burn_depth=maximum_burn_depth,
+                nodata=nodata_sentinel,
+                upstream_area=None,
+                reference_upstream_area=None,
+                conflict_mask=conflict_mask,
             )
         except ValueError as exc:
             raise QgsProcessingException(
@@ -592,18 +571,11 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
             ) from exc
 
         feedback.pushInfo(
-            f"Enforcement complete. "
-            f"Modified cells   : {audit['modified_cells']}. "
+            f"Enforcement complete. " f"Modified cells   : {audit['modified_cells']}. "
         )
-        feedback.pushInfo(
-            f"Total lowering   : {audit['total_lowering']:.4f}. "
-        )
-        feedback.pushInfo(
-            f"Maximum lowering : {audit['maximum_lowering']:.4f}. "
-        )
-        feedback.pushInfo(
-            f"Mean lowering    : {audit['mean_lowering']:.4f}."
-        )
+        feedback.pushInfo(f"Total lowering   : {audit['total_lowering']:.4f}. ")
+        feedback.pushInfo(f"Maximum lowering : {audit['maximum_lowering']:.4f}. ")
+        feedback.pushInfo(f"Mean lowering    : {audit['mean_lowering']:.4f}.")
 
         # ── Phase 3: Write enforced DEM raster ───────────────────────────────
 
@@ -611,12 +583,8 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
 
         dem_stem = Path(dem_source).stem
 
-        enforced_dem_path = (
-            output_folder / f"{dem_stem}_hydrography_enforced.tif"
-        )
-        difference_path = (
-            output_folder / f"{dem_stem}_hydrography_difference.tif"
-        )
+        enforced_dem_path = output_folder / f"{dem_stem}_hydrography_enforced.tif"
+        difference_path = output_folder / f"{dem_stem}_hydrography_difference.tif"
         enforcement_mask_path = (
             output_folder / f"{dem_stem}_hydrography_enforcement_mask.tif"
         )
@@ -642,20 +610,15 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
         with rasterio.open(enforcement_mask_path, "w", **mask_profile) as dst:
             dst.write(enforcement_mask, 1)
 
-        feedback.pushInfo(
-            f"Enforcement mask written: {enforcement_mask_path}"
-        )
+        feedback.pushInfo(f"Enforcement mask written: {enforcement_mask_path}")
 
         # ── Build report ──────────────────────────────────────────────────────
 
         feedback.setProgress(88)
 
-        report_path = (
-            output_folder / f"{dem_stem}_hydrography_enforcement_report.txt"
-        )
+        report_path = output_folder / f"{dem_stem}_hydrography_enforcement_report.txt"
         provenance_path = (
-            output_folder
-            / f"{dem_stem}_hydrography_enforcement_provenance.json"
+            output_folder / f"{dem_stem}_hydrography_enforcement_provenance.json"
         )
 
         report_lines = [
@@ -695,10 +658,12 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
         else:
             report_lines.append("  No validation detail returned.")
 
-        report_lines.extend([
-            "",
-            "── Topology ─────────────────────────────────────────────────────",
-        ])
+        report_lines.extend(
+            [
+                "",
+                "── Topology ─────────────────────────────────────────────────────",
+            ]
+        )
 
         if topology_result:
             for key, value in topology_result.items():
@@ -706,84 +671,84 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
         else:
             report_lines.append("  No topology detail returned.")
 
-        report_lines.extend([
-            "",
-            "── Phase 1: Grid Alignment ──────────────────────────────────────",
-            f"  DEM grid shape      : {dem_metadata['height']} rows x "
-            f"{dem_metadata['width']} columns",
-            f"  DEM resolution X    : {dem_metadata['resolution_x']:.6f}",
-            f"  DEM resolution Y    : {dem_metadata['resolution_y']:.6f}",
-            f"  DEM dtype           : {dem_metadata['dtype']}",
-            f"  DEM NoData value    : {dem_metadata['nodata']}",
-            f"  DEM CRS (rasterio)  : {dem_metadata['crs']}",
-            f"  DEM transform       : {dem_metadata['transform']}",
-            f"  Hydrography burned cells        : {burned_cell_count}",
-            f"  Flow-evidence shape             : "
-            f"{flow_evidence_array.shape[0]} rows x "
-            f"{flow_evidence_array.shape[1]} columns",
-            "  Flow-evidence alignment         : verified — matches DEM grid",
-            "",
-            "── Phase 2: Divergence Analysis ─────────────────────────────────",
-            f"  Assessable cells            : "
-            f"{divergence_stats['assessable_cells']}",
-            f"  NoData cells                : "
-            f"{divergence_stats['nodata_cells']}",
-            f"  Hydrography cells           : "
-            f"{divergence_stats['hydrography_cells']}",
-            f"  DEM flow cells              : "
-            f"{divergence_stats['dem_flow_cells']}",
-            f"  Aligned cells (exact)       : "
-            f"{divergence_stats['aligned_cells']}",
-            f"  Tolerated cells             : "
-            f"{divergence_stats['tolerated_cells']}",
-            f"  Hydrography-only cells      : "
-            f"{divergence_stats['hydrography_only_cells']}",
-            f"  DEM-only cells              : "
-            f"{divergence_stats['dem_only_cells']}",
-            f"  Material divergence cells   : "
-            f"{divergence_stats['material_divergence_cells']}",
-            f"  Conflict cells              : "
-            f"{divergence_stats['conflict_cells']}",
-            f"  Positional tolerance used   : "
-            f"{divergence_stats['positional_tolerance_cells']} cells",
-            "",
-            "── Phase 3: Enforcement ─────────────────────────────────────────",
-            f"  Cell size                       : {cell_size:.4f}",
-            f"  Vertical accuracy               : {vertical_accuracy}",
-            f"  Maximum burn depth configured   : {maximum_burn_depth}",
-            f"  Base burn depth applied         : "
-            f"{audit['base_burn_depth']:.4f}",
-            f"  Eligible cells                  : {eligible_cell_count}",
-            f"  Authorised hydrography cells    : "
-            f"{audit['authorised_hydrography_cells']}",
-            f"  Modified cells                  : {audit['modified_cells']}",
-            f"  Conflict excluded cells         : "
-            f"{audit['conflict_excluded_cells']}",
-            f"  Total lowering                  : "
-            f"{audit['total_lowering']:.4f}",
-            f"  Maximum lowering                : "
-            f"{audit['maximum_lowering']:.4f}",
-            f"  Mean lowering                   : "
-            f"{audit['mean_lowering']:.4f}",
-            f"  Minimum lowering                : "
-            f"{audit['minimum_lowering']:.4f}",
-            f"  Area scaling used               : "
-            f"{audit['area_scaling_used']}",
-            "",
-            "── Outputs ──────────────────────────────────────────────────────",
-            f"  Enforced DEM        : {enforced_dem_path}",
-            f"  Difference raster   : {difference_path}",
-            f"  Enforcement mask    : {enforcement_mask_path}",
-            "",
-            "── Enforcement Mask Legend ──────────────────────────────────────",
-            "  0   — unchanged non-hydrography cell",
-            "  1   — hydrography enforced (elevation lowered)",
-            "  2   — hydrography present but not enforced",
-            "  3   — conflict/review excluded",
-            "  255 — NoData",
-            "",
-            "── Warnings ─────────────────────────────────────────────────────",
-        ])
+        report_lines.extend(
+            [
+                "",
+                "── Phase 1: Grid Alignment ──────────────────────────────────────",
+                f"  DEM grid shape      : {dem_metadata['height']} rows x "
+                f"{dem_metadata['width']} columns",
+                f"  DEM resolution X    : {dem_metadata['resolution_x']:.6f}",
+                f"  DEM resolution Y    : {dem_metadata['resolution_y']:.6f}",
+                f"  DEM dtype           : {dem_metadata['dtype']}",
+                f"  DEM NoData value    : {dem_metadata['nodata']}",
+                f"  DEM CRS (rasterio)  : {dem_metadata['crs']}",
+                f"  DEM transform       : {dem_metadata['transform']}",
+                f"  Hydrography burned cells        : {burned_cell_count}",
+                f"  Flow-evidence shape             : "
+                f"{flow_evidence_array.shape[0]} rows x "
+                f"{flow_evidence_array.shape[1]} columns",
+                "  Flow-evidence alignment         : verified — matches DEM grid",
+                "",
+                "── Phase 2: Divergence Analysis ─────────────────────────────────",
+                f"  Assessable cells            : "
+                f"{divergence_stats['assessable_cells']}",
+                f"  NoData cells                : "
+                f"{divergence_stats['nodata_cells']}",
+                f"  Hydrography cells           : "
+                f"{divergence_stats['hydrography_cells']}",
+                f"  DEM flow cells              : "
+                f"{divergence_stats['dem_flow_cells']}",
+                f"  Aligned cells (exact)       : "
+                f"{divergence_stats['aligned_cells']}",
+                f"  Tolerated cells             : "
+                f"{divergence_stats['tolerated_cells']}",
+                f"  Hydrography-only cells      : "
+                f"{divergence_stats['hydrography_only_cells']}",
+                f"  DEM-only cells              : "
+                f"{divergence_stats['dem_only_cells']}",
+                f"  Material divergence cells   : "
+                f"{divergence_stats['material_divergence_cells']}",
+                f"  Conflict cells              : "
+                f"{divergence_stats['conflict_cells']}",
+                f"  Positional tolerance used   : "
+                f"{divergence_stats['positional_tolerance_cells']} cells",
+                "",
+                "── Phase 3: Enforcement ─────────────────────────────────────────",
+                f"  Cell size                       : {cell_size:.4f}",
+                f"  Vertical accuracy               : {vertical_accuracy}",
+                f"  Maximum burn depth configured   : {maximum_burn_depth}",
+                f"  Base burn depth applied         : "
+                f"{audit['base_burn_depth']:.4f}",
+                f"  Eligible cells                  : {eligible_cell_count}",
+                f"  Authorised hydrography cells    : "
+                f"{audit['authorised_hydrography_cells']}",
+                f"  Modified cells                  : {audit['modified_cells']}",
+                f"  Conflict excluded cells         : "
+                f"{audit['conflict_excluded_cells']}",
+                f"  Total lowering                  : "
+                f"{audit['total_lowering']:.4f}",
+                f"  Maximum lowering                : "
+                f"{audit['maximum_lowering']:.4f}",
+                f"  Mean lowering                   : " f"{audit['mean_lowering']:.4f}",
+                f"  Minimum lowering                : "
+                f"{audit['minimum_lowering']:.4f}",
+                f"  Area scaling used               : " f"{audit['area_scaling_used']}",
+                "",
+                "── Outputs ──────────────────────────────────────────────────────",
+                f"  Enforced DEM        : {enforced_dem_path}",
+                f"  Difference raster   : {difference_path}",
+                f"  Enforcement mask    : {enforcement_mask_path}",
+                "",
+                "── Enforcement Mask Legend ──────────────────────────────────────",
+                "  0   — unchanged non-hydrography cell",
+                "  1   — hydrography enforced (elevation lowered)",
+                "  2   — hydrography present but not enforced",
+                "  3   — conflict/review excluded",
+                "  255 — NoData",
+                "",
+                "── Warnings ─────────────────────────────────────────────────────",
+            ]
+        )
 
         if warnings:
             for warning in warnings:
@@ -791,18 +756,20 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
         else:
             report_lines.append("  No warnings.")
 
-        report_lines.extend([
-            "",
-            "── Enforcement Status ───────────────────────────────────────────",
-            "  Elevation modification applied.",
-            f"  {audit['modified_cells']} cell(s) were lowered.",
-            "  Area-scaled burning: not yet connected.",
-            "  Review modified_cell_records in provenance for cell detail.",
-            "",
-            "═" * 72,
-            "  End of report.",
-            "═" * 72,
-        ])
+        report_lines.extend(
+            [
+                "",
+                "── Enforcement Status ───────────────────────────────────────────",
+                "  Elevation modification applied.",
+                f"  {audit['modified_cells']} cell(s) were lowered.",
+                "  Area-scaled burning: not yet connected.",
+                "  Review modified_cell_records in provenance for cell detail.",
+                "",
+                "═" * 72,
+                "  End of report.",
+                "═" * 72,
+            ]
+        )
 
         report_text = "\n".join(report_lines)
         report_path.write_text(report_text, encoding="utf-8")
@@ -846,30 +813,18 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
                 "dem_crs": str(dem_metadata["crs"]),
                 "dem_transform": list(dem_metadata["transform"]),
                 "hydrography_burned_cells": burned_cell_count,
-                "flow_evidence_height": int(
-                    flow_evidence_array.shape[0]
-                ),
-                "flow_evidence_width": int(
-                    flow_evidence_array.shape[1]
-                ),
+                "flow_evidence_height": int(flow_evidence_array.shape[0]),
+                "flow_evidence_width": int(flow_evidence_array.shape[1]),
                 "flow_evidence_alignment": "verified",
             },
             "phase_2_divergence": {
-                "assessable_cells": divergence_stats[
-                    "assessable_cells"
-                ],
+                "assessable_cells": divergence_stats["assessable_cells"],
                 "nodata_cells": divergence_stats["nodata_cells"],
-                "hydrography_cells": divergence_stats[
-                    "hydrography_cells"
-                ],
+                "hydrography_cells": divergence_stats["hydrography_cells"],
                 "dem_flow_cells": divergence_stats["dem_flow_cells"],
                 "aligned_cells": divergence_stats["aligned_cells"],
-                "tolerated_cells": divergence_stats[
-                    "tolerated_cells"
-                ],
-                "hydrography_only_cells": divergence_stats[
-                    "hydrography_only_cells"
-                ],
+                "tolerated_cells": divergence_stats["tolerated_cells"],
+                "hydrography_only_cells": divergence_stats["hydrography_only_cells"],
                 "dem_only_cells": divergence_stats["dem_only_cells"],
                 "material_divergence_cells": divergence_stats[
                     "material_divergence_cells"
@@ -885,16 +840,10 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
                 "maximum_burn_depth_configured": maximum_burn_depth,
                 "base_burn_depth_applied": audit["base_burn_depth"],
                 "eligible_cells": eligible_cell_count,
-                "authorised_hydrography_cells": audit[
-                    "authorised_hydrography_cells"
-                ],
+                "authorised_hydrography_cells": audit["authorised_hydrography_cells"],
                 "modified_cells": audit["modified_cells"],
-                "conflict_excluded_cells": audit[
-                    "conflict_excluded_cells"
-                ],
-                "eligible_not_modified_cells": audit[
-                    "eligible_not_modified_cells"
-                ],
+                "conflict_excluded_cells": audit["conflict_excluded_cells"],
+                "eligible_not_modified_cells": audit["eligible_not_modified_cells"],
                 "total_lowering": audit["total_lowering"],
                 "maximum_lowering": audit["maximum_lowering"],
                 "mean_lowering": audit["mean_lowering"],
@@ -987,9 +936,7 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
         from shapely import wkt as shapely_wkt
         from shapely.geometry import mapping
 
-        feedback.pushInfo(
-            "Rasterising vector hydrography onto DEM grid."
-        )
+        feedback.pushInfo("Rasterising vector hydrography onto DEM grid.")
 
         height = dem_metadata["height"]
         width = dem_metadata["width"]
@@ -1008,9 +955,7 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
             shapes.append((mapping(shapely_geom), 1))
 
         if not shapes:
-            feedback.reportError(
-                "No valid hydrography geometries to rasterise."
-            )
+            feedback.reportError("No valid hydrography geometries to rasterise.")
             return np.zeros((height, width), dtype=np.uint8)
 
         hydrography_raster = rasterize(
@@ -1024,8 +969,7 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
 
         burned_count = int(np.sum(hydrography_raster > 0))
         feedback.pushInfo(
-            f"Hydrography rasterisation complete. "
-            f"Burned cells: {burned_count}."
+            f"Hydrography rasterisation complete. " f"Burned cells: {burned_count}."
         )
 
         return hydrography_raster
@@ -1054,10 +998,7 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
             flow_array = flow_dataset.read(1).astype(np.float32)
 
         # --- Dimension check ---
-        if (
-            flow_width != dem_metadata["width"]
-            or flow_height != dem_metadata["height"]
-        ):
+        if flow_width != dem_metadata["width"] or flow_height != dem_metadata["height"]:
             raise QgsProcessingException(
                 f"Flow-evidence raster dimensions "
                 f"({flow_width} x {flow_height}) do not match "
@@ -1094,9 +1035,7 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
                 )
 
         feedback.pushInfo(
-            f"Flow-evidence raster verified. "
-            f"Shape: {flow_height} x {flow_width}."
+            f"Flow-evidence raster verified. " f"Shape: {flow_height} x {flow_width}."
         )
 
         return flow_array
-

@@ -142,10 +142,7 @@ def least_cost_breach(
 
     pit_row, pit_col = _validate_pit_coordinate(dem, pit)
 
-    if (
-        dem[pit_row, pit_col] == nodata
-        or not np.isfinite(dem[pit_row, pit_col])
-    ):
+    if dem[pit_row, pit_col] == nodata or not np.isfinite(dem[pit_row, pit_col]):
         raise ValueError("The pit cell is NoData or non-finite.")
 
     offsets = _D4 if connectivity == 4 else _D8
@@ -159,9 +156,7 @@ def least_cost_breach(
     #   column
     #
     # The row and column tie-breakers make the result deterministic.
-    queue: list[
-        tuple[float, float, int, int, int]
-    ] = [
+    queue: list[tuple[float, float, int, int, int]] = [
         (0.0, 0.0, 0, pit_row, pit_col),
     ]
 
@@ -184,11 +179,7 @@ def least_cost_breach(
         if best is None:
             continue
 
-        if (
-            cost > best[0]
-            or maximum_depth > best[1]
-            or length > best[2]
-        ):
+        if cost > best[0] or maximum_depth > best[1] or length > best[2]:
             continue
 
         visited_cells += 1
@@ -225,17 +216,13 @@ def least_cost_breach(
             neighbour = (neighbour_row, neighbour_col)
 
             if not (
-                0 <= neighbour_row < dem.shape[0]
-                and 0 <= neighbour_col < dem.shape[1]
+                0 <= neighbour_row < dem.shape[0] and 0 <= neighbour_col < dem.shape[1]
             ):
                 continue
 
             neighbour_value = dem[neighbour_row, neighbour_col]
 
-            if (
-                neighbour_value == nodata
-                or not np.isfinite(neighbour_value)
-            ):
+            if neighbour_value == nodata or not np.isfinite(neighbour_value):
                 nodata_cells_encountered += 1
                 continue
 
@@ -341,19 +328,13 @@ def apply_breach_path(
         If the path or inputs are invalid.
     """
     if not isinstance(dem, np.ndarray) or dem.ndim != 2:
-        raise ValueError(
-            "dem must be a two-dimensional NumPy array."
-        )
+        raise ValueError("dem must be a two-dimensional NumPy array.")
 
     if not isinstance(path, list) or not path:
-        raise ValueError(
-            "path must be a non-empty list of coordinates."
-        )
+        raise ValueError("path must be a non-empty list of coordinates.")
 
     if not isfinite(float(spill_elevation)):
-        raise ValueError(
-            "spill_elevation must be finite."
-        )
+        raise ValueError("spill_elevation must be finite.")
 
     result = dem.astype(np.float64, copy=True)
     modified_cells = []
@@ -368,10 +349,7 @@ def apply_breach_path(
 
         original_value = float(dem[row, col])
 
-        if (
-            original_value == nodata
-            or not np.isfinite(original_value)
-        ):
+        if original_value == nodata or not np.isfinite(original_value):
             continue
 
         new_value = min(
@@ -437,39 +415,25 @@ def _validate_inputs(
         raise ValueError("dem must be a NumPy array.")
 
     if dem.ndim != 2:
-        raise ValueError(
-            "dem must be a two-dimensional array."
-        )
+        raise ValueError("dem must be a two-dimensional array.")
 
     if not isinstance(pit, tuple) or len(pit) != 2:
-        raise ValueError(
-            "pit must be a (row, column) tuple."
-        )
+        raise ValueError("pit must be a (row, column) tuple.")
 
     if not isfinite(float(spill_elevation)):
-        raise ValueError(
-            "spill_elevation must be finite."
-        )
+        raise ValueError("spill_elevation must be finite.")
 
     if not isinstance(max_length, (int, np.integer)):
-        raise ValueError(
-            "max_length must be an integer."
-        )
+        raise ValueError("max_length must be an integer.")
 
     if max_length <= 0:
-        raise ValueError(
-            "max_length must be greater than zero."
-        )
+        raise ValueError("max_length must be greater than zero.")
 
     if not isfinite(float(max_depth)) or max_depth <= 0.0:
-        raise ValueError(
-            "max_depth must be greater than zero."
-        )
+        raise ValueError("max_depth must be greater than zero.")
 
     if connectivity not in (4, 8):
-        raise ValueError(
-            "connectivity must be either 4 or 8."
-        )
+        raise ValueError("connectivity must be either 4 or 8.")
 
 
 def _validate_pit_coordinate(
@@ -480,9 +444,7 @@ def _validate_pit_coordinate(
     Validate and normalise a raster coordinate.
     """
     if not isinstance(coordinate, tuple) or len(coordinate) != 2:
-        raise ValueError(
-            "Coordinate must be a (row, column) tuple."
-        )
+        raise ValueError("Coordinate must be a (row, column) tuple.")
 
     row, col = coordinate
 
@@ -490,20 +452,13 @@ def _validate_pit_coordinate(
         col,
         (int, np.integer),
     ):
-        raise ValueError(
-            "Coordinate values must be integers."
-        )
+        raise ValueError("Coordinate values must be integers.")
 
     row = int(row)
     col = int(col)
 
-    if not (
-        0 <= row < dem.shape[0]
-        and 0 <= col < dem.shape[1]
-    ):
-        raise ValueError(
-            f"Coordinate ({row}, {col}) is outside the DEM."
-        )
+    if not (0 <= row < dem.shape[0] and 0 <= col < dem.shape[1]):
+        raise ValueError(f"Coordinate ({row}, {col}) is outside the DEM.")
 
     return row, col
 
@@ -586,16 +541,11 @@ def _success_audit(
         ],
         "path_length": max(0, len(path) - 1),
         "total_cost": float(total_cost),
-        "maximum_excavation_depth": float(
-            maximum_excavation_depth
-        ),
+        "maximum_excavation_depth": float(maximum_excavation_depth),
         "visited_cells": int(visited_cells),
-        "nodata_cells_encountered": int(
-            nodata_cells_encountered
-        ),
+        "nodata_cells_encountered": int(nodata_cells_encountered),
         "spill_elevation": float(spill_elevation),
         "max_length": int(max_length),
         "max_depth": float(max_depth),
         "connectivity": int(connectivity),
     }
-

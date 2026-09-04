@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Mayim Tools – Main Menu
 Adds Mayim Tools entries to the QGIS Plugins menu.
@@ -63,8 +62,6 @@ class MayimMenu:
         Dynamically add a submenu for each registered category,
         with a menu item for each tool in that category.
         """
-        import processing
-        from qgis.core import QgsApplication
 
         from mayim_tools.categories.category_registry import CategoryRegistry
 
@@ -92,14 +89,12 @@ class MayimMenu:
                                 processing.execAlgorithmDialog(alg_id)
                             except Exception as e:
                                 MayimLogger.critical(
-                                    f"Failed to open tool "
-                                    f"{alg_name}: {e}"
+                                    f"Failed to open tool " f"{alg_name}: {e}"
                                 )
+
                         return handler
 
-                    tool_action.triggered.connect(
-                        make_handler(algorithm.name())
-                    )
+                    tool_action.triggered.connect(make_handler(algorithm.name()))
                     category_menu.addAction(tool_action)
                     self.actions.append(tool_action)
             else:
@@ -113,10 +108,10 @@ class MayimMenu:
 
             self.menu.addMenu(category_menu)
 
-
     def _show_about(self) -> None:
         """Open the About dialog."""
         from mayim_tools.ui.about_dialog import AboutDialog
+
         dialog = AboutDialog(self.iface.mainWindow())
         dialog.exec()
 

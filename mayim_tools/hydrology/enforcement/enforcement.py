@@ -179,21 +179,15 @@ def enforce_selectively(
         record = depression_records[depression_id]
 
         if depression_id not in depression_masks:
-            raise ValueError(
-                f"Missing depression mask for depression {depression_id}."
-            )
+            raise ValueError(f"Missing depression mask for depression {depression_id}.")
 
         depression_mask = depression_masks[depression_id]
 
         if not isinstance(depression_mask, np.ndarray):
-            raise ValueError(
-                f"Depression mask {depression_id} must be a NumPy array."
-            )
+            raise ValueError(f"Depression mask {depression_id} must be a NumPy array.")
 
         if depression_mask.shape != dem.shape:
-            raise ValueError(
-                f"Depression mask {depression_id} has the wrong shape."
-            )
+            raise ValueError(f"Depression mask {depression_id} has the wrong shape.")
 
         if depression_mask.dtype != np.bool_:
             raise ValueError(
@@ -207,9 +201,7 @@ def enforce_selectively(
         cell_mask = depression_mask & valid_mask
 
         if not np.any(cell_mask):
-            raise ValueError(
-                f"Depression {depression_id} contains no valid cells."
-            )
+            raise ValueError(f"Depression {depression_id} contains no valid cells.")
 
         # Preserve real features and unresolved review cases.
         if classification == REAL_FEATURE:
@@ -280,9 +272,7 @@ def enforce_selectively(
                     "classification": ARTIFACT,
                     "decision": "depitted",
                     "decision_code": DECISION_DEPITTED,
-                    "modified": bool(
-                        depit_audit["elevation_change"] > 0.0
-                    ),
+                    "modified": bool(depit_audit["elevation_change"] > 0.0),
                     "method": "single_cell_depitting",
                     "details": depit_audit,
                 }
@@ -378,9 +368,7 @@ def _classification_value(record: Mapping) -> str:
         classification = classification.classification
 
     if not isinstance(classification, str):
-        raise ValueError(
-            "Depression classification must be a string or result object."
-        )
+        raise ValueError("Depression classification must be a string or result object.")
 
     return classification
 
@@ -400,9 +388,7 @@ def _pit_from_record(
     if "pit_row" in record and "pit_col" in record:
         return int(record["pit_row"]), int(record["pit_col"])
 
-    raise ValueError(
-        "Depression record must contain pit or pit_row and pit_col."
-    )
+    raise ValueError("Depression record must contain pit or pit_row and pit_col.")
 
 
 def _spill_from_record(record: Mapping) -> float:
@@ -410,16 +396,12 @@ def _spill_from_record(record: Mapping) -> float:
     Extract and validate a spill elevation.
     """
     if "spill_elevation" not in record:
-        raise ValueError(
-            "Depression record must contain spill_elevation."
-        )
+        raise ValueError("Depression record must contain spill_elevation.")
 
     spill_elevation = float(record["spill_elevation"])
 
     if not np.isfinite(spill_elevation):
-        raise ValueError(
-            "spill_elevation must be finite."
-        )
+        raise ValueError("spill_elevation must be finite.")
 
     return spill_elevation
 
@@ -439,31 +421,19 @@ def _validate_inputs(
         raise ValueError("dem must be a NumPy array.")
 
     if dem.ndim != 2:
-        raise ValueError(
-            "dem must be a two-dimensional array."
-        )
+        raise ValueError("dem must be a two-dimensional array.")
 
     if not isinstance(depression_records, Mapping):
-        raise ValueError(
-            "depression_records must be a mapping."
-        )
+        raise ValueError("depression_records must be a mapping.")
 
     if not isinstance(depression_masks, Mapping):
-        raise ValueError(
-            "depression_masks must be a mapping."
-        )
+        raise ValueError("depression_masks must be a mapping.")
 
     if max_breach_length <= 0:
-        raise ValueError(
-            "max_breach_length must be greater than zero."
-        )
+        raise ValueError("max_breach_length must be greater than zero.")
 
     if not np.isfinite(max_breach_depth) or max_breach_depth <= 0:
-        raise ValueError(
-            "max_breach_depth must be finite and greater than zero."
-        )
+        raise ValueError("max_breach_depth must be finite and greater than zero.")
 
     if connectivity not in (4, 8):
-        raise ValueError(
-            "connectivity must be either 4 or 8."
-        )
+        raise ValueError("connectivity must be either 4 or 8.")

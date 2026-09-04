@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Mayim Tools – CRS Manager
 Utilities for CRS detection, validation, and transformation setup.
@@ -67,11 +66,7 @@ class CRSManager:
         :param target_crs: Target CRS
         :returns: QgsCoordinateTransform ready to use
         """
-        return QgsCoordinateTransform(
-            source_crs,
-            target_crs,
-            QgsProject.instance()
-        )
+        return QgsCoordinateTransform(source_crs, target_crs, QgsProject.instance())
 
     @staticmethod
     def is_geographic(crs: QgsCoordinateReferenceSystem) -> bool:

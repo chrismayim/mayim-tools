@@ -24,9 +24,9 @@ principle as design_rainfall's core.py.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 import xarray as xr
 
@@ -50,12 +50,14 @@ def read_variable_info(path: str | Path) -> list[VariableInfo]:
     infos = []
     with xr.open_dataset(str(path), engine="cfgrib") as ds:
         for name, da in ds.data_vars.items():
-            infos.append(VariableInfo(
-                name=str(name),
-                long_name=str(da.attrs.get("long_name", "")),
-                units=str(da.attrs.get("units", "")),
-                dims=tuple(str(d) for d in da.dims),
-            ))
+            infos.append(
+                VariableInfo(
+                    name=str(name),
+                    long_name=str(da.attrs.get("long_name", "")),
+                    units=str(da.attrs.get("units", "")),
+                    dims=tuple(str(d) for d in da.dims),
+                )
+            )
     return infos
 
 
@@ -93,7 +95,9 @@ def grib_to_csv(
             raise ValueError(f"No data variables found in {input_path}")
         selected = variable or data_variables[0]
         if selected not in dataset.data_vars:
-            raise ValueError(f"Variable {selected!r} not found. Available: {data_variables}")
+            raise ValueError(
+                f"Variable {selected!r} not found. Available: {data_variables}"
+            )
 
         if progress_callback:
             progress_callback(20)

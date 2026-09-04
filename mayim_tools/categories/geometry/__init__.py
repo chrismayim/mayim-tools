@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Mayim Tools – Geometry Category Initialiser
 Automatically registers the Geometry category with the CategoryRegistry.

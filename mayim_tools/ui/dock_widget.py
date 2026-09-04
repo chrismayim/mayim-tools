@@ -1,11 +1,9 @@
-# -*- coding: utf-8 -*-
 """
 Mayim Tools – Dock Widget
 A dockable side panel providing a category browser and quick-access tools.
 """
 
 from qgis.PyQt.QtCore import Qt
-from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import (
     QDockWidget,
     QLabel,
@@ -54,15 +52,13 @@ class MayimDockWidget:
             self.dock = QDockWidget(self.DOCK_TITLE, main_window)
 
             if self.dock is None:
-                MayimLogger.warning(
-                    "Mayim Tools: Failed to create dock widget."
-                )
+                MayimLogger.warning("Mayim Tools: Failed to create dock widget.")
                 return
 
             self.dock.setObjectName("MayimToolsDockWidget")
             self.dock.setAllowedAreas(
-                Qt.DockWidgetArea.LeftDockWidgetArea |
-                Qt.DockWidgetArea.RightDockWidgetArea
+                Qt.DockWidgetArea.LeftDockWidgetArea
+                | Qt.DockWidgetArea.RightDockWidgetArea
             )
 
             # ── Build the inner widget and layout ──
@@ -74,9 +70,7 @@ class MayimDockWidget:
             # ── Header label ──
             header = QLabel("Mayim Tools")
             header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            header.setStyleSheet(
-                "font-weight: bold; font-size: 14px; padding: 6px;"
-            )
+            header.setStyleSheet("font-weight: bold; font-size: 14px; padding: 6px;")
             layout.addWidget(header)
 
             # ── Category & Tool browser tree ──
@@ -92,9 +86,7 @@ class MayimDockWidget:
             # ── Footer label ──
             footer = QLabel("Double-click a tool to open it.")
             footer.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            footer.setStyleSheet(
-                "font-size: 10px; color: grey; padding: 4px;"
-            )
+            footer.setStyleSheet("font-size: 10px; color: grey; padding: 4px;")
             layout.addWidget(footer)
 
             container.setLayout(layout)
@@ -131,9 +123,7 @@ class MayimDockWidget:
                 category_item = QTreeWidgetItem([category.name])
                 category_item.setIcon(0, category.icon)
                 category_item.setToolTip(0, category.description)
-                category_item.setData(
-                    0, Qt.ItemDataRole.UserRole, category
-                )
+                category_item.setData(0, Qt.ItemDataRole.UserRole, category)
 
                 # ── Child nodes for each algorithm ──
                 algorithms = category.get_algorithms()
@@ -141,9 +131,7 @@ class MayimDockWidget:
                     for algorithm in algorithms:
                         tool_item = QTreeWidgetItem([algorithm.displayName()])
                         tool_item.setToolTip(0, algorithm.shortHelpString())
-                        tool_item.setData(
-                            0, Qt.ItemDataRole.UserRole, algorithm
-                        )
+                        tool_item.setData(0, Qt.ItemDataRole.UserRole, algorithm)
                         category_item.addChild(tool_item)
                 else:
                     placeholder = QTreeWidgetItem(["No tools yet..."])
@@ -180,9 +168,7 @@ class MayimDockWidget:
                     MayimLogger.info(f"Opening tool: {alg_id}")
                     processing.execAlgorithmDialog(alg_id)
                 else:
-                    MayimLogger.warning(
-                        "Mayim Tools provider not found in registry."
-                    )
+                    MayimLogger.warning("Mayim Tools provider not found in registry.")
             else:
                 # Top-level category node — toggle expand/collapse
                 item.setExpanded(not item.isExpanded())
@@ -190,8 +176,8 @@ class MayimDockWidget:
         except Exception as e:
             MayimLogger.critical(f"Mayim Tools: Failed to open tool: {e}")
             import traceback
-            traceback.print_exc()
 
+            traceback.print_exc()
 
     def refresh(self) -> None:
         """Refresh the tree widget."""

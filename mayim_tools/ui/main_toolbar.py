@@ -1,11 +1,10 @@
-# -*- coding: utf-8 -*-
 """
 Mayim Tools - Main Toolbar
 Creates and manages the Mayim Tools toolbar in the QGIS main window.
 """
 
 from qgis.PyQt.QtGui import QIcon
-from qgis.PyQt.QtWidgets import QAction, QToolBar
+from qgis.PyQt.QtWidgets import QAction
 
 from mayim_tools.core.logger import MayimLogger
 from mayim_tools.resources_rc import get_icon_path
@@ -25,7 +24,7 @@ class MayimToolbar:
 
         :param iface: QGIS interface instance
         """
-        self.iface   = iface
+        self.iface = iface
         self.toolbar = None
         self.actions = []
 
@@ -34,9 +33,7 @@ class MayimToolbar:
         Create the toolbar and add it to the QGIS main window.
         Called from MayimToolsPlugin.initGui().
         """
-        self.toolbar = self.iface.mainWindow().addToolBar(
-            self.TOOLBAR_NAME
-        )
+        self.toolbar = self.iface.mainWindow().addToolBar(self.TOOLBAR_NAME)
         self.toolbar.setObjectName("MayimToolsToolbar")
         self.toolbar.setToolTip("Mayim Tools")
 
@@ -71,13 +68,12 @@ class MayimToolbar:
                 category.name,
                 self.iface.mainWindow(),
             )
-            action.setToolTip(
-                f"{category.name}\n{category.description}"
-            )
+            action.setToolTip(f"{category.name}\n{category.description}")
 
             def make_handler(cat):
                 def handler():
                     self._open_category(cat)
+
                 return handler
 
             action.triggered.connect(make_handler(category))
@@ -91,15 +87,15 @@ class MayimToolbar:
         """
         try:
             import processing
+
             algorithms = category.get_algorithms()
             if algorithms:
                 alg_id = f"mayimtools:{algorithms[0].name()}"
                 processing.execAlgorithmDialog(alg_id)
-                MayimLogger.info(
-                    f"Opened tool: {algorithms[0].displayName()}"
-                )
+                MayimLogger.info(f"Opened tool: {algorithms[0].displayName()}")
             else:
                 from qgis.PyQt.QtWidgets import QMessageBox
+
                 QMessageBox.information(
                     self.iface.mainWindow(),
                     "Mayim Tools",
@@ -108,14 +104,13 @@ class MayimToolbar:
                     f"here in a future release.",
                 )
         except Exception as e:
-            MayimLogger.critical(
-                f"Failed to open category {category.name}: {e}"
-            )
+            MayimLogger.critical(f"Failed to open category {category.name}: {e}")
 
     def _show_about(self) -> None:
         """Open the About dialog."""
         try:
             from mayim_tools.ui.about_dialog import AboutDialog
+
             dialog = AboutDialog(self.iface.mainWindow())
             dialog.exec()
         except Exception as e:

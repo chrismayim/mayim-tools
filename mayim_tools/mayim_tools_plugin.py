@@ -43,9 +43,7 @@ class MayimToolsPlugin:
             MayimLogger.info(f"{self.PLUGIN_NAME} GUI initialised.")
 
         except Exception as e:
-            MayimLogger.critical(
-                f"{self.PLUGIN_NAME} failed to initialise GUI: {e}"
-            )
+            MayimLogger.critical(f"{self.PLUGIN_NAME} failed to initialise GUI: {e}")
             raise
 
     def _cleanup(self) -> None:
@@ -55,9 +53,7 @@ class MayimToolsPlugin:
         """
         try:
             if self.provider:
-                QgsApplication.processingRegistry().removeProvider(
-                    self.provider
-                )
+                QgsApplication.processingRegistry().removeProvider(self.provider)
                 self.provider = None
 
             if self.dock_widget:
@@ -65,9 +61,7 @@ class MayimToolsPlugin:
                 self.dock_widget = None
 
         except Exception as e:
-            MayimLogger.warning(
-                f"{self.PLUGIN_NAME} cleanup warning: {e}"
-            )
+            MayimLogger.warning(f"{self.PLUGIN_NAME} cleanup warning: {e}")
 
     def unload(self) -> None:
         """Remove GUI elements and deregister the Processing Provider."""

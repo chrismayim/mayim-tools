@@ -128,9 +128,7 @@ class TestRegionAwareResolution:
         except ValueError as error:
             assert "region_ids" in str(error)
         else:
-            raise AssertionError(
-                "Expected ValueError for mismatched region_ids shape."
-            )
+            raise AssertionError("Expected ValueError for mismatched region_ids shape.")
 
     def test_region_ids_are_optional_for_backward_compatibility(self):
         """The original API remains valid without region IDs."""

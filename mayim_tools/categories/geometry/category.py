@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Mayim Tools – Geometry Category
 Descriptor class for the Geometry tool category.
@@ -31,6 +30,7 @@ class GeometryCategory(BaseCategory):
     @property
     def icon_path(self) -> str:
         from mayim_tools.resources_rc import get_icon_path
+
         return get_icon_path("geometry.png")
 
     def get_algorithms(self) -> list:

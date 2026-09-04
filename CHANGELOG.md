@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to Mayim Tools are documented in this file.
+All notable changes to Mayim Tools are documented here.
 
 ## [0.3.0] - 2026-09-02
 
@@ -14,48 +14,51 @@ All notable changes to Mayim Tools are documented in this file.
 - Added DEM Hydrography Enforcement.
 - Added DEM Conditioning Workflow.
 - Added final conditioned DEM output from the workflow tool.
-- Added automatic loading of the final conditioned DEM into the QGIS project.
-- Added workflow reports and workflow provenance records.
-- Added optional hydrography enforcement in the workflow.
+- Added automatic loading of the final conditioned DEM into QGIS.
+- Added workflow-level reports and provenance records.
+- Added optional hydrography enforcement to the workflow.
 
 #### Rainfall Analysis Tools
 
+- Added the Rainfall Analysis Tools category.
 - Integrated Design Rainfall at Point(s).
 - Integrated Huff Curves from CSV.
-- Added the Rainfall Analysis Tools category.
 - Added rainfall category and algorithm icons.
 
 #### Data Tools
 
-- Integrated Convert GRIB to CSV.
 - Added the Data Tools category.
-- Added GRIB conversion using xarray, cfgrib and eccodes.
-- Added a Data Tools category icon.
+- Integrated Convert GRIB to CSV.
+- Added GRIB conversion using `xarray`, `cfgrib` and `eccodes`.
 
-#### User Experience
+#### User Interface
 
-- Added the Mayim logo to the Processing provider.
+- Added the Mayim Tools provider icon.
 - Added Mayim icons to Processing algorithms.
 - Added category icons to the Mayim Tools panel.
-- Added version metadata for version 0.3.0.
 
 ### Changed
 
+- Updated the plugin version to `0.3.0`.
 - Expanded the User Manual to cover all current categories and tools.
-- Added parameter guidance, recommended values and known limitations.
+- Added parameter ranges and recommended starting values.
 - Expanded output naming conventions and glossary content.
-- Updated the DEM conditioning workflow documentation.
-- Updated deployment and dependency guidance.
+- Added documentation for reports and provenance records.
+- Updated installation and dependency guidance.
 
 ### Known Limitations
 
 - Native flow-direction and flow-accumulation tools are not yet available.
-- Hydrography enforcement remains pending full testing with a suitable aligned
-  flow-evidence raster.
-- Huff Curves requires continued live-QGIS execution validation.
-- Convert GRIB to CSV requires real ERA5-scale testing.
-- The in-process compatibility of eccodes with QGIS native libraries remains
-  an open validation item.
+- Hydrography enforcement cannot be fully validated until a suitable aligned
+  flow-evidence raster is available.
+- Area-scaled hydrography burn depth is not yet connected.
+- Huff Curves requires further execution testing inside a live QGIS session.
+- Convert GRIB to CSV requires testing against representative real-world
+  ERA5-scale files.
+- The interaction between `eccodes` native libraries and QGIS native
+  libraries remains a specific compatibility risk.
+- Design Rainfall coverage is limited to the bundled rainfall dataset.
+- Design Rainfall mid-duration coefficient drift remains an open validation item.
 
 ## [0.2.0] - 2026-08-22
 

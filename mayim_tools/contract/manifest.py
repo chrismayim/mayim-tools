@@ -129,24 +129,24 @@ class MayimManifest:
     """
 
     # ── Required fields ────────────────────────────────────────────── #
-    raster_path:           str
-    crs:                   str
-    cell_size:             float
-    vertical_accuracy:     float
-    nodata:                float
-    provenance_id:         str
-    produced_by:           str
+    raster_path: str
+    crs: str
+    cell_size: float
+    vertical_accuracy: float
+    nodata: float
+    provenance_id: str
+    produced_by: str
 
     # ── Optional fields ────────────────────────────────────────────── #
-    parent_provenance_id:  str | None        = None
-    audit_log_path:        str | None        = None
-    stage:                 int | None        = None
-    warnings:              list | None       = None
-    dem_source_type:       str | None        = None
-    width:                 int | None        = None
-    height:                int | None        = None
-    bounds:                dict | None       = None
-    dtype:                 str | None        = None
+    parent_provenance_id: str | None = None
+    audit_log_path: str | None = None
+    stage: int | None = None
+    warnings: list | None = None
+    dem_source_type: str | None = None
+    width: int | None = None
+    height: int | None = None
+    bounds: dict | None = None
+    dtype: str | None = None
 
     # ── Core contract methods ──────────────────────────────────────── #
 
@@ -398,22 +398,17 @@ class MayimManifest:
             errors.append("raster_path is empty or None.")
 
         if not Path(self.raster_path).exists():
-            errors.append(
-                f"raster_path does not exist: {self.raster_path}"
-            )
+            errors.append(f"raster_path does not exist: {self.raster_path}")
 
         if not self.crs:
             errors.append("crs is empty or None.")
 
         if self.cell_size <= 0:
-            errors.append(
-                f"cell_size must be positive, got: {self.cell_size}"
-            )
+            errors.append(f"cell_size must be positive, got: {self.cell_size}")
 
         if self.vertical_accuracy <= 0:
             errors.append(
-                f"vertical_accuracy must be positive, "
-                f"got: {self.vertical_accuracy}"
+                f"vertical_accuracy must be positive, " f"got: {self.vertical_accuracy}"
             )
 
         if not self.provenance_id:
@@ -460,4 +455,3 @@ class MayimManifest:
 
     def __str__(self) -> str:
         return self.summary()
-

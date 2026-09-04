@@ -35,7 +35,6 @@ class TestDetectFlats:
         assert not np.any(higher_boundary)
         assert not np.any(lower_boundary)
 
-
     def test_flat_interior_is_detected(self):
         """A flat interior surrounded by higher and lower terrain
         is correctly identified."""

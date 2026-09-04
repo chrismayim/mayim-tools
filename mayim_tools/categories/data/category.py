@@ -60,7 +60,5 @@ class DataCategory(BaseCategory):
         except Exception as error:  # noqa: BLE001
             from mayim_tools.core.logger import MayimLogger
 
-            MayimLogger.critical(
-                f"Data Tools: Failed to load algorithms: {error}"
-            )
+            MayimLogger.critical(f"Data Tools: Failed to load algorithms: {error}")
             return []

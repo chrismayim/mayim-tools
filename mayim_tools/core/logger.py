@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Mayim Tools – Centralised Logger
 Wraps QgsMessageLog for consistent, tagged logging across all modules.
@@ -30,4 +29,6 @@ class MayimLogger:
     @staticmethod
     def success(message: str) -> None:
         """Log a success message (displayed as Info level)."""
-        QgsMessageLog.logMessage(f"✅ {message}", MayimLogger.TAG, Qgis.MessageLevel.Info)
+        QgsMessageLog.logMessage(
+            f"✅ {message}", MayimLogger.TAG, Qgis.MessageLevel.Info
+        )

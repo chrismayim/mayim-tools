@@ -50,24 +50,34 @@ def build_huff_curves(
     is to always record what was scanned and what was picked)."""
     warnings: list[str] = []
     metadata: dict = {
-        "timestamp_col": timestamp_col, "depth_col": depth_col,
-        "timestamp_semantics": timestamp_semantics, "wet_threshold_mm": wet_threshold_mm,
-        "event_depth_threshold_mm": event_depth_threshold_mm, "quality_mode": quality_mode,
-        "normalized_step": normalized_step, "percentiles": percentiles,
+        "timestamp_col": timestamp_col,
+        "depth_col": depth_col,
+        "timestamp_semantics": timestamp_semantics,
+        "wet_threshold_mm": wet_threshold_mm,
+        "event_depth_threshold_mm": event_depth_threshold_mm,
+        "quality_mode": quality_mode,
+        "normalized_step": normalized_step,
+        "percentiles": percentiles,
         "quantile_method": "median_unbiased (Hyndman-Fan type 8)",
         "processing_timestamp": str(pd.Timestamp.now()),
     }
 
-    parsed, val_diag = parse_and_validate(df, timestamp_col, depth_col, timestamp_format)
+    parsed, val_diag = parse_and_validate(
+        df, timestamp_col, depth_col, timestamp_format
+    )
     warnings += val_diag["warnings"]
     metadata["n_rows_in"] = val_diag["n_rows_in"]
     metadata["n_rows_valid"] = val_diag["n_rows_valid"]
     metadata["timestamp_range"] = val_diag["timestamp_range"]
 
     if len(parsed) < 2:
-        raise ValueError("Fewer than 2 valid rows after parsing - cannot determine a time interval.")
+        raise ValueError(
+            "Fewer than 2 valid rows after parsing - cannot determine a time interval."
+        )
 
-    intervals, nominal_interval_s = normalize_interval_representation(parsed, timestamp_semantics)
+    intervals, nominal_interval_s = normalize_interval_representation(
+        parsed, timestamp_semantics
+    )
     metadata["nominal_interval_s"] = nominal_interval_s
     metadata["nominal_interval_label"] = _format_duration(nominal_interval_s)
 
@@ -82,17 +92,29 @@ def build_huff_curves(
         mit_s = mit_hours * 3600.0
     metadata["mit_hours_used"] = round(mit_s / 3600, 3)
 
-    raw_events = delineate_events(intervals, mit_s=mit_s, wet_threshold_mm=wet_threshold_mm)
+    raw_events = delineate_events(
+        intervals, mit_s=mit_s, wet_threshold_mm=wet_threshold_mm
+    )
     if not raw_events:
-        warnings.append("No events were delineated - check the wet threshold and input data.")
+        warnings.append(
+            "No events were delineated - check the wet threshold and input data."
+        )
 
-    min_duration_s = min_duration_hours * 3600 if min_duration_hours is not None else None
-    events = screen_events(raw_events, depth_threshold_mm=event_depth_threshold_mm,
-                            min_duration_s=min_duration_s, quality_mode=quality_mode)
+    min_duration_s = (
+        min_duration_hours * 3600 if min_duration_hours is not None else None
+    )
+    events = screen_events(
+        raw_events,
+        depth_threshold_mm=event_depth_threshold_mm,
+        min_duration_s=min_duration_s,
+        quality_mode=quality_mode,
+    )
 
     n_excluded = sum(1 for e in events if e.excluded)
     if n_excluded:
-        warnings.append(f"{n_excluded} of {len(events)} events excluded by screening (see event inventory).")
+        warnings.append(
+            f"{n_excluded} of {len(events)} events excluded by screening (see event inventory)."
+        )
 
     for e in events:
         classify_quartile(e, intervals)
@@ -128,9 +150,13 @@ def build_huff_curves(
 
     tied_count = sum(1 for c in curves if c.quartile is None)
     if tied_count:
-        warnings.append(f"{tied_count} event curve(s) have a tied/ambiguous quartile and are excluded from percentile curve sets.")
+        warnings.append(
+            f"{tied_count} event curve(s) have a tied/ambiguous quartile and are excluded from percentile curve sets."
+        )
 
-    curve_sets = summarize_curves(curves, grid, percentiles=percentiles, min_sample=min_sample)
+    curve_sets = summarize_curves(
+        curves, grid, percentiles=percentiles, min_sample=min_sample
+    )
     for cs in curve_sets:
         if cs.insufficient_sample:
             warnings.append(
@@ -149,8 +175,12 @@ def build_huff_curves(
     }
 
     return HuffAnalysis(
-        events=events, curves=curves, curve_sets=curve_sets,
-        diagnostics=diagnostics, warnings=warnings, metadata=metadata,
+        events=events,
+        curves=curves,
+        curve_sets=curve_sets,
+        diagnostics=diagnostics,
+        warnings=warnings,
+        metadata=metadata,
     )
 
 

@@ -131,27 +131,27 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
 
     TOOL_VERSION = "dem-depression-analysis-0.2.0"
 
-    def name(self) -> str:  # noqa: N802
+    def name(self) -> str:
         """Return the unique Processing algorithm identifier."""
         return "demdepressionanalysis"
 
-    def displayName(self) -> str:  # noqa: N802
+    def displayName(self) -> str:
         """Return the human-readable algorithm name."""
         return "DEM Depression Analysis"
 
-    def group(self) -> str:  # noqa: N802
+    def group(self) -> str:
         """Return the Processing Toolbox group name."""
         return "Hydrology Tools"
 
-    def groupId(self) -> str:  # noqa: N802
+    def groupId(self) -> str:
         """Return the unique Processing Toolbox group identifier."""
         return "hydrology"
 
-    def createInstance(self) -> DEMDepressionAnalysis:  # noqa: N802
+    def createInstance(self) -> DEMDepressionAnalysis:
         """Return a new instance of this algorithm."""
         return DEMDepressionAnalysis()
 
-    def shortHelpString(self) -> str:  # noqa: N802
+    def shortHelpString(self) -> str:
         """Return the Processing Toolbox help text."""
         return (
             "<b>DEM Depression Analysis</b><br><br>"
@@ -171,7 +171,7 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
             "or RichDEM runtime dependency."
         )
 
-    def helpUrl(self) -> str:  # noqa: N802
+    def helpUrl(self) -> str:
         """Return the project documentation URL."""
         return "https://github.com/chrismayim/mayim-tools"
 
@@ -190,7 +190,7 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
             "stage-4",
         ]
 
-    def initAlgorithm(self, config=None) -> None:  # noqa: N802
+    def initAlgorithm(self, config=None) -> None:
         """Define Processing Toolbox parameters and outputs."""
         self.addParameter(
             QgsProcessingParameterRasterLayer(
@@ -318,7 +318,7 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
             )
         )
 
-    def processAlgorithm(  # noqa: N802
+    def processAlgorithm(
         self,
         parameters: dict,
         context: QgsProcessingContext,
@@ -351,9 +351,7 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
         )
 
         if not ValidationUtils.is_valid_raster_layer(dem_layer):
-            raise QgsProcessingException(
-                "The input DEM is missing or invalid."
-            )
+            raise QgsProcessingException("The input DEM is missing or invalid.")
 
         manifest_path = self.parameterAsString(
             parameters,
@@ -401,9 +399,8 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
 
         if not output_folder or output_folder == "TEMPORARY_OUTPUT":
             import tempfile
-            output_folder = tempfile.mkdtemp(
-                prefix="mayim_depression_"
-            )
+
+            output_folder = tempfile.mkdtemp(prefix="mayim_depression_")
             self.log(
                 f"Using temporary folder: {output_folder}",
                 feedback,
@@ -415,13 +412,13 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
         dem_stem = Path(dem_layer.source()).stem
 
         paths = {
-            "depression_ids":   output_dir / f"{dem_stem}_depression_ids.tif",
-            "classification":   output_dir / f"{dem_stem}_depression_classification.tif",
-            "inventory":        output_dir / f"{dem_stem}_depression_inventory.json",
-            "hierarchy":        output_dir / f"{dem_stem}_depression_hierarchy.json",
-            "report":           output_dir / f"{dem_stem}_depression_report.txt",
-            "provenance":       output_dir / f"{dem_stem}_depression_provenance.json",
-            "manifest":         output_dir / f"{dem_stem}_depression_analysis.manifest.json",
+            "depression_ids": output_dir / f"{dem_stem}_depression_ids.tif",
+            "classification": output_dir / f"{dem_stem}_depression_classification.tif",
+            "inventory": output_dir / f"{dem_stem}_depression_inventory.json",
+            "hierarchy": output_dir / f"{dem_stem}_depression_hierarchy.json",
+            "report": output_dir / f"{dem_stem}_depression_report.txt",
+            "provenance": output_dir / f"{dem_stem}_depression_provenance.json",
+            "manifest": output_dir / f"{dem_stem}_depression_analysis.manifest.json",
         }
 
         # ── Read input manifest if supplied ───────────────────────── #
@@ -434,20 +431,17 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
                 errors = input_manifest.validate()
                 if errors:
                     self.log_warning(
-                        f"Input manifest validation issues: "
-                        f"{'; '.join(errors)}",
+                        f"Input manifest validation issues: " f"{'; '.join(errors)}",
                         feedback,
                     )
                 else:
                     self.log(
-                        f"Input manifest loaded: "
-                        f"{input_manifest.summary()}",
+                        f"Input manifest loaded: " f"{input_manifest.summary()}",
                         feedback,
                     )
             except Exception as manifest_error:
                 self.log_warning(
-                    f"Could not read input manifest: "
-                    f"{manifest_error}",
+                    f"Could not read input manifest: " f"{manifest_error}",
                     feedback,
                 )
 
@@ -456,30 +450,24 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
         if vertical_accuracy_override > 0:
             vertical_accuracy = float(vertical_accuracy_override)
             va_source = "user override"
-        elif (
-            input_manifest is not None
-            and input_manifest.vertical_accuracy > 0
-        ):
-            vertical_accuracy = float(
-                input_manifest.vertical_accuracy
-            )
+        elif input_manifest is not None and input_manifest.vertical_accuracy > 0:
+            vertical_accuracy = float(input_manifest.vertical_accuracy)
             va_source = "input manifest"
         else:
             vertical_accuracy = 5.0
             va_source = "conservative default (unknown source)"
 
         self.log(
-            f"Vertical accuracy: {vertical_accuracy:.3f} m "
-            f"({va_source})",
+            f"Vertical accuracy: {vertical_accuracy:.3f} m " f"({va_source})",
             feedback,
         )
 
         # ── Initialise provenance ─────────────────────────────────── #
 
         provenance = {
-            "tool":             "DEM Depression Analysis",
-            "algorithm":        "Mayim native Priority-Flood-style "
-                                "detection and classification",
+            "tool": "DEM Depression Analysis",
+            "algorithm": "Mayim native Priority-Flood-style "
+            "detection and classification",
             "algorithm_ref": (
                 "Barnes, R., Lehman, C., and Mulla, D. (2014). "
                 "Priority-flood. Computers and Geosciences, 62, "
@@ -493,20 +481,20 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
                 "Original Mayim implementation. No WhiteboxTools or "
                 "RichDEM runtime dependency."
             ),
-            "version":          self.TOOL_VERSION,
-            "stages":           [3, 4],
-            "timestamp":        datetime.now().isoformat(),
-            "input_dem":        dem_layer.source(),
-            "input_manifest":   manifest_path or None,
+            "version": self.TOOL_VERSION,
+            "stages": [3, 4],
+            "timestamp": datetime.now().isoformat(),
+            "input_dem": dem_layer.source(),
+            "input_manifest": manifest_path or None,
             "parameters": {
-                "vertical_accuracy":          vertical_accuracy,
-                "vertical_accuracy_source":   va_source,
-                "classification_threshold":   classification_threshold,
-                "review_margin":              review_margin,
+                "vertical_accuracy": vertical_accuracy,
+                "vertical_accuracy_source": va_source,
+                "classification_threshold": classification_threshold,
+                "review_margin": review_margin,
             },
-            "outputs":          {k: str(v) for k, v in paths.items()},
-            "statistics":       {},
-            "warnings":         [],
+            "outputs": {k: str(v) for k, v in paths.items()},
+            "statistics": {},
+            "warnings": [],
         }
 
         # ── Log run header ────────────────────────────────────────── #
@@ -538,17 +526,15 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
                         "The input raster contains no valid bands."
                     )
 
-                profile  = source.profile.copy()
-                dem      = source.read(1).astype(np.float64)
-                nodata   = source.nodata if source.nodata is not None else -9999.0
+                profile = source.profile.copy()
+                dem = source.read(1).astype(np.float64)
+                nodata = source.nodata if source.nodata is not None else -9999.0
                 height, width = dem.shape
-                res_x    = abs(float(source.transform.a))
-                res_y    = abs(float(source.transform.e))
+                res_x = abs(float(source.transform.a))
+                res_y = abs(float(source.transform.e))
                 cell_size = (res_x + res_y) / 2.0
                 crs_string = (
-                    source.crs.to_string()
-                    if source.crs is not None
-                    else "Unknown"
+                    source.crs.to_string() if source.crs is not None else "Unknown"
                 )
 
                 if source.crs is None:
@@ -562,14 +548,14 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
 
                 provenance["statistics"].update(
                     {
-                        "crs":         crs_string,
+                        "crs": crs_string,
                         "resolution_x": res_x,
                         "resolution_y": res_y,
-                        "cell_size":   cell_size,
-                        "width":       width,
-                        "height":      height,
-                        "nodata":      str(nodata),
-                        "dtype":       str(source.dtypes[0]),
+                        "cell_size": cell_size,
+                        "width": width,
+                        "height": height,
+                        "nodata": str(nodata),
+                        "dtype": str(source.dtypes[0]),
                     }
                 )
 
@@ -588,9 +574,7 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
             MayimLogger.critical(
                 f"DEM Depression Analysis: failed to read DEM: {error}"
             )
-            raise QgsProcessingException(
-                f"Failed to read DEM: {error}"
-            ) from error
+            raise QgsProcessingException(f"Failed to read DEM: {error}") from error
 
         feedback.setProgress(10)
 
@@ -660,12 +644,8 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
                 feedback,
             )
 
-            provenance["statistics"]["hierarchy_depth"] = (
-                hierarchy.max_depth
-            )
-            provenance["statistics"]["root_depressions"] = (
-                hierarchy.root_count
-            )
+            provenance["statistics"]["hierarchy_depth"] = hierarchy.max_depth
+            provenance["statistics"]["root_depressions"] = hierarchy.root_count
 
             feedback.setProgress(45)
 
@@ -675,9 +655,7 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
         except QgsProcessingException:
             raise
         except Exception as error:
-            MayimLogger.critical(
-                f"Stage 3 detection failed: {error}"
-            )
+            MayimLogger.critical(f"Stage 3 detection failed: {error}")
             raise QgsProcessingException(
                 f"Stage 3 depression delineation failed: {error}"
             ) from error
@@ -711,7 +689,7 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
 
             thresholds = {
                 "threshold": classification_threshold,
-                "margin":    review_margin,
+                "margin": review_margin,
             }
 
             results = classify_depressions(
@@ -721,18 +699,15 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
             )
 
             artifact_count = sum(
-                1 for r in results.values()
-                if r.classification == ARTIFACT
+                1 for r in results.values() if r.classification == ARTIFACT
             )
 
             real_count = sum(
-                1 for r in results.values()
-                if r.classification == REAL_FEATURE
+                1 for r in results.values() if r.classification == REAL_FEATURE
             )
 
             review_count = sum(
-                1 for r in results.values()
-                if r.classification == REVIEW_REQUIRED
+                1 for r in results.values() if r.classification == REVIEW_REQUIRED
             )
 
             self.log(
@@ -763,9 +738,9 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
 
             provenance["statistics"].update(
                 {
-                    "artifact_count":  artifact_count,
-                    "real_count":      real_count,
-                    "review_count":    review_count,
+                    "artifact_count": artifact_count,
+                    "real_count": real_count,
+                    "review_count": review_count,
                 }
             )
 
@@ -777,9 +752,7 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
         except QgsProcessingException:
             raise
         except Exception as error:
-            MayimLogger.critical(
-                f"Stage 4 classification failed: {error}"
-            )
+            MayimLogger.critical(f"Stage 4 classification failed: {error}")
             raise QgsProcessingException(
                 f"Stage 4 depression classification failed: {error}"
             ) from error
@@ -812,8 +785,7 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
                 dst.write(depression_ids.astype(np.int32), 1)
 
             self.log(
-                f"Depression ID raster: "
-                f"{paths['depression_ids'].name}",
+                f"Depression ID raster: " f"{paths['depression_ids'].name}",
                 feedback,
             )
 
@@ -826,8 +798,8 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
             #   255 = NoData
 
             _classification_codes = {
-                ARTIFACT:        1,
-                REAL_FEATURE:    2,
+                ARTIFACT: 1,
+                REAL_FEATURE: 2,
                 REVIEW_REQUIRED: 3,
             }
 
@@ -866,8 +838,7 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
                 dst.write(classification_array, 1)
 
             self.log(
-                f"Classification raster: "
-                f"{paths['classification'].name}",
+                f"Classification raster: " f"{paths['classification'].name}",
                 feedback,
             )
 
@@ -876,9 +847,7 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
         except QgsProcessingException:
             raise
         except Exception as error:
-            MayimLogger.critical(
-                f"Failed to write raster outputs: {error}"
-            )
+            MayimLogger.critical(f"Failed to write raster outputs: {error}")
             raise QgsProcessingException(
                 f"Failed to write raster outputs: {error}"
             ) from error
@@ -896,9 +865,7 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
                 str(did): {
                     "features": features.get(did, {}),
                     "classification": (
-                        results[did].to_dict()
-                        if did in results
-                        else None
+                        results[did].to_dict() if did in results else None
                     ),
                 }
                 for did in sorted(features)
@@ -912,8 +879,7 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
                 json.dump(inventory, file, indent=2, default=str)
 
             self.log(
-                f"Depression inventory: "
-                f"{paths['inventory'].name}",
+                f"Depression inventory: " f"{paths['inventory'].name}",
                 feedback,
             )
 
@@ -932,8 +898,7 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
                 )
 
             self.log(
-                f"Depression hierarchy: "
-                f"{paths['hierarchy'].name}",
+                f"Depression hierarchy: " f"{paths['hierarchy'].name}",
                 feedback,
             )
 
@@ -942,9 +907,7 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
         except QgsProcessingException:
             raise
         except Exception as error:
-            MayimLogger.critical(
-                f"Failed to write JSON outputs: {error}"
-            )
+            MayimLogger.critical(f"Failed to write JSON outputs: {error}")
             raise QgsProcessingException(
                 f"Failed to write JSON outputs: {error}"
             ) from error
@@ -997,9 +960,7 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
                     stage=4,
                     audit_log_path=str(paths["provenance"]),
                     warnings=(
-                        provenance["warnings"]
-                        if provenance["warnings"]
-                        else None
+                        provenance["warnings"] if provenance["warnings"] else None
                     ),
                     width=width,
                     height=height,
@@ -1015,9 +976,7 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
                     stage=4,
                     audit_log_path=str(paths["provenance"]),
                     warnings=(
-                        provenance["warnings"]
-                        if provenance["warnings"]
-                        else None
+                        provenance["warnings"] if provenance["warnings"] else None
                     ),
                     width=width,
                     height=height,
@@ -1053,15 +1012,13 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
         feedback.setProgress(98)
 
         report_path = Path(paths["report"]).resolve()
-        report_uri  = report_path.as_uri()
+        report_uri = report_path.as_uri()
 
         self.log(
             f"Depression analysis report: {report_path}",
             feedback,
         )
-        feedback.pushInfo(
-            f"Open report: {report_uri}"
-        )
+        feedback.pushInfo(f"Open report: {report_uri}")
 
         self.log("", feedback)
         self.log("=" * 60, feedback)
@@ -1073,11 +1030,11 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
         return {
             self.OUTPUT_DEPRESSION_IDS: str(paths["depression_ids"]),
             self.OUTPUT_CLASSIFICATION: str(paths["classification"]),
-            self.OUTPUT_INVENTORY:      str(paths["inventory"]),
-            self.OUTPUT_HIERARCHY:      str(paths["hierarchy"]),
-            self.OUTPUT_REPORT:         str(paths["report"]),
-            self.OUTPUT_PROVENANCE:     str(paths["provenance"]),
-            self.OUTPUT_MANIFEST:       str(paths["manifest"]),
+            self.OUTPUT_INVENTORY: str(paths["inventory"]),
+            self.OUTPUT_HIERARCHY: str(paths["hierarchy"]),
+            self.OUTPUT_REPORT: str(paths["report"]),
+            self.OUTPUT_PROVENANCE: str(paths["provenance"]),
+            self.OUTPUT_MANIFEST: str(paths["manifest"]),
         }
 
     # ── Private helper methods ────────────────────────────────────── #
@@ -1106,7 +1063,7 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
             from qgis.core import QgsProject, QgsRasterLayer
 
             project = QgsProject.instance()
-            loaded  = 0
+            loaded = 0
 
             def load_raster(
                 file_path: Path,
@@ -1173,9 +1130,9 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
         :param hierarchy: Depression hierarchy instance.
         :param feedback: QGIS processing feedback object.
         """
-        stats  = provenance.get("statistics", {})
+        stats = provenance.get("statistics", {})
         params = provenance.get("parameters", {})
-        warns  = provenance.get("warnings",   [])
+        warns = provenance.get("warnings", [])
 
         lines = []
         a = lines.append
@@ -1204,10 +1161,7 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
             f"Classification threshold: "
             f"{params.get('classification_threshold', 0.60)}"
         )
-        a(
-            f"Review margin          : "
-            f"{params.get('review_margin', 0.15)}"
-        )
+        a(f"Review margin          : " f"{params.get('review_margin', 0.15)}")
         a("")
 
         a("-" * 70)
@@ -1226,35 +1180,17 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
         a("-" * 70)
         a("STAGE 3 - DEPRESSION DELINEATION")
         a("-" * 70)
-        a(
-            f"Depressions detected   : "
-            f"{stats.get('depression_count', 0)}"
-        )
-        a(
-            f"Root depressions       : "
-            f"{stats.get('root_depressions', 0)}"
-        )
-        a(
-            f"Hierarchy depth        : "
-            f"{stats.get('hierarchy_depth', 0)}"
-        )
+        a(f"Depressions detected   : " f"{stats.get('depression_count', 0)}")
+        a(f"Root depressions       : " f"{stats.get('root_depressions', 0)}")
+        a(f"Hierarchy depth        : " f"{stats.get('hierarchy_depth', 0)}")
         a("")
 
         a("-" * 70)
         a("STAGE 4 - DEPRESSION CLASSIFICATION")
         a("-" * 70)
-        a(
-            f"ARTIFACT               : "
-            f"{stats.get('artifact_count', 0)}"
-        )
-        a(
-            f"REAL_FEATURE           : "
-            f"{stats.get('real_count', 0)}"
-        )
-        a(
-            f"REVIEW_REQUIRED        : "
-            f"{stats.get('review_count', 0)}"
-        )
+        a(f"ARTIFACT               : " f"{stats.get('artifact_count', 0)}")
+        a(f"REAL_FEATURE           : " f"{stats.get('real_count', 0)}")
+        a(f"REVIEW_REQUIRED        : " f"{stats.get('review_count', 0)}")
         a("")
 
         a("-" * 70)
@@ -1273,20 +1209,14 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
 
         if features:
             for did in sorted(features):
-                feat   = features[did]
+                feat = features[did]
                 result = results.get(did)
 
                 classification_label = (
-                    result.classification
-                    if result is not None
-                    else "Unknown"
+                    result.classification if result is not None else "Unknown"
                 )
 
-                score = (
-                    f"{result.artifact_score:.3f}"
-                    if result is not None
-                    else "N/A"
-                )
+                score = f"{result.artifact_score:.3f}" if result is not None else "N/A"
 
                 a(
                     f"  Depression {did:>4} : "
@@ -1306,7 +1236,7 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
             a("-" * 70)
             for i, warning in enumerate(warns, 1):
                 words = warning.split()
-                line  = f"  {i}. "
+                line = f"  {i}. "
                 for word in words:
                     if len(line) + len(word) + 1 > 68:
                         a(line)
@@ -1341,10 +1271,7 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
                 f"  {review_count} depression(s) require analyst review "
                 "before Stage 5 enforcement."
             )
-            a(
-                "  Inspect the classification raster and inventory "
-                "before proceeding."
-            )
+            a("  Inspect the classification raster and inventory " "before proceeding.")
 
         if artifact_count > 0:
             a(
@@ -1359,9 +1286,7 @@ class DEMDepressionAnalysis(MayimBaseAlgorithm):
             )
 
         a("")
-        a(
-            "  Next tool: DEM Hydrological Filling (Stage 5)"
-        )
+        a("  Next tool: DEM Hydrological Filling (Stage 5)")
         a("")
 
         a("-" * 70)

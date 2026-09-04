@@ -122,9 +122,7 @@ def calculate_depression_features(
 
     depression_values = np.unique(depression_ids)
     depression_values = [
-        int(depression_id)
-        for depression_id in depression_values
-        if depression_id > 0
+        int(depression_id) for depression_id in depression_values if depression_id > 0
     ]
 
     for depression_id in sorted(depression_values):
@@ -240,19 +238,13 @@ def _validate_inputs(
         )
 
     if depression_ids.ndim != 2:
-        raise ValueError(
-            "depression_ids must be a two-dimensional array."
-        )
+        raise ValueError("depression_ids must be a two-dimensional array.")
 
     if dem.shape != depression_ids.shape:
-        raise ValueError(
-            "DEM and depression_ids must have identical shapes."
-        )
+        raise ValueError("DEM and depression_ids must have identical shapes.")
 
     if cell_size <= 0:
-        raise ValueError(
-            f"cell_size must be positive; received {cell_size}."
-        )
+        raise ValueError(f"cell_size must be positive; received {cell_size}.")
 
 
 def _count_perimeter_cells(
@@ -279,10 +271,7 @@ def _count_perimeter_cells(
             neighbour_row = row + row_offset
             neighbour_col = col + col_offset
 
-            outside = not (
-                0 <= neighbour_row < height
-                and 0 <= neighbour_col < width
-            )
+            outside = not (0 <= neighbour_row < height and 0 <= neighbour_col < width)
 
             if outside:
                 perimeter += 1
@@ -329,9 +318,6 @@ def _calculate_compactness(
     if area_cells <= 0 or perimeter_cells <= 0:
         return 0.0
 
-    compactness = (
-        4.0 * float(area_cells)
-        / float(perimeter_cells**2)
-    )
+    compactness = 4.0 * float(area_cells) / float(perimeter_cells**2)
 
     return float(np.clip(compactness, 0.0, 1.0))

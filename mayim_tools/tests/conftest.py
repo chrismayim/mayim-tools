@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Mayim Tools – pytest Configuration
 Shared fixtures and setup for all Mayim Tools tests.
@@ -14,7 +13,6 @@ def qgis_app():
     pytest-qgis handles this automatically — this fixture is here
     for explicitness and future customisation.
     """
-    pass
 
 
 @pytest.fixture
@@ -37,13 +35,17 @@ def sample_vector_layer(tmp_path):
     # Add a simple square polygon feature
     feature = QgsFeature()
     feature.setGeometry(
-        QgsGeometry.fromPolygonXY([[
-            QgsPointXY(18.0, -34.0),
-            QgsPointXY(19.0, -34.0),
-            QgsPointXY(19.0, -33.0),
-            QgsPointXY(18.0, -33.0),
-            QgsPointXY(18.0, -34.0),
-        ]])
+        QgsGeometry.fromPolygonXY(
+            [
+                [
+                    QgsPointXY(18.0, -34.0),
+                    QgsPointXY(19.0, -34.0),
+                    QgsPointXY(19.0, -33.0),
+                    QgsPointXY(18.0, -33.0),
+                    QgsPointXY(18.0, -34.0),
+                ]
+            ]
+        )
     )
     layer.dataProvider().addFeature(feature)
     layer.updateExtents()

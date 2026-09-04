@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Mayim Tools – Geometry Utilities
 Shared helpers for geometry validation, transformation, and inspection.
@@ -57,9 +56,7 @@ class GeometryUtils:
         :returns: Reprojected QgsGeometry
         """
         transform = QgsCoordinateTransform(
-            source_crs,
-            target_crs,
-            QgsProject.instance()
+            source_crs, target_crs, QgsProject.instance()
         )
         geometry.transform(transform)
         return geometry

@@ -67,9 +67,7 @@ class TestValidateHydrography:
 
     def test_invalid_geometry_is_invalid(self):
         """An invalid geometry is reported."""
-        invalid_line = LineString(
-            [(0.0, 0.0), (0.0, 0.0)]
-        )
+        invalid_line = LineString([(0.0, 0.0), (0.0, 0.0)])
 
         assert invalid_line.is_valid is False
 
@@ -82,10 +80,7 @@ class TestValidateHydrography:
 
         assert result["valid"] is False
         assert result["invalid_geometry_count"] == 1
-        assert any(
-            "invalid" in error.lower()
-            for error in result["errors"]
-        )
+        assert any("invalid" in error.lower() for error in result["errors"])
 
     def test_non_line_geometry_is_invalid(self):
         """Point geometry is rejected."""
@@ -175,10 +170,7 @@ class TestValidateHydrography:
         )
 
         assert result["valid"] is False
-        assert any(
-            "Hydrography CRS" in error
-            for error in result["errors"]
-        )
+        assert any("Hydrography CRS" in error for error in result["errors"])
 
     def test_object_bounds_are_supported(self):
         """Bounds objects with named attributes are supported."""
@@ -214,10 +206,7 @@ class TestValidateHydrography:
         )
 
         assert result["valid"] is False
-        assert any(
-            "bounds" in error.lower()
-            for error in result["errors"]
-        )
+        assert any("bounds" in error.lower() for error in result["errors"])
 
     def test_reversed_bounds_are_invalid(self):
         """Bounds with inverted coordinates are rejected."""
@@ -231,10 +220,7 @@ class TestValidateHydrography:
         )
 
         assert result["valid"] is False
-        assert any(
-            "bounds" in error.lower()
-            for error in result["errors"]
-        )
+        assert any("bounds" in error.lower() for error in result["errors"])
 
     def test_non_iterable_geometries_are_invalid(self):
         """A non-iterable geometry input is rejected."""
@@ -261,8 +247,7 @@ class TestValidateHydrography:
         assert result["valid"] is False
         assert result["geometry_count"] == 0
         assert any(
-            "no hydrography" in warning.lower()
-            for warning in result["warnings"]
+            "no hydrography" in warning.lower() for warning in result["warnings"]
         )
 
     def test_multipoint_is_rejected_as_non_line_geometry(self):
@@ -342,5 +327,3 @@ class TestValidateHydrography:
             + result["non_line_count"]
             == result["geometry_count"]
         )
-
-

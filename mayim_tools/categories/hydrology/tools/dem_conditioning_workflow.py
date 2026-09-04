@@ -130,22 +130,22 @@ class DEMConditioningWorkflow(MayimBaseAlgorithm):
 
     # ── Algorithm identity ────────────────────────────────────────────────────
 
-    def name(self) -> str:  # noqa: N802
+    def name(self) -> str:
         return "demconditioningworkflow"
 
-    def createInstance(self):  # noqa: N802
+    def createInstance(self):
         return DEMConditioningWorkflow()
 
-    def displayName(self) -> str:  # noqa: N802
+    def displayName(self) -> str:
         return "DEM Conditioning Workflow"
 
-    def group(self) -> str:  # noqa: N802
+    def group(self) -> str:
         return "Hydrology Tools"
 
-    def groupId(self) -> str:  # noqa: N802
+    def groupId(self) -> str:
         return "hydrologytools"
 
-    def shortHelpString(self) -> str:  # noqa: N802
+    def shortHelpString(self) -> str:
         return (
             "DEM Conditioning Workflow — full six-stage pipeline.\n\n"
             "Runs the following stages sequentially:\n"
@@ -247,10 +247,9 @@ class DEMConditioningWorkflow(MayimBaseAlgorithm):
             "  Range: > 0 | Suggested: 2–5 x vertical accuracy"
         )
 
-
     # ── Parameter definition ──────────────────────────────────────────────────
 
-    def initAlgorithm(self, config=None) -> None:  # noqa: N802
+    def initAlgorithm(self, config=None) -> None:
 
         # ── Shared inputs ─────────────────────────────────────────────────────
 
@@ -535,7 +534,7 @@ class DEMConditioningWorkflow(MayimBaseAlgorithm):
 
     # ── Main processing ───────────────────────────────────────────────────────
 
-    def processAlgorithm(  # noqa: N802
+    def processAlgorithm(
         self,
         parameters: dict,
         context: QgsProcessingContext,
@@ -550,9 +549,7 @@ class DEMConditioningWorkflow(MayimBaseAlgorithm):
 
         # ── Resolve shared inputs ─────────────────────────────────────────────
 
-        dem_layer = self.parameterAsRasterLayer(
-            parameters, self.INPUT_DEM, context
-        )
+        dem_layer = self.parameterAsRasterLayer(parameters, self.INPUT_DEM, context)
         if dem_layer is None or not dem_layer.isValid():
             raise QgsProcessingException(
                 "Input DEM is not valid or could not be loaded."
@@ -564,9 +561,7 @@ class DEMConditioningWorkflow(MayimBaseAlgorithm):
         )
 
         output_folder = Path(
-            self.parameterAsString(
-                parameters, self.OUTPUT_FOLDER, context
-            )
+            self.parameterAsString(parameters, self.OUTPUT_FOLDER, context)
         )
         output_folder.mkdir(parents=True, exist_ok=True)
 
@@ -580,18 +575,14 @@ class DEMConditioningWorkflow(MayimBaseAlgorithm):
         # ── Stage 1 — DEM Hydrological Screening ─────────────────────────────
 
         feedback.setProgress(2)
-        feedback.pushInfo(
-            "── Stage 1: DEM Hydrological Screening ──────────────────"
-        )
+        feedback.pushInfo("── Stage 1: DEM Hydrological Screening ──────────────────")
 
         stage1_params = {
             "INPUT_DEM": dem_source,
             "DEM_SOURCE_TYPE": self.parameterAsInt(
                 parameters, self.DEM_SOURCE_TYPE, context
             ),
-            "USER_RMSE": self.parameterAsDouble(
-                parameters, self.USER_RMSE, context
-            ),
+            "USER_RMSE": self.parameterAsDouble(parameters, self.USER_RMSE, context),
             "SMALL_VOID_THRESHOLD": self.parameterAsInt(
                 parameters, self.SMALL_VOID_THRESHOLD, context
             ),
@@ -632,23 +623,17 @@ class DEMConditioningWorkflow(MayimBaseAlgorithm):
             "output_folder": str(output_folder / "stage1_screening"),
         }
 
-        feedback.pushInfo(
-            f"Stage 1 complete. Screened DEM: {screened_dem_path}"
-        )
+        feedback.pushInfo(f"Stage 1 complete. Screened DEM: {screened_dem_path}")
 
         # ── Stage 2 — DEM Hydrological Smoothing ─────────────────────────────
 
         feedback.setProgress(18)
-        feedback.pushInfo(
-            "── Stage 2: DEM Hydrological Smoothing ──────────────────"
-        )
+        feedback.pushInfo("── Stage 2: DEM Hydrological Smoothing ──────────────────")
 
         stage2_params = {
             "INPUT_DEM": screened_dem_path,
             "INPUT_MANIFEST": stage1_manifest,
-            "ITERATIONS": self.parameterAsInt(
-                parameters, self.ITERATIONS, context
-            ),
+            "ITERATIONS": self.parameterAsInt(parameters, self.ITERATIONS, context),
             "DIFFUSION_STRENGTH": self.parameterAsDouble(
                 parameters, self.DIFFUSION_STRENGTH, context
             ),
@@ -685,16 +670,12 @@ class DEMConditioningWorkflow(MayimBaseAlgorithm):
             "output_folder": str(output_folder / "stage2_smoothing"),
         }
 
-        feedback.pushInfo(
-            f"Stage 2 complete. Smoothed DEM: {smoothed_dem_path}"
-        )
+        feedback.pushInfo(f"Stage 2 complete. Smoothed DEM: {smoothed_dem_path}")
 
         # ── Stage 3 — DEM Depression Analysis ────────────────────────────────
 
         feedback.setProgress(34)
-        feedback.pushInfo(
-            "── Stage 3: DEM Depression Analysis ─────────────────────"
-        )
+        feedback.pushInfo("── Stage 3: DEM Depression Analysis ─────────────────────")
 
         stage3_params = {
             "INPUT_DEM": smoothed_dem_path,
@@ -734,16 +715,12 @@ class DEMConditioningWorkflow(MayimBaseAlgorithm):
             "output_folder": str(output_folder / "stage3_depression"),
         }
 
-        feedback.pushInfo(
-            f"Stage 3 complete. Manifest: {depression_manifest_path}"
-        )
+        feedback.pushInfo(f"Stage 3 complete. Manifest: {depression_manifest_path}")
 
         # ── Stage 4 — DEM Hydrological Filling ───────────────────────────────
 
         feedback.setProgress(50)
-        feedback.pushInfo(
-            "── Stage 4: DEM Hydrological Filling ────────────────────"
-        )
+        feedback.pushInfo("── Stage 4: DEM Hydrological Filling ────────────────────")
 
         stage4_params = {
             "INPUT_DEM": smoothed_dem_path,
@@ -755,9 +732,7 @@ class DEMConditioningWorkflow(MayimBaseAlgorithm):
             "MAX_BREACH_DEPTH": self.parameterAsDouble(
                 parameters, self.MAX_BREACH_DEPTH, context
             ),
-            "CONNECTIVITY": self.parameterAsInt(
-                parameters, self.CONNECTIVITY, context
-            ),
+            "CONNECTIVITY": self.parameterAsInt(parameters, self.CONNECTIVITY, context),
             "OUTPUT_FOLDER": str(output_folder / "stage4_filling"),
             "LOAD_PRESERVED_DEM": False,
             "LOAD_READY_DEM": False,
@@ -787,24 +762,18 @@ class DEMConditioningWorkflow(MayimBaseAlgorithm):
             "output_folder": str(output_folder / "stage4_filling"),
         }
 
-        feedback.pushInfo(
-            f"Stage 4 complete. Filled DEM: {filled_dem_path}"
-        )
+        feedback.pushInfo(f"Stage 4 complete. Filled DEM: {filled_dem_path}")
 
         # ── Stage 5 — DEM Gradient Resolution ────────────────────────────────
 
         feedback.setProgress(66)
-        feedback.pushInfo(
-            "── Stage 5: DEM Gradient Resolution ─────────────────────"
-        )
+        feedback.pushInfo("── Stage 5: DEM Gradient Resolution ─────────────────────")
 
         # Derive cell size from the filled DEM if the user has not
         # supplied an override. The Gradient Resolution tool requires
         # a positive cell size and does not accept zero.
 
-        user_cell_size = self.parameterAsDouble(
-            parameters, self.CELL_SIZE, context
-        )
+        user_cell_size = self.parameterAsDouble(parameters, self.CELL_SIZE, context)
 
         if user_cell_size > 0.0:
             resolved_cell_size = user_cell_size
@@ -812,13 +781,10 @@ class DEMConditioningWorkflow(MayimBaseAlgorithm):
             import rasterio
 
             with rasterio.open(filled_dem_path) as _ds:
-                resolved_cell_size = float(
-                    (_ds.res[0] + _ds.res[1]) / 2.0
-                )
+                resolved_cell_size = float((_ds.res[0] + _ds.res[1]) / 2.0)
 
             feedback.pushInfo(
-                f"Cell size read from DEM: {resolved_cell_size:.4f} "
-                "map units."
+                f"Cell size read from DEM: {resolved_cell_size:.4f} " "map units."
             )
 
         stage5_params = {
@@ -826,9 +792,7 @@ class DEMConditioningWorkflow(MayimBaseAlgorithm):
             "INPUT_MANIFEST": filling_manifest_path,
             "VERTICAL_ACCURACY": vertical_accuracy,
             "CELL_SIZE": resolved_cell_size,
-            "CONNECTIVITY": self.parameterAsInt(
-                parameters, self.CONNECTIVITY, context
-            ),
+            "CONNECTIVITY": self.parameterAsInt(parameters, self.CONNECTIVITY, context),
             "OUTPUT_FOLDER": str(output_folder / "stage5_gradient"),
             "LOAD_RESOLVED_DEM": False,
             "LOAD_FLAT_MASK": False,
@@ -857,9 +821,7 @@ class DEMConditioningWorkflow(MayimBaseAlgorithm):
             "output_folder": str(output_folder / "stage5_gradient"),
         }
 
-        feedback.pushInfo(
-            f"Stage 5 complete. Resolved DEM: {resolved_dem_path}"
-        )
+        feedback.pushInfo(f"Stage 5 complete. Resolved DEM: {resolved_dem_path}")
 
         # ── Stage 6 — DEM Hydrography Enforcement (optional) ─────────────────
 
@@ -910,9 +872,7 @@ class DEMConditioningWorkflow(MayimBaseAlgorithm):
                 "MAXIMUM_BURN_DEPTH": self.parameterAsDouble(
                     parameters, self.MAXIMUM_BURN_DEPTH, context
                 ),
-                "OUTPUT_FOLDER": str(
-                    output_folder / "stage6_enforcement"
-                ),
+                "OUTPUT_FOLDER": str(output_folder / "stage6_enforcement"),
             }
 
             try:
@@ -942,23 +902,17 @@ class DEMConditioningWorkflow(MayimBaseAlgorithm):
                 "status": "skipped",
                 "reason": "RUN_ENFORCEMENT parameter is False.",
             }
-            feedback.pushInfo(
-                "Stage 6 skipped — hydrography enforcement not enabled."
-            )
+            feedback.pushInfo("Stage 6 skipped — hydrography enforcement not enabled.")
 
         # ── Copy final conditioned DEM to workflow output folder ──────────────
 
         import shutil
 
-        final_dem_output_path = (
-            output_folder / f"{dem_stem}_conditioned.tif"
-        )
+        final_dem_output_path = output_folder / f"{dem_stem}_conditioned.tif"
 
         shutil.copy2(final_dem_path, final_dem_output_path)
 
-        feedback.pushInfo(
-            f"Final conditioned DEM copied to: {final_dem_output_path}"
-        )
+        feedback.pushInfo(f"Final conditioned DEM copied to: {final_dem_output_path}")
 
         # ── Build workflow report ─────────────────────────────────────────────
 
@@ -968,12 +922,9 @@ class DEMConditioningWorkflow(MayimBaseAlgorithm):
 
         feedback.setProgress(90)
 
-        report_path = (
-            output_folder / f"{dem_stem}_conditioning_workflow_report.txt"
-        )
+        report_path = output_folder / f"{dem_stem}_conditioning_workflow_report.txt"
         provenance_path = (
-            output_folder
-            / f"{dem_stem}_conditioning_workflow_provenance.json"
+            output_folder / f"{dem_stem}_conditioning_workflow_provenance.json"
         )
 
         report_lines = [
@@ -1037,27 +988,30 @@ class DEMConditioningWorkflow(MayimBaseAlgorithm):
         ]
 
         if stage_provenance["stage_6_enforcement"]["status"] == "complete":
-            report_lines.extend([
-                f"  Output report     : "
-                f"{stage_provenance['stage_6_enforcement']['output_report']}",
-                f"  Output provenance : "
-                f"{stage_provenance['stage_6_enforcement']['output_provenance']}",
-                f"  Output folder     : "
-                f"{stage_provenance['stage_6_enforcement']['output_folder']}",
-            ])
+            report_lines.extend(
+                [
+                    f"  Output report     : "
+                    f"{stage_provenance['stage_6_enforcement']['output_report']}",
+                    f"  Output provenance : "
+                    f"{stage_provenance['stage_6_enforcement']['output_provenance']}",
+                    f"  Output folder     : "
+                    f"{stage_provenance['stage_6_enforcement']['output_folder']}",
+                ]
+            )
         else:
             report_lines.append(
-                f"  Status : "
-                f"{stage_provenance['stage_6_enforcement']['reason']}"
+                f"  Status : " f"{stage_provenance['stage_6_enforcement']['reason']}"
             )
 
-        report_lines.extend([
-            "",
-            "── Final Output ─────────────────────────────────────────────────",
-            f"  Final conditioned DEM : {final_dem_output_path}",
-            "",
-            "── Warnings ─────────────────────────────────────────────────────",
-        ])
+        report_lines.extend(
+            [
+                "",
+                "── Final Output ─────────────────────────────────────────────────",
+                f"  Final conditioned DEM : {final_dem_output_path}",
+                "",
+                "── Warnings ─────────────────────────────────────────────────────",
+            ]
+        )
 
         if warnings:
             for warning in warnings:
@@ -1065,12 +1019,14 @@ class DEMConditioningWorkflow(MayimBaseAlgorithm):
         else:
             report_lines.append("  No warnings.")
 
-        report_lines.extend([
-            "",
-            "═" * 72,
-            "  End of report.",
-            "═" * 72,
-        ])
+        report_lines.extend(
+            [
+                "",
+                "═" * 72,
+                "  End of report.",
+                "═" * 72,
+            ]
+        )
 
         report_text = "\n".join(report_lines)
         report_path.write_text(report_text, encoding="utf-8")
@@ -1108,9 +1064,29 @@ class DEMConditioningWorkflow(MayimBaseAlgorithm):
             f"Final conditioned DEM: {final_dem_path}"
         )
 
+        # ── Load final conditioned DEM into QGIS project ──────────────────────
+
+        from qgis.core import QgsProject, QgsRasterLayer
+
+        final_layer = QgsRasterLayer(
+            str(final_dem_output_path),
+            f"{dem_stem}_conditioned",
+        )
+
+        if final_layer.isValid():
+            QgsProject.instance().addMapLayer(final_layer)
+            feedback.pushInfo(
+                f"Final conditioned DEM loaded into project: " f"{dem_stem}_conditioned"
+            )
+        else:
+            feedback.pushWarning(
+                "Final conditioned DEM could not be loaded into the "
+                "project automatically. Open it manually from: "
+                f"{final_dem_output_path}"
+            )
+
         return {
             self.OUTPUT_DEM: str(final_dem_output_path),
             self.OUTPUT_REPORT: str(report_path),
             self.OUTPUT_PROVENANCE: str(provenance_path),
         }
-

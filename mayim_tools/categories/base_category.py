@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Mayim Tools – Base Category
 Abstract base class that all tool categories must inherit from.
@@ -53,12 +52,12 @@ class BaseCategory(ABC):
         Override in subclass to provide a custom icon.
         """
         from mayim_tools.resources_rc import get_icon_path
+
         return get_icon_path("mayim_logo.png")
 
     @property
     def icon(self) -> QIcon:
         """Returns a QIcon for this category."""
-        from mayim_tools.resources_rc import get_icon_path
         path = self.icon_path
         if path and Path(path).exists():
             return QIcon(path)

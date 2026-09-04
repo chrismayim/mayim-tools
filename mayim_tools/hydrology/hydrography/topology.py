@@ -131,12 +131,8 @@ def prepare_hydrography_topology(
     the true drainage system. It only prepares structural evidence for
     subsequent analysis.
     """
-    if endpoint_tolerance < 0.0 or not isfinite(
-        float(endpoint_tolerance)
-    ):
-        raise ValueError(
-            "endpoint_tolerance must be finite and non-negative."
-        )
+    if endpoint_tolerance < 0.0 or not isfinite(float(endpoint_tolerance)):
+        raise ValueError("endpoint_tolerance must be finite and non-negative.")
 
     geometry_values = list(geometries) if geometries is not None else []
 
@@ -146,9 +142,7 @@ def prepare_hydrography_topology(
         ids = list(feature_ids)
 
     if len(ids) != len(geometry_values):
-        raise ValueError(
-            "feature_ids must contain one identifier per geometry."
-        )
+        raise ValueError("feature_ids must contain one identifier per geometry.")
 
     errors: list[str] = []
     warnings: list[str] = []
@@ -176,9 +170,7 @@ def prepare_hydrography_topology(
 
         if not line_parts:
             invalid_feature_count += 1
-            errors.append(
-                f"Feature {feature_id} contains no usable line parts."
-            )
+            errors.append(f"Feature {feature_id} contains no usable line parts.")
             continue
 
         endpoints = _feature_endpoints(line_parts)
@@ -211,8 +203,7 @@ def prepare_hydrography_topology(
 
     if valid_feature_count == 0:
         warnings.append(
-            "No valid line features are available for topology "
-            "preparation."
+            "No valid line features are available for topology " "preparation."
         )
 
     nodes, endpoint_connections = _build_endpoint_nodes(
@@ -288,10 +279,7 @@ def prepare_hydrography_topology(
         for component in components
     ]
 
-    valid = (
-        valid_feature_count > 0
-        and not errors
-    )
+    valid = valid_feature_count > 0 and not errors
 
     return {
         "valid": valid,
@@ -332,35 +320,27 @@ def _validate_line_geometry(
     errors: list[str] = []
 
     if geometry is None:
-        errors.append(
-            f"Feature {feature_id} at position {position} is null."
-        )
+        errors.append(f"Feature {feature_id} at position {position} is null.")
         return {
             "valid": False,
             "errors": errors,
         }
 
     if bool(getattr(geometry, "is_empty", False)):
-        errors.append(
-            f"Feature {feature_id} is empty."
-        )
+        errors.append(f"Feature {feature_id} is empty.")
         return {
             "valid": False,
             "errors": errors,
         }
 
     if not bool(getattr(geometry, "is_valid", False)):
-        errors.append(
-            f"Feature {feature_id} is geometrically invalid."
-        )
+        errors.append(f"Feature {feature_id} is geometrically invalid.")
         return {
             "valid": False,
             "errors": errors,
         }
 
-    geometry_type = str(
-        getattr(geometry, "geom_type", "")
-    ).lower()
+    geometry_type = str(getattr(geometry, "geom_type", "")).lower()
 
     if geometry_type not in {
         "line",
@@ -380,8 +360,7 @@ def _validate_line_geometry(
         line_parts = _extract_line_parts(geometry)
     except (AttributeError, TypeError):
         errors.append(
-            f"Feature {feature_id} does not expose usable line "
-            "coordinates."
+            f"Feature {feature_id} does not expose usable line " "coordinates."
         )
         return {
             "valid": False,
@@ -389,9 +368,7 @@ def _validate_line_geometry(
         }
 
     if not line_parts:
-        errors.append(
-            f"Feature {feature_id} has no usable coordinates."
-        )
+        errors.append(f"Feature {feature_id} has no usable coordinates.")
 
     return {
         "valid": not errors,
@@ -408,9 +385,7 @@ def _extract_line_parts(
     :param geometry: LineString or MultiLineString-like object.
     :returns: List of coordinate sequences.
     """
-    geometry_type = str(
-        getattr(geometry, "geom_type", "")
-    ).lower()
+    geometry_type = str(getattr(geometry, "geom_type", "")).lower()
 
     if geometry_type in {"line", "linestring"}:
         coordinates = list(geometry.coords)
@@ -572,31 +547,21 @@ def _build_components(
     """
     Build connected feature components from shared endpoint nodes.
     """
-    feature_ids = [
-        feature["feature_id"]
-        for feature in valid_features
-    ]
+    feature_ids = [feature["feature_id"] for feature in valid_features]
 
-    adjacency: dict[Any, set[Any]] = {
-        feature_id: set()
-        for feature_id in feature_ids
-    }
+    adjacency: dict[Any, set[Any]] = {feature_id: set() for feature_id in feature_ids}
 
     by_node: dict[int, list[Any]] = defaultdict(list)
 
     for connection in endpoint_connections:
-        by_node[connection["node_id"]].append(
-            connection["feature_id"]
-        )
+        by_node[connection["node_id"]].append(connection["feature_id"])
 
     for connected_features in by_node.values():
         unique_features = list(dict.fromkeys(connected_features))
 
         for feature_id in unique_features:
             adjacency[feature_id].update(
-                other
-                for other in unique_features
-                if other != feature_id
+                other for other in unique_features if other != feature_id
             )
 
     components = []
@@ -657,7 +622,7 @@ def _find_intersections(
     intersections = []
 
     for first_index, first in enumerate(valid_features):
-        for second in valid_features[first_index + 1:]:
+        for second in valid_features[first_index + 1 :]:
             first_geometry = first["geometry"]
             second_geometry = second["geometry"]
 
@@ -665,22 +630,16 @@ def _find_intersections(
                 if not first_geometry.intersects(second_geometry):
                     continue
 
-                intersection = first_geometry.intersection(
-                    second_geometry
-                )
+                intersection = first_geometry.intersection(second_geometry)
             except (AttributeError, TypeError):
                 continue
 
             if bool(getattr(intersection, "is_empty", True)):
                 continue
 
-            intersection_type = str(
-                getattr(intersection, "geom_type", "")
-            ).lower()
+            intersection_type = str(getattr(intersection, "geom_type", "")).lower()
 
-            coordinate = _representative_coordinate(
-                intersection
-            )
+            coordinate = _representative_coordinate(intersection)
 
             intersections.append(
                 {
@@ -688,12 +647,10 @@ def _find_intersections(
                         first["feature_id"],
                         second["feature_id"],
                     ],
-                    "intersection_type": _intersection_type(
-                        intersection_type
-                    ),
+                    "intersection_type": _intersection_type(intersection_type),
                     "geometry_type": intersection_type,
                     "coordinate": coordinate,
-                               }
+                }
             )
 
     return intersections
@@ -732,9 +689,7 @@ def _representative_coordinate(
     Point-like intersections use their x/y values. For other geometry
     types, the centroid is used where available.
     """
-    geometry_type = str(
-        getattr(geometry, "geom_type", "")
-    ).lower()
+    geometry_type = str(getattr(geometry, "geom_type", "")).lower()
 
     if geometry_type == "point":
         return [
@@ -787,9 +742,7 @@ def _find_duplicate_segments(
             reverse = tuple(reversed(forward))
             canonical = min(forward, reverse)
 
-            coordinate_index[
-                (part_index, canonical)
-            ].append(feature_id)
+            coordinate_index[(part_index, canonical)].append(feature_id)
 
     duplicates = []
 
@@ -865,14 +818,10 @@ def _calculate_feature_priorities(
             {
                 "feature_id": feature_id,
                 "stream_order": (
-                    float(stream_order)
-                    if stream_order is not None
-                    else 0.0
+                    float(stream_order) if stream_order is not None else 0.0
                 ),
                 "upstream_area": (
-                    float(upstream_area)
-                    if upstream_area is not None
-                    else 0.0
+                    float(upstream_area) if upstream_area is not None else 0.0
                 ),
             }
         )
@@ -917,11 +866,7 @@ def _count_unconnected_endpoints(
     for connection in endpoint_connections:
         endpoint_counts[connection["node_id"]] += 1
 
-    return sum(
-        1
-        for count in endpoint_counts.values()
-        if count == 1
-    )
+    return sum(1 for count in endpoint_counts.values() if count == 1)
 
 
 def _count_network_edges(
@@ -936,12 +881,7 @@ def _count_network_edges(
     the current topology summary counts it as one feature edge.
     """
     del valid_features
-    return len(
-        {
-            connection["feature_id"]
-            for connection in endpoint_connections
-        }
-    )
+    return len({connection["feature_id"] for connection in endpoint_connections})
 
 
 def _serialise_endpoints(
@@ -989,4 +929,3 @@ def _stable_identifier(
         pass
 
     return "1", str(value)
-

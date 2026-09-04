@@ -116,22 +116,22 @@ class DEMHydrologicalFilling(MayimBaseAlgorithm):
 
     TOOL_VERSION = "dem-hydrological-filling-0.2.0"
 
-    def name(self) -> str:  # noqa: N802
+    def name(self) -> str:
         return "demhydrologicalfilling"
 
-    def displayName(self) -> str:  # noqa: N802
+    def displayName(self) -> str:
         return "DEM Hydrological Filling"
 
-    def group(self) -> str:  # noqa: N802
+    def group(self) -> str:
         return "Hydrology Tools"
 
-    def groupId(self) -> str:  # noqa: N802
+    def groupId(self) -> str:
         return "hydrology"
 
-    def createInstance(self) -> DEMHydrologicalFilling:  # noqa: N802
+    def createInstance(self) -> DEMHydrologicalFilling:
         return DEMHydrologicalFilling()
 
-    def shortHelpString(self) -> str:  # noqa: N802
+    def shortHelpString(self) -> str:
         return (
             "<b>DEM Hydrological Filling</b><br><br>"
             "Implements Stage 5 selective flow enforcement.<br><br>"
@@ -146,7 +146,7 @@ class DEMHydrologicalFilling(MayimBaseAlgorithm):
             "provenance, and a MayimManifest."
         )
 
-    def helpUrl(self) -> str:  # noqa: N802
+    def helpUrl(self) -> str:
         return "https://github.com/chrismayim/mayim-tools"
 
     def tags(self) -> list[str]:
@@ -161,7 +161,7 @@ class DEMHydrologicalFilling(MayimBaseAlgorithm):
             "enforcement",
         ]
 
-    def initAlgorithm(self, config=None) -> None:  # noqa: N802
+    def initAlgorithm(self, config=None) -> None:
         self.addParameter(
             QgsProcessingParameterRasterLayer(
                 self.PARAM_DEM,
@@ -202,8 +202,7 @@ class DEMHydrologicalFilling(MayimBaseAlgorithm):
         self.addParameter(
             QgsProcessingParameterNumber(
                 self.PARAM_MAX_BREACH_DEPTH,
-                "Maximum breach depth in elevation units "
-                "(recommended: 5.0)",
+                "Maximum breach depth in elevation units " "(recommended: 5.0)",
                 type=QgsProcessingParameterNumber.Double,
                 defaultValue=5.0,
                 minValue=0.000001,
@@ -295,7 +294,7 @@ class DEMHydrologicalFilling(MayimBaseAlgorithm):
             )
         )
 
-    def processAlgorithm(  # noqa: N802
+    def processAlgorithm(
         self,
         parameters: dict,
         context: QgsProcessingContext,
@@ -315,9 +314,7 @@ class DEMHydrologicalFilling(MayimBaseAlgorithm):
         )
 
         if not ValidationUtils.is_valid_raster_layer(dem_layer):
-            raise QgsProcessingException(
-                "The input DEM is missing or invalid."
-            )
+            raise QgsProcessingException("The input DEM is missing or invalid.")
 
         manifest_path = self.parameterAsString(
             parameters,
@@ -374,15 +371,12 @@ class DEMHydrologicalFilling(MayimBaseAlgorithm):
         )
 
         if connectivity not in (4, 8):
-            raise QgsProcessingException(
-                "Connectivity must be either 4 or 8."
-            )
+            raise QgsProcessingException("Connectivity must be either 4 or 8.")
 
         if not output_folder or output_folder == "TEMPORARY_OUTPUT":
             import tempfile
-            output_folder = tempfile.mkdtemp(
-                prefix="mayim_enforcement_"
-            )
+
+            output_folder = tempfile.mkdtemp(prefix="mayim_enforcement_")
 
         output_dir = Path(output_folder)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -390,13 +384,13 @@ class DEMHydrologicalFilling(MayimBaseAlgorithm):
         dem_stem = Path(dem_layer.source()).stem
 
         paths = {
-            "preserved":  output_dir / f"{dem_stem}_preserved_topology.tif",
-            "ready":      output_dir / f"{dem_stem}_hydrology_ready.tif",
-            "decisions":  output_dir / f"{dem_stem}_enforcement_decisions.tif",
+            "preserved": output_dir / f"{dem_stem}_preserved_topology.tif",
+            "ready": output_dir / f"{dem_stem}_hydrology_ready.tif",
+            "decisions": output_dir / f"{dem_stem}_enforcement_decisions.tif",
             "difference": output_dir / f"{dem_stem}_enforcement_difference.tif",
-            "report":     output_dir / f"{dem_stem}_enforcement_report.txt",
+            "report": output_dir / f"{dem_stem}_enforcement_report.txt",
             "provenance": output_dir / f"{dem_stem}_enforcement_provenance.json",
-            "manifest":   output_dir / f"{dem_stem}_enforcement.manifest.json",
+            "manifest": output_dir / f"{dem_stem}_enforcement.manifest.json",
         }
 
         input_manifest = None
@@ -437,11 +431,7 @@ class DEMHydrologicalFilling(MayimBaseAlgorithm):
             res_x = abs(float(source.transform.a))
             res_y = abs(float(source.transform.e))
             cell_size = (res_x + res_y) / 2.0
-            crs_string = (
-                source.crs.to_string()
-                if source.crs is not None
-                else "Unknown"
-            )
+            crs_string = source.crs.to_string() if source.crs is not None else "Unknown"
 
         feedback.setProgress(15)
 
@@ -463,8 +453,7 @@ class DEMHydrologicalFilling(MayimBaseAlgorithm):
 
             if not features:
                 self.log_warning(
-                    f"Depression {depression_id} has no features. "
-                    "Skipping.",
+                    f"Depression {depression_id} has no features. " "Skipping.",
                     feedback,
                 )
                 continue
@@ -505,8 +494,7 @@ class DEMHydrologicalFilling(MayimBaseAlgorithm):
                 "_depression_inventory", ""
             )
             id_raster_path = (
-                inventory_dir
-                / f"{dem_stem_from_inventory}_depression_ids.tif"
+                inventory_dir / f"{dem_stem_from_inventory}_depression_ids.tif"
             )
 
             if not id_raster_path.exists():
@@ -521,9 +509,7 @@ class DEMHydrologicalFilling(MayimBaseAlgorithm):
             with rasterio.open(str(id_raster_path)) as id_source:
                 id_array = id_source.read(1)
 
-            depression_masks[depression_id] = (
-                id_array == depression_id
-            )
+            depression_masks[depression_id] = id_array == depression_id
 
         if not depression_records:
             warning = (
@@ -564,9 +550,7 @@ class DEMHydrologicalFilling(MayimBaseAlgorithm):
         except QgsProcessingException:
             raise
         except Exception as error:
-            MayimLogger.critical(
-                f"Stage 5 enforcement failed: {error}"
-            )
+            MayimLogger.critical(f"Stage 5 enforcement failed: {error}")
             raise QgsProcessingException(
                 f"Stage 5 enforcement failed: {error}"
             ) from error
@@ -574,24 +558,19 @@ class DEMHydrologicalFilling(MayimBaseAlgorithm):
         # ── Summarise decisions ───────────────────────────────────── #
 
         depitted_count = sum(
-            1 for a in audits
-            if a.get("decision_code") == DECISION_DEPITTED
+            1 for a in audits if a.get("decision_code") == DECISION_DEPITTED
         )
         breached_count = sum(
-            1 for a in audits
-            if a.get("decision_code") == DECISION_BREACHED
+            1 for a in audits if a.get("decision_code") == DECISION_BREACHED
         )
         filled_count = sum(
-            1 for a in audits
-            if a.get("decision_code") == DECISION_FILLED
+            1 for a in audits if a.get("decision_code") == DECISION_FILLED
         )
         real_count = sum(
-            1 for a in audits
-            if a.get("decision_code") == DECISION_REAL_PRESERVED
+            1 for a in audits if a.get("decision_code") == DECISION_REAL_PRESERVED
         )
         review_count = sum(
-            1 for a in audits
-            if a.get("decision_code") == DECISION_REVIEW_PRESERVED
+            1 for a in audits if a.get("decision_code") == DECISION_REVIEW_PRESERVED
         )
 
         self.log(f"  De-pitted    : {depitted_count}", feedback)
@@ -627,23 +606,13 @@ class DEMHydrologicalFilling(MayimBaseAlgorithm):
         if nodata is not None:
             base_profile["nodata"] = nodata
 
-        with rasterio.open(
-            paths["preserved"], "w", **base_profile
-        ) as dst:
-            dst.write(
-                preserved_dem.astype(np.float32), 1
-            )
+        with rasterio.open(paths["preserved"], "w", **base_profile) as dst:
+            dst.write(preserved_dem.astype(np.float32), 1)
 
-        with rasterio.open(
-            paths["ready"], "w", **base_profile
-        ) as dst:
-            dst.write(
-                hydrology_ready_dem.astype(np.float32), 1
-            )
+        with rasterio.open(paths["ready"], "w", **base_profile) as dst:
+            dst.write(hydrology_ready_dem.astype(np.float32), 1)
 
-        difference = (
-            hydrology_ready_dem - dem
-        ).astype(np.float32)
+        difference = (hydrology_ready_dem - dem).astype(np.float32)
         difference_profile = base_profile.copy()
         difference_profile["nodata"] = -9999.0
 
@@ -651,9 +620,7 @@ class DEMHydrologicalFilling(MayimBaseAlgorithm):
         nodata_mask = ~(np.isfinite(dem) & (dem != nodata))
         diff_out[nodata_mask] = -9999.0
 
-        with rasterio.open(
-            paths["difference"], "w", **difference_profile
-        ) as dst:
+        with rasterio.open(paths["difference"], "w", **difference_profile) as dst:
             dst.write(diff_out, 1)
 
         decision_profile = profile.copy()
@@ -664,12 +631,8 @@ class DEMHydrologicalFilling(MayimBaseAlgorithm):
             nodata=255,
         )
 
-        with rasterio.open(
-            paths["decisions"], "w", **decision_profile
-        ) as dst:
-            dst.write(
-                decision_codes.astype(np.uint8), 1
-            )
+        with rasterio.open(paths["decisions"], "w", **decision_profile) as dst:
+            dst.write(decision_codes.astype(np.uint8), 1)
 
         self.log(
             "Raster outputs written.",
@@ -701,9 +664,7 @@ class DEMHydrologicalFilling(MayimBaseAlgorithm):
                 "max_breach_depth": max_breach_depth,
                 "connectivity": connectivity,
             },
-            "outputs": {
-                k: str(v) for k, v in paths.items()
-            },
+            "outputs": {k: str(v) for k, v in paths.items()},
             "statistics": {
                 "total_depressions": len(audits),
                 "depitted": depitted_count,
@@ -722,16 +683,11 @@ class DEMHydrologicalFilling(MayimBaseAlgorithm):
 
         if review_count > 0:
             provenance["warnings"].append(
-                f"{review_count} depression(s) preserved pending "
-                "analyst review."
+                f"{review_count} depression(s) preserved pending " "analyst review."
             )
 
-        with open(
-            paths["provenance"], "w", encoding="utf-8"
-        ) as file:
-            json.dump(
-                provenance, file, indent=4, default=str
-            )
+        with open(paths["provenance"], "w", encoding="utf-8") as file:
+            json.dump(provenance, file, indent=4, default=str)
 
         self.log(
             f"Provenance written: {paths['provenance'].name}",
@@ -755,9 +711,7 @@ class DEMHydrologicalFilling(MayimBaseAlgorithm):
             f"Report: {report_path}",
             feedback,
         )
-        feedback.pushInfo(
-            f"Open report: {report_uri}"
-        )
+        feedback.pushInfo(f"Open report: {report_uri}")
 
         feedback.setProgress(88)
 
@@ -771,9 +725,7 @@ class DEMHydrologicalFilling(MayimBaseAlgorithm):
                     stage=5,
                     audit_log_path=str(paths["provenance"]),
                     warnings=(
-                        provenance["warnings"]
-                        if provenance["warnings"]
-                        else None
+                        provenance["warnings"] if provenance["warnings"] else None
                     ),
                     width=width,
                     height=height,
@@ -789,9 +741,7 @@ class DEMHydrologicalFilling(MayimBaseAlgorithm):
                     stage=5,
                     audit_log_path=str(paths["provenance"]),
                     warnings=(
-                        provenance["warnings"]
-                        if provenance["warnings"]
-                        else None
+                        provenance["warnings"] if provenance["warnings"] else None
                     ),
                     width=width,
                     height=height,
@@ -937,18 +887,12 @@ class DEMHydrologicalFilling(MayimBaseAlgorithm):
         a("-" * 70)
         a("PARAMETERS")
         a("-" * 70)
-        a(
-            f"Max breach length    : "
-            f"{params.get('max_breach_length', 250)} cells"
-        )
+        a(f"Max breach length    : " f"{params.get('max_breach_length', 250)} cells")
         a(
             f"Max breach depth     : "
             f"{params.get('max_breach_depth', 5.0)} elevation units"
         )
-        a(
-            f"Connectivity         : "
-            f"{params.get('connectivity', 8)}"
-        )
+        a(f"Connectivity         : " f"{params.get('connectivity', 8)}")
         a("")
 
         a("-" * 70)
@@ -963,30 +907,12 @@ class DEMHydrologicalFilling(MayimBaseAlgorithm):
         a("-" * 70)
         a("STAGE 5 ENFORCEMENT SUMMARY")
         a("-" * 70)
-        a(
-            f"Total depressions    : "
-            f"{stats.get('total_depressions', 0)}"
-        )
-        a(
-            f"De-pitted            : "
-            f"{stats.get('depitted', 0)}"
-        )
-        a(
-            f"Breached             : "
-            f"{stats.get('breached', 0)}"
-        )
-        a(
-            f"Filled (fallback)    : "
-            f"{stats.get('filled', 0)}"
-        )
-        a(
-            f"Real feature preserved: "
-            f"{stats.get('real_preserved', 0)}"
-        )
-        a(
-            f"Review required      : "
-            f"{stats.get('review_preserved', 0)}"
-        )
+        a(f"Total depressions    : " f"{stats.get('total_depressions', 0)}")
+        a(f"De-pitted            : " f"{stats.get('depitted', 0)}")
+        a(f"Breached             : " f"{stats.get('breached', 0)}")
+        a(f"Filled (fallback)    : " f"{stats.get('filled', 0)}")
+        a(f"Real feature preserved: " f"{stats.get('real_preserved', 0)}")
+        a(f"Review required      : " f"{stats.get('review_preserved', 0)}")
         a("")
 
         a("-" * 70)
@@ -1017,7 +943,7 @@ class DEMHydrologicalFilling(MayimBaseAlgorithm):
                     f"  Depression {did:>4} : "
                     f"{classification:<16} "
                     f"decision={decision:<22} "
-                    f"modified={str(modified):<5} "
+                    f"modified={modified!s:<5} "
                     f"method={method}"
                 )
         else:
@@ -1045,30 +971,12 @@ class DEMHydrologicalFilling(MayimBaseAlgorithm):
         a("-" * 70)
         a("OUTPUT FILES")
         a("-" * 70)
-        a(
-            f"Preserved topology DEM  : "
-            f"{paths['preserved'].name}"
-        )
-        a(
-            f"Hydrology-ready DEM     : "
-            f"{paths['ready'].name}"
-        )
-        a(
-            f"Decision raster         : "
-            f"{paths['decisions'].name}"
-        )
-        a(
-            f"Report (this file)      : "
-            f"{paths['report'].name}"
-        )
-        a(
-            f"Provenance              : "
-            f"{paths['provenance'].name}"
-        )
-        a(
-            f"MayimManifest           : "
-            f"{paths['manifest'].name}"
-        )
+        a(f"Preserved topology DEM  : " f"{paths['preserved'].name}")
+        a(f"Hydrology-ready DEM     : " f"{paths['ready'].name}")
+        a(f"Decision raster         : " f"{paths['decisions'].name}")
+        a(f"Report (this file)      : " f"{paths['report'].name}")
+        a(f"Provenance              : " f"{paths['provenance'].name}")
+        a(f"MayimManifest           : " f"{paths['manifest'].name}")
         a("")
 
         a("-" * 70)
@@ -1096,10 +1004,7 @@ class DEMHydrologicalFilling(MayimBaseAlgorithm):
         review_count = stats.get("review_preserved", 0)
 
         if review_count > 0:
-            a(
-                f"  [REQUIRED] {review_count} depression(s) require "
-                "analyst review."
-            )
+            a(f"  [REQUIRED] {review_count} depression(s) require " "analyst review.")
             a(
                 "  Inspect the decision raster and per-depression audit "
                 "before using the hydrology-ready DEM."
@@ -1110,9 +1015,7 @@ class DEMHydrologicalFilling(MayimBaseAlgorithm):
                 "requiring analyst review."
             )
 
-        a(
-            "  Next tool: DEM Gradient Resolution (Stage 6)"
-        )
+        a("  Next tool: DEM Gradient Resolution (Stage 6)")
         a("")
 
         a("-" * 70)

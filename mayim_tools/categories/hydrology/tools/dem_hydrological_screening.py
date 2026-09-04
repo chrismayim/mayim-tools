@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Mayim Tools — DEM Hydrological Screening
 =========================================
@@ -44,7 +43,6 @@ License:    GPL-2.0+
 from __future__ import annotations
 
 import json
-import os
 from datetime import datetime
 from pathlib import Path
 
@@ -57,31 +55,30 @@ from qgis.core import (
     QgsProcessingOutputRasterLayer,
     QgsProcessingParameterBoolean,
     QgsProcessingParameterEnum,
-    QgsProcessingParameterFileDestination,
     QgsProcessingParameterFolderDestination,
     QgsProcessingParameterNumber,
-    QgsProcessingParameterRasterDestination,
     QgsProcessingParameterRasterLayer,
 )
 
+from mayim_tools.contract import MayimManifest
 from mayim_tools.core.logger import MayimLogger
 from mayim_tools.core.validation_utils import ValidationUtils
 from mayim_tools.processing.algorithms.base_algorithm import MayimBaseAlgorithm
 
-from mayim_tools.contract import MayimManifest
-
 # -- DEM Source Type Constants ---------------------------------------------- #
+
 
 class DEMSourceType:
     """Enumeration of supported DEM source types."""
-    AUTO_DETECT          = 0
-    LIDAR_DTM            = 1
-    LIDAR_DSM            = 2
-    SRTM                 = 3
-    COPERNICUS_GLO30     = 4
-    FABDEM_FATHOMDEM     = 5
+
+    AUTO_DETECT = 0
+    LIDAR_DTM = 1
+    LIDAR_DSM = 2
+    SRTM = 3
+    COPERNICUS_GLO30 = 4
+    FABDEM_FATHOMDEM = 5
     AERIAL_PHOTOGRAMMETRY = 6
-    UNKNOWN              = 7
+    UNKNOWN = 7
 
     LABELS = [
         "Auto-detect",
@@ -100,28 +97,31 @@ class DEMSourceType:
     # SRTM/Copernicus: ±3-5m, FABDEM: ±1-2m
     # Aerial: ±0.5-1.0m, Unknown: ±5m (conservative)
     DEFAULT_RMSE = {
-        AUTO_DETECT:           None,
-        LIDAR_DTM:             0.15,
-        LIDAR_DSM:             0.40,
-        SRTM:                  4.00,
-        COPERNICUS_GLO30:      4.00,
-        FABDEM_FATHOMDEM:      1.50,
+        AUTO_DETECT: None,
+        LIDAR_DTM: 0.15,
+        LIDAR_DSM: 0.40,
+        SRTM: 4.00,
+        COPERNICUS_GLO30: 4.00,
+        FABDEM_FATHOMDEM: 1.50,
         AERIAL_PHOTOGRAMMETRY: 0.75,
-        UNKNOWN:               5.00,
+        UNKNOWN: 5.00,
     }
 
 
 # -- Void Classification Constants ------------------------------------------ #
 
+
 class VoidClass:
     """Void classification values written to the void mask raster."""
-    VALID    = 0   # Valid data cell
-    SMALL    = 1   # Small void — interpolated
-    MEDIUM   = 2   # Medium void — flagged, not filled
-    LARGE    = 3   # Large void — reported to analyst
+
+    VALID = 0  # Valid data cell
+    SMALL = 1  # Small void — interpolated
+    MEDIUM = 2  # Medium void — flagged, not filled
+    LARGE = 3  # Large void — reported to analyst
 
 
 # -- Main Tool Class -------------------------------------------------------- #
+
 
 class DEMHydrologicalScreening(MayimBaseAlgorithm):
     """
@@ -137,21 +137,21 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
     """
 
     # -- Parameter identifiers -------------------------------------------- #
-    PARAM_DEM             = "INPUT_DEM"
-    PARAM_SOURCE_TYPE     = "DEM_SOURCE_TYPE"
-    PARAM_USER_RMSE       = "USER_RMSE"
-    PARAM_SMALL_VOID      = "SMALL_VOID_THRESHOLD"
-    PARAM_LARGE_VOID      = "LARGE_VOID_THRESHOLD"
-    PARAM_MAD_WINDOW      = "MAD_WINDOW_SIZE"
-    PARAM_MAD_THRESHOLD   = "MAD_THRESHOLD"
-    PARAM_OUTPUT_FOLDER   = "OUTPUT_FOLDER"
+    PARAM_DEM = "INPUT_DEM"
+    PARAM_SOURCE_TYPE = "DEM_SOURCE_TYPE"
+    PARAM_USER_RMSE = "USER_RMSE"
+    PARAM_SMALL_VOID = "SMALL_VOID_THRESHOLD"
+    PARAM_LARGE_VOID = "LARGE_VOID_THRESHOLD"
+    PARAM_MAD_WINDOW = "MAD_WINDOW_SIZE"
+    PARAM_MAD_THRESHOLD = "MAD_THRESHOLD"
+    PARAM_OUTPUT_FOLDER = "OUTPUT_FOLDER"
 
     # -- Output identifiers ----------------------------------------------- #
-    OUTPUT_DEM            = "OUTPUT_DEM"
-    OUTPUT_VOID_MASK      = "OUTPUT_VOID_MASK"
-    OUTPUT_ARTIFACT_MASK  = "OUTPUT_ARTIFACT_MASK"
-    OUTPUT_QA_REPORT      = "OUTPUT_QA_REPORT"
-    OUTPUT_PROVENANCE     = "OUTPUT_PROVENANCE"
+    OUTPUT_DEM = "OUTPUT_DEM"
+    OUTPUT_VOID_MASK = "OUTPUT_VOID_MASK"
+    OUTPUT_ARTIFACT_MASK = "OUTPUT_ARTIFACT_MASK"
+    OUTPUT_QA_REPORT = "OUTPUT_QA_REPORT"
+    OUTPUT_PROVENANCE = "OUTPUT_PROVENANCE"
 
     # -- MayimBaseAlgorithm interface ------------------------------------- #
 
@@ -192,8 +192,15 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
 
     def tags(self) -> list[str]:
         return [
-            "dem", "hydrology", "screening", "qa", "quality",
-            "artifact", "void", "conditioning", "mayim",
+            "dem",
+            "hydrology",
+            "screening",
+            "qa",
+            "quality",
+            "artifact",
+            "void",
+            "conditioning",
+            "mayim",
         ]
 
     def createInstance(self):
@@ -376,7 +383,6 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
         """
         try:
             import rasterio
-            from rasterio.transform import from_bounds
         except ImportError:
             raise QgsProcessingException(
                 "The 'rasterio' library is required but not installed.\n"
@@ -384,7 +390,7 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
             )
 
         try:
-            from scipy.ndimage import generic_filter, label
+            from scipy.ndimage import label
         except ImportError:
             raise QgsProcessingException(
                 "The 'scipy' library is required but not installed.\n"
@@ -393,24 +399,18 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
 
         # -- Read parameters ---------------------------------------------- #
 
-        dem_layer = self.parameterAsRasterLayer(
-            parameters, self.PARAM_DEM, context
-        )
+        dem_layer = self.parameterAsRasterLayer(parameters, self.PARAM_DEM, context)
         source_type_idx = self.parameterAsInt(
             parameters, self.PARAM_SOURCE_TYPE, context
         )
-        user_rmse = self.parameterAsDouble(
-            parameters, self.PARAM_USER_RMSE, context
-        )
+        user_rmse = self.parameterAsDouble(parameters, self.PARAM_USER_RMSE, context)
         small_void_thresh = self.parameterAsInt(
             parameters, self.PARAM_SMALL_VOID, context
         )
         large_void_thresh = self.parameterAsInt(
             parameters, self.PARAM_LARGE_VOID, context
         )
-        mad_window = self.parameterAsInt(
-            parameters, self.PARAM_MAD_WINDOW, context
-        )
+        mad_window = self.parameterAsInt(parameters, self.PARAM_MAD_WINDOW, context)
         mad_threshold = self.parameterAsDouble(
             parameters, self.PARAM_MAD_THRESHOLD, context
         )
@@ -421,9 +421,7 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
         # -- Validate inputs ---------------------------------------------- #
 
         if not ValidationUtils.is_valid_raster_layer(dem_layer):
-            raise QgsProcessingException(
-                "Invalid or missing input DEM layer."
-            )
+            raise QgsProcessingException("Invalid or missing input DEM layer.")
 
         if small_void_thresh >= large_void_thresh:
             raise QgsProcessingException(
@@ -435,8 +433,7 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
         if mad_window % 2 == 0:
             mad_window += 1
             self.log(
-                f"MAD window size adjusted to {mad_window} "
-                f"(must be odd).", feedback
+                f"MAD window size adjusted to {mad_window} " f"(must be odd).", feedback
             )
 
         # -- Set up output paths ------------------------------------------ #
@@ -444,47 +441,47 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
         # ── Handle temporary folder ────────────────────────────────────── #
         if not output_folder or output_folder.strip() == "":
             import tempfile
+
             output_folder = tempfile.mkdtemp(prefix="mayim_screening_")
             self.log(
                 f"  No output folder specified — using temporary "
                 f"folder: {output_folder}",
-                feedback
+                feedback,
             )
 
         output_dir = Path(output_folder)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-
         dem_stem = Path(dem_layer.source()).stem
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
         paths = {
-            "screened_dem":    output_dir / f"{dem_stem}_screened.tif",
-            "void_mask":       output_dir / f"{dem_stem}_void_mask.tif",
-            "artifact_mask":   output_dir / f"{dem_stem}_artifact_mask.tif",
-            "qa_report_txt":   output_dir / f"{dem_stem}_screening_report.txt",
-            "provenance":      output_dir / f"{dem_stem}_provenance.json",
+            "screened_dem": output_dir / f"{dem_stem}_screened.tif",
+            "void_mask": output_dir / f"{dem_stem}_void_mask.tif",
+            "artifact_mask": output_dir / f"{dem_stem}_artifact_mask.tif",
+            "qa_report_txt": output_dir / f"{dem_stem}_screening_report.txt",
+            "provenance": output_dir / f"{dem_stem}_provenance.json",
         }
 
         # -- Initialise provenance log ------------------------------------ #
 
         provenance = {
-            "tool":           "DEM Hydrological Screening",
-            "version":        "0.1.0",
-            "timestamp":      datetime.now().isoformat(),
-            "input_dem":      dem_layer.source(),
+            "tool": "DEM Hydrological Screening",
+            "version": "0.1.0",
+            "timestamp": datetime.now().isoformat(),
+            "input_dem": dem_layer.source(),
             "parameters": {
-                "source_type":       DEMSourceType.LABELS[source_type_idx],
-                "user_rmse":         user_rmse,
+                "source_type": DEMSourceType.LABELS[source_type_idx],
+                "user_rmse": user_rmse,
                 "small_void_thresh": small_void_thresh,
                 "large_void_thresh": large_void_thresh,
-                "mad_window":        mad_window,
-                "mad_threshold":     mad_threshold,
+                "mad_window": mad_window,
+                "mad_threshold": mad_threshold,
             },
             "stage_0": {},
             "stage_1": {},
-            "warnings":  [],
-            "errors":    [],
+            "warnings": [],
+            "errors": [],
         }
 
         # ==================================================================
@@ -508,17 +505,17 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
             with rasterio.open(dem_path) as src:
 
                 # -- Extract metadata ------------------------------------- #
-                crs        = src.crs
-                transform  = src.transform
-                res_x      = abs(transform.a)
-                res_y      = abs(transform.e)
-                nodata     = src.nodata
-                width      = src.width
-                height     = src.height
-                dtype      = src.dtypes[0]
-                bounds     = src.bounds
+                crs = src.crs
+                transform = src.transform
+                res_x = abs(transform.a)
+                res_y = abs(transform.e)
+                nodata = src.nodata
+                width = src.width
+                height = src.height
+                dtype = src.dtypes[0]
+                bounds = src.bounds
                 band_count = src.count
-                profile    = src.profile.copy()
+                profile = src.profile.copy()
 
                 self.log(f"  DEM file    : {dem_path}", feedback)
                 self.log(f"  Dimensions  : {width} x {height} cells", feedback)
@@ -556,21 +553,16 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
                     self.log_warning(crs_warning, feedback)
                     provenance["warnings"].append(crs_warning)
                 else:
-                    self.log(
-                        f"  CRS check   : OK — projected CRS confirmed.",
-                        feedback
-                    )
+                    self.log("  CRS check   : OK — projected CRS confirmed.", feedback)
 
-                provenance["stage_0"]["crs"] = (
-                    crs.to_string() if crs else "None"
-                )
+                provenance["stage_0"]["crs"] = crs.to_string() if crs else "None"
                 provenance["stage_0"]["crs_is_geographic"] = crs_is_geographic
                 provenance["stage_0"]["resolution_x"] = res_x
                 provenance["stage_0"]["resolution_y"] = res_y
-                provenance["stage_0"]["width"]  = width
+                provenance["stage_0"]["width"] = width
                 provenance["stage_0"]["height"] = height
                 provenance["stage_0"]["nodata"] = str(nodata)
-                provenance["stage_0"]["dtype"]  = dtype
+                provenance["stage_0"]["dtype"] = dtype
 
                 feedback.setProgress(15)
 
@@ -589,24 +581,20 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
                 else:
                     rmse = DEMSourceType.DEFAULT_RMSE.get(
                         source_type_idx,
-                        DEMSourceType.DEFAULT_RMSE[DEMSourceType.UNKNOWN]
+                        DEMSourceType.DEFAULT_RMSE[DEMSourceType.UNKNOWN],
                     )
                     if rmse is None:
                         # Auto-detect: use unknown default
-                        rmse = DEMSourceType.DEFAULT_RMSE[
-                            DEMSourceType.UNKNOWN
-                        ]
+                        rmse = DEMSourceType.DEFAULT_RMSE[DEMSourceType.UNKNOWN]
                         rmse_source = "auto-detect default (unknown source)"
                     else:
                         rmse_source = (
-                            f"default for "
-                            f"{DEMSourceType.LABELS[source_type_idx]}"
+                            f"default for " f"{DEMSourceType.LABELS[source_type_idx]}"
                         )
 
                 self.log(
-                    f"  Vertical accuracy (RMSE): {rmse:.3f} m "
-                    f"({rmse_source})",
-                    feedback
+                    f"  Vertical accuracy (RMSE): {rmse:.3f} m " f"({rmse_source})",
+                    feedback,
                 )
                 provenance["stage_0"]["vertical_accuracy_rmse"] = rmse
                 provenance["stage_0"]["vertical_accuracy_source"] = rmse_source
@@ -618,31 +606,28 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
                 self.log("  Detecting void (no-data) cells...", feedback)
 
                 if nodata is not None:
-                    void_mask_bool = (dem_array == nodata)
+                    void_mask_bool = dem_array == nodata
                 else:
                     void_mask_bool = ~np.isfinite(dem_array)
 
-                total_cells   = width * height
-                total_voids   = int(np.sum(void_mask_bool))
-                void_pct      = (total_voids / total_cells) * 100
+                total_cells = width * height
+                total_voids = int(np.sum(void_mask_bool))
+                void_pct = (total_voids / total_cells) * 100
 
+                self.log(f"  Total cells : {total_cells:,}", feedback)
                 self.log(
-                    f"  Total cells : {total_cells:,}", feedback
-                )
-                self.log(
-                    f"  Void cells  : {total_voids:,} "
-                    f"({void_pct:.2f}% of total)",
-                    feedback
+                    f"  Void cells  : {total_voids:,} " f"({void_pct:.2f}% of total)",
+                    feedback,
                 )
 
                 # -- Classify voids by connected component size ----------- #
                 void_class_array = np.zeros_like(dem_array, dtype=np.uint8)
-                dem_screened     = dem_array.copy()
+                dem_screened = dem_array.copy()
 
-                small_void_count  = 0
+                small_void_count = 0
                 medium_void_count = 0
-                large_void_count  = 0
-                large_void_areas  = []
+                large_void_count = 0
+                large_void_areas = []
 
                 if total_voids > 0:
                     # Label connected void regions
@@ -651,11 +636,11 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
                     self.log(
                         f"  Void regions: {num_regions} connected "
                         f"void region(s) detected",
-                        feedback
+                        feedback,
                     )
 
                     for region_id in range(1, num_regions + 1):
-                        region_mask = (labeled_voids == region_id)
+                        region_mask = labeled_voids == region_id
                         region_size = int(np.sum(region_mask))
 
                         if region_size <= small_void_thresh:
@@ -668,9 +653,9 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
                                 r1 = min(height - 1, r + 1)
                                 c0 = max(0, c - 1)
                                 c1 = min(width - 1, c + 1)
-                                neighbourhood = dem_array[r0:r1+1, c0:c1+1]
+                                neighbourhood = dem_array[r0 : r1 + 1, c0 : c1 + 1]
                                 valid_vals = neighbourhood[
-                                    ~void_mask_bool[r0:r1+1, c0:c1+1]
+                                    ~void_mask_bool[r0 : r1 + 1, c0 : c1 + 1]
                                 ]
                                 if len(valid_vals) > 0:
                                     dem_screened[r, c] = np.mean(valid_vals)
@@ -690,29 +675,31 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
                             large_void_count += region_size
                             # Record location of large void
                             rows, cols = np.where(region_mask)
-                            large_void_areas.append({
-                                "region_id":   int(region_id),
-                                "size_cells":  region_size,
-                                "row_min":     int(rows.min()),
-                                "row_max":     int(rows.max()),
-                                "col_min":     int(cols.min()),
-                                "col_max":     int(cols.max()),
-                            })
+                            large_void_areas.append(
+                                {
+                                    "region_id": int(region_id),
+                                    "size_cells": region_size,
+                                    "row_min": int(rows.min()),
+                                    "row_max": int(rows.max()),
+                                    "col_min": int(cols.min()),
+                                    "col_max": int(cols.max()),
+                                }
+                            )
 
                     self.log(
                         f"  Small voids (interpolated) : "
                         f"{small_void_count:,} cells",
-                        feedback
+                        feedback,
                     )
                     self.log(
                         f"  Medium voids (flagged)     : "
                         f"{medium_void_count:,} cells",
-                        feedback
+                        feedback,
                     )
                     self.log(
                         f"  Large voids (analyst alert): "
                         f"{large_void_count:,} cells",
-                        feedback
+                        feedback,
                     )
 
                     if large_void_areas:
@@ -722,7 +709,7 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
                             f"NOT been filled. Review the void mask and "
                             f"address these gaps before proceeding with "
                             f"any conditioning steps.",
-                            feedback
+                            feedback,
                         )
                         for lv in large_void_areas:
                             self.log_warning(
@@ -730,15 +717,15 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
                                 f"{lv['size_cells']:,} cells — "
                                 f"rows {lv['row_min']}-{lv['row_max']}, "
                                 f"cols {lv['col_min']}-{lv['col_max']}",
-                                feedback
+                                feedback,
                             )
 
                 provenance["stage_0"]["void_summary"] = {
-                    "total_void_cells":   total_voids,
-                    "void_pct":           round(void_pct, 4),
+                    "total_void_cells": total_voids,
+                    "void_pct": round(void_pct, 4),
                     "small_interpolated": small_void_count,
-                    "medium_flagged":     medium_void_count,
-                    "large_reported":     large_void_count,
+                    "medium_flagged": medium_void_count,
+                    "large_reported": large_void_count,
                     "large_void_regions": large_void_areas,
                 }
 
@@ -760,15 +747,12 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
                     blockysize=256,
                 )
 
-                with rasterio.open(
-                    paths["screened_dem"], "w", **out_profile
-                ) as dst:
+                with rasterio.open(paths["screened_dem"], "w", **out_profile) as dst:
                     dst.write(dem_screened.astype(np.float64), 1)
 
                 self.log(
-                    f"  Screened DEM written: "
-                    f"{paths['screened_dem'].name}",
-                    feedback
+                    f"  Screened DEM written: " f"{paths['screened_dem'].name}",
+                    feedback,
                 )
 
                 # -- Write void classification mask ----------------------- #
@@ -780,15 +764,11 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
                     compress="lzw",
                 )
 
-                with rasterio.open(
-                    paths["void_mask"], "w", **void_profile
-                ) as dst:
+                with rasterio.open(paths["void_mask"], "w", **void_profile) as dst:
                     dst.write(void_class_array, 1)
 
                 self.log(
-                    f"  Void mask written   : "
-                    f"{paths['void_mask'].name}",
-                    feedback
+                    f"  Void mask written   : " f"{paths['void_mask'].name}", feedback
                 )
 
                 feedback.setProgress(50)
@@ -805,31 +785,18 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
                 # -- Classify DEM source type ----------------------------- #
                 self.log("", feedback)
                 self.log(
-                    f"  DEM source type: "
-                    f"{DEMSourceType.LABELS[source_type_idx]}",
-                    feedback
+                    f"  DEM source type: " f"{DEMSourceType.LABELS[source_type_idx]}",
+                    feedback,
                 )
 
-                provenance["stage_1"]["source_type"] = (
-                    DEMSourceType.LABELS[source_type_idx]
-                )
+                provenance["stage_1"]["source_type"] = DEMSourceType.LABELS[
+                    source_type_idx
+                ]
 
                 # -- Determine artifact screening pathway ---------------- #
-                is_sar_insar = source_type_idx in (
-                    DEMSourceType.SRTM,
-                    DEMSourceType.COPERNICUS_GLO30,
-                    DEMSourceType.UNKNOWN,
-                    DEMSourceType.AUTO_DETECT,
-                )
-                is_lidar_dsm = (
-                    source_type_idx == DEMSourceType.LIDAR_DSM
-                )
-                is_lidar_dtm = (
-                    source_type_idx == DEMSourceType.LIDAR_DTM
-                )
-                is_corrected = (
-                    source_type_idx == DEMSourceType.FABDEM_FATHOMDEM
-                )
+                is_lidar_dsm = source_type_idx == DEMSourceType.LIDAR_DSM
+                is_lidar_dtm = source_type_idx == DEMSourceType.LIDAR_DTM
+                is_corrected = source_type_idx == DEMSourceType.FABDEM_FATHOMDEM
 
                 # -- LiDAR DSM — ground filter (coming soon) ------------- #
                 if is_lidar_dsm:
@@ -843,9 +810,9 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
                         "if one is available."
                     )
                     self.log_warning(msg, feedback)
-                    provenance["stage_1"]["lidar_ground_filter"] = (
-                        "not_implemented — coming in future release"
-                    )
+                    provenance["stage_1"][
+                        "lidar_ground_filter"
+                    ] = "not_implemented — coming in future release"
 
                 # -- FABDEM/FathomDEM — already corrected ---------------- #
                 if is_corrected:
@@ -855,11 +822,11 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
                         "building bias correction already applied by "
                         "the data provider. Proceeding to statistical "
                         "outlier screening only.",
-                        feedback
+                        feedback,
                     )
-                    provenance["stage_1"]["bias_correction"] = (
-                        "not_required — pre-corrected product"
-                    )
+                    provenance["stage_1"][
+                        "bias_correction"
+                    ] = "not_required — pre-corrected product"
 
                 # -- LiDAR DTM — no bias correction needed --------------- #
                 if is_lidar_dtm:
@@ -868,11 +835,11 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
                         "Vegetation/building bias correction not "
                         "required. Proceeding to statistical "
                         "outlier screening.",
-                        feedback
+                        feedback,
                     )
-                    provenance["stage_1"]["bias_correction"] = (
-                        "not_required — bare-earth DTM"
-                    )
+                    provenance["stage_1"][
+                        "bias_correction"
+                    ] = "not_required — bare-earth DTM"
 
                 feedback.setProgress(55)
                 if self.is_cancelled(feedback):
@@ -884,7 +851,7 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
                     f"  Running MAD artifact filter "
                     f"(window={mad_window}x{mad_window}, "
                     f"threshold={mad_threshold}σ)...",
-                    feedback
+                    feedback,
                 )
 
                 artifact_mask = self._run_mad_filter(
@@ -902,7 +869,7 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
                     f"  Artifact cells detected: "
                     f"{total_artifacts:,} "
                     f"({artifact_pct:.3f}% of total)",
-                    feedback
+                    feedback,
                 )
 
                 # -- Warn if high artifact percentage -------------------- #
@@ -919,13 +886,13 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
                     self.log(
                         f"  Note: {artifact_pct:.1f}% artifact rate. "
                         f"Review artifact mask before proceeding.",
-                        feedback
+                        feedback,
                     )
 
                 provenance["stage_1"]["mad_filter"] = {
-                    "window_size":       mad_window,
-                    "threshold_sigma":   mad_threshold,
-                    "cells_flagged":     total_artifacts,
+                    "window_size": mad_window,
+                    "threshold_sigma": mad_threshold,
+                    "cells_flagged": total_artifacts,
                     "cells_flagged_pct": round(artifact_pct, 4),
                 }
 
@@ -945,14 +912,11 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
                 with rasterio.open(
                     paths["artifact_mask"], "w", **artifact_profile
                 ) as dst:
-                    dst.write(
-                        artifact_mask.astype(np.uint8), 1
-                    )
+                    dst.write(artifact_mask.astype(np.uint8), 1)
 
                 self.log(
-                    f"  Artifact mask written: "
-                    f"{paths['artifact_mask'].name}",
-                    feedback
+                    f"  Artifact mask written: " f"{paths['artifact_mask'].name}",
+                    feedback,
                 )
 
                 feedback.setProgress(80)
@@ -964,12 +928,8 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
             raise
 
         except Exception as e:
-            MayimLogger.critical(
-                f"DEM Hydrological Screening failed: {e}"
-            )
-            raise QgsProcessingException(
-                f"DEM Hydrological Screening failed: {e}"
-            )
+            MayimLogger.critical(f"DEM Hydrological Screening failed: {e}")
+            raise QgsProcessingException(f"DEM Hydrological Screening failed: {e}")
 
         # ==================================================================
         # WRITE REPORTS & PROVENANCE
@@ -993,11 +953,7 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
         with open(paths["provenance"], "w", encoding="utf-8") as f:
             json.dump(provenance, f, indent=4, default=str)
 
-        self.log(
-            f"  Provenance log written: "
-            f"{paths['provenance'].name}",
-            feedback
-        )
+        self.log(f"  Provenance log written: " f"{paths['provenance'].name}", feedback)
 
         feedback.setProgress(95)
 
@@ -1006,26 +962,20 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
         self.log("=" * 60, feedback)
         self.log("  SCREENING COMPLETE", feedback)
         self.log("=" * 60, feedback)
+        self.log(f"  All outputs written to: {output_folder}", feedback)
         self.log(
-            f"  All outputs written to: {output_folder}",
-            feedback
-        )
-        self.log(
-            f"  Review the QA report before proceeding to "
-            f"any conditioning steps.",
-            feedback
+            "  Review the QA report before proceeding to " "any conditioning steps.",
+            feedback,
         )
         self.log("", feedback)
 
         feedback.setProgress(95)
 
         # ── Read load preferences ──────────────────────────────────────── #
-        load_screened_dem  = self.parameterAsBoolean(
+        load_screened_dem = self.parameterAsBoolean(
             parameters, "LOAD_SCREENED_DEM", context
         )
-        load_void_mask     = self.parameterAsBoolean(
-            parameters, "LOAD_VOID_MASK", context
-        )
+        load_void_mask = self.parameterAsBoolean(parameters, "LOAD_VOID_MASK", context)
         load_artifact_mask = self.parameterAsBoolean(
             parameters, "LOAD_ARTIFACT_MASK", context
         )
@@ -1052,6 +1002,7 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
 
         try:
             import rasterio as _rio
+
             with _rio.open(str(paths["screened_dem"])) as _src:
                 _crs = _src.crs.to_string() if _src.crs else "Unknown"
                 _res_x = abs(float(_src.transform.a))
@@ -1061,10 +1012,10 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
                 _width = _src.width
                 _height = _src.height
                 _bounds = {
-                    "left":   float(_src.bounds.left),
+                    "left": float(_src.bounds.left),
                     "bottom": float(_src.bounds.bottom),
-                    "right":  float(_src.bounds.right),
-                    "top":    float(_src.bounds.top),
+                    "right": float(_src.bounds.right),
+                    "top": float(_src.bounds.top),
                 }
                 _dtype = str(_src.dtypes[0])
 
@@ -1073,30 +1024,25 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
                 crs=_crs,
                 cell_size=_mean_cell,
                 vertical_accuracy=float(
-                    provenance.get("stage_0", {}).get(
-                        "vertical_accuracy_rmse", 5.0
-                    )
+                    provenance.get("stage_0", {}).get("vertical_accuracy_rmse", 5.0)
                 ),
                 nodata=_nodata,
                 produced_by="dem-hydrological-screening-0.2.0",
                 stage=1,
                 audit_log_path=str(paths["provenance"]),
                 warnings=provenance.get("warnings", []) or None,
-                dem_source_type=params.get("source_type"),
+                dem_source_type=parameters.get("source_type"),
                 width=_width,
                 height=_height,
                 bounds=_bounds,
                 dtype=_dtype,
             )
 
-            _manifest_path = str(
-                output_dir / f"{dem_stem}_screened.manifest.json"
-            )
+            _manifest_path = str(output_dir / f"{dem_stem}_screened.manifest.json")
             _manifest.write(_manifest_path)
 
             self.log(
-                f"MayimManifest written: "
-                f"{Path(_manifest_path).name}",
+                f"MayimManifest written: " f"{Path(_manifest_path).name}",
                 feedback,
             )
 
@@ -1110,11 +1056,11 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
         feedback.setProgress(100)
 
         return {
-            self.OUTPUT_DEM:           str(paths["screened_dem"]),
-            self.OUTPUT_VOID_MASK:     str(paths["void_mask"]),
+            self.OUTPUT_DEM: str(paths["screened_dem"]),
+            self.OUTPUT_VOID_MASK: str(paths["void_mask"]),
             self.OUTPUT_ARTIFACT_MASK: str(paths["artifact_mask"]),
-            self.OUTPUT_QA_REPORT:     str(paths["qa_report_txt"]),
-            self.OUTPUT_PROVENANCE:    str(paths["provenance"]),
+            self.OUTPUT_QA_REPORT: str(paths["qa_report_txt"]),
+            self.OUTPUT_PROVENANCE: str(paths["provenance"]),
         }
 
     # -- Private helper methods ------------------------------------------- #
@@ -1244,7 +1190,6 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
         :param feedback: QGIS feedback object for cancellation checks
         :returns: Binary uint8 array — 1 = artifact, 0 = clean
         """
-        from scipy.ndimage import generic_filter
 
         height, width = dem_array.shape
         artifact_mask = np.zeros((height, width), dtype=np.uint8)
@@ -1255,9 +1200,7 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
         work[void_mask] = np.nan
 
         self.log(
-            f"    MAD filter: processing "
-            f"{height:,} x {width:,} cells...",
-            feedback
+            f"    MAD filter: processing " f"{height:,} x {width:,} cells...", feedback
         )
 
         # Process row by row for progress reporting and cancellation
@@ -1269,10 +1212,7 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
             # Report progress every 10% of rows
             if row % max(1, height // 10) == 0:
                 pct = int((row / height) * 100)
-                self.log(
-                    f"    MAD filter: {pct}% complete...",
-                    feedback
-                )
+                self.log(f"    MAD filter: {pct}% complete...", feedback)
 
             for col in range(width):
 
@@ -1331,8 +1271,8 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
         s0 = provenance.get("stage_0", {})
         s1 = provenance.get("stage_1", {})
         warnings = provenance.get("warnings", [])
-        errors   = provenance.get("errors", [])
-        params   = provenance.get("parameters", {})
+        errors = provenance.get("errors", [])
+        params = provenance.get("parameters", {})
 
         lines = []
         a = lines.append  # shorthand for readability
@@ -1353,18 +1293,19 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
         a("  PARAMETERS")
         a("-" * 70)
         a(f"  DEM source type       : {params.get('source_type', 'Unknown')}")
-        a(f"  User RMSE override    : "
-          f"{params.get('user_rmse', -1)} m "
-          f"(-1 = use default)")
-        a(f"  Small void threshold  : "
-          f"{params.get('small_void_thresh', 10)} cells")
-        a(f"  Large void threshold  : "
-          f"{params.get('large_void_thresh', 100)} cells")
-        a(f"  MAD window size       : "
-          f"{params.get('mad_window', 3)} x "
-          f"{params.get('mad_window', 3)} cells")
-        a(f"  MAD threshold (sigma) : "
-          f"{params.get('mad_threshold', 3.0)}")
+        a(
+            f"  User RMSE override    : "
+            f"{params.get('user_rmse', -1)} m "
+            f"(-1 = use default)"
+        )
+        a(f"  Small void threshold  : " f"{params.get('small_void_thresh', 10)} cells")
+        a(f"  Large void threshold  : " f"{params.get('large_void_thresh', 100)} cells")
+        a(
+            f"  MAD window size       : "
+            f"{params.get('mad_window', 3)} x "
+            f"{params.get('mad_window', 3)} cells"
+        )
+        a(f"  MAD threshold (sigma) : " f"{params.get('mad_threshold', 3.0)}")
         a("")
 
         # -- Stage 0 results ---------------------------------------------- #
@@ -1375,76 +1316,93 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
         a(f"  CRS is geographic     : {s0.get('crs_is_geographic', 'Unknown')}")
         a(f"  Resolution (X)        : {s0.get('resolution_x', 'Unknown')}")
         a(f"  Resolution (Y)        : {s0.get('resolution_y', 'Unknown')}")
-        a(f"  Dimensions            : "
-          f"{s0.get('width', '?')} x {s0.get('height', '?')} cells")
+        a(
+            f"  Dimensions            : "
+            f"{s0.get('width', '?')} x {s0.get('height', '?')} cells"
+        )
         a(f"  Data type             : {s0.get('dtype', 'Unknown')}")
         a(f"  NoData value          : {s0.get('nodata', 'None')}")
-        a(f"  Vertical accuracy     : "
-          f"{s0.get('vertical_accuracy_rmse', 'Unknown')} m RMSE "
-          f"({s0.get('vertical_accuracy_source', 'Unknown')})")
+        a(
+            f"  Vertical accuracy     : "
+            f"{s0.get('vertical_accuracy_rmse', 'Unknown')} m RMSE "
+            f"({s0.get('vertical_accuracy_source', 'Unknown')})"
+        )
         a("")
 
         # -- Void summary ------------------------------------------------- #
         void_summary = s0.get("void_summary", {})
-        a(f"  VOID SUMMARY")
+        a("  VOID SUMMARY")
         a(f"  {'-' * 40}")
-        a(f"  Total void cells      : "
-          f"{void_summary.get('total_void_cells', 0):,} "
-          f"({void_summary.get('void_pct', 0.0):.2f}% of total)")
-        a(f"  Small (interpolated)  : "
-          f"{void_summary.get('small_interpolated', 0):,} cells")
-        a(f"  Medium (flagged)      : "
-          f"{void_summary.get('medium_flagged', 0):,} cells")
-        a(f"  Large (analyst alert) : "
-          f"{void_summary.get('large_reported', 0):,} cells")
+        a(
+            f"  Total void cells      : "
+            f"{void_summary.get('total_void_cells', 0):,} "
+            f"({void_summary.get('void_pct', 0.0):.2f}% of total)"
+        )
+        a(
+            f"  Small (interpolated)  : "
+            f"{void_summary.get('small_interpolated', 0):,} cells"
+        )
+        a(
+            f"  Medium (flagged)      : "
+            f"{void_summary.get('medium_flagged', 0):,} cells"
+        )
+        a(
+            f"  Large (analyst alert) : "
+            f"{void_summary.get('large_reported', 0):,} cells"
+        )
         a("")
 
         # -- Large void regions detail ------------------------------------ #
         large_regions = void_summary.get("large_void_regions", [])
         if large_regions:
-            a(f"  LARGE VOID REGIONS — ANALYST ACTION REQUIRED")
+            a("  LARGE VOID REGIONS — ANALYST ACTION REQUIRED")
             a(f"  {'-' * 40}")
-            a(f"  These regions have NOT been filled.")
-            a(f"  Address these data gaps before proceeding")
-            a(f"  with any conditioning steps.")
+            a("  These regions have NOT been filled.")
+            a("  Address these data gaps before proceeding")
+            a("  with any conditioning steps.")
             a("")
             for lv in large_regions:
-                a(f"  Region {lv['region_id']:>3} : "
-                  f"{lv['size_cells']:>8,} cells — "
-                  f"rows {lv['row_min']}-{lv['row_max']}, "
-                  f"cols {lv['col_min']}-{lv['col_max']}")
+                a(
+                    f"  Region {lv['region_id']:>3} : "
+                    f"{lv['size_cells']:>8,} cells — "
+                    f"rows {lv['row_min']}-{lv['row_max']}, "
+                    f"cols {lv['col_min']}-{lv['col_max']}"
+                )
             a("")
 
         # -- Stage 1 results ---------------------------------------------- #
         a("-" * 70)
         a("  STAGE 1 — ARTIFACT SCREENING")
         a("-" * 70)
-        a(f"  DEM source type       : "
-          f"{s1.get('source_type', 'Unknown')}")
-        a(f"  Bias correction       : "
-          f"{s1.get('bias_correction', 'See notes below')}")
-        a(f"  LiDAR ground filter   : "
-          f"{s1.get('lidar_ground_filter', 'N/A')}")
+        a(f"  DEM source type       : " f"{s1.get('source_type', 'Unknown')}")
+        a(
+            f"  Bias correction       : "
+            f"{s1.get('bias_correction', 'See notes below')}"
+        )
+        a(f"  LiDAR ground filter   : " f"{s1.get('lidar_ground_filter', 'N/A')}")
         a("")
 
         # -- MAD filter results ------------------------------------------- #
         mad = s1.get("mad_filter", {})
         if mad:
-            a(f"  MAD ARTIFACT FILTER RESULTS")
+            a("  MAD ARTIFACT FILTER RESULTS")
             a(f"  {'-' * 40}")
-            a(f"  Window size           : "
-              f"{mad.get('window_size', '?')} x "
-              f"{mad.get('window_size', '?')} cells")
-            a(f"  Detection threshold   : "
-              f"{mad.get('threshold_sigma', '?')} sigma")
-            a(f"  Cells flagged         : "
-              f"{mad.get('cells_flagged', 0):,} cells "
-              f"({mad.get('cells_flagged_pct', 0.0):.3f}%)")
+            a(
+                f"  Window size           : "
+                f"{mad.get('window_size', '?')} x "
+                f"{mad.get('window_size', '?')} cells"
+            )
+            a(f"  Detection threshold   : " f"{mad.get('threshold_sigma', '?')} sigma")
+            a(
+                f"  Cells flagged         : "
+                f"{mad.get('cells_flagged', 0):,} cells "
+                f"({mad.get('cells_flagged_pct', 0.0):.3f}%)"
+            )
             a("")
 
             # -- Interpretation guidance ---------------------------------- #
             pct = mad.get("cells_flagged_pct", 0.0)
-            a(f"  INTERPRETATION")
+            a("  INTERPRETATION")
             a(f"  {'-' * 40}")
             if pct == 0.0:
                 a("  No artifacts detected. DEM appears clean.")
@@ -1473,7 +1431,7 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
             for i, w in enumerate(warnings, 1):
                 # Word-wrap long warnings at 65 characters
                 words = w.split()
-                line  = f"  {i}. "
+                line = f"  {i}. "
                 for word in words:
                     if len(line) + len(word) + 1 > 68:
                         a(line)
@@ -1497,16 +1455,11 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
         a("-" * 70)
         a("OUTPUT FILES")
         a("-" * 70)
-        a(f"  Screened DEM          : "
-          f"{paths['screened_dem'].name}")
-        a(f"  Void mask             : "
-          f"{paths['void_mask'].name}")
-        a(f"  Artifact mask         : "
-          f"{paths['artifact_mask'].name}")
-        a(f"  QA report             : "
-          f"{paths['qa_report_txt'].name}")
-        a(f"  Provenance log        : "
-          f"{paths['provenance'].name}")
+        a(f"  Screened DEM          : " f"{paths['screened_dem'].name}")
+        a(f"  Void mask             : " f"{paths['void_mask'].name}")
+        a(f"  Artifact mask         : " f"{paths['artifact_mask'].name}")
+        a(f"  QA report             : " f"{paths['qa_report_txt'].name}")
+        a(f"  Provenance log        : " f"{paths['provenance'].name}")
         a("")
 
         # -- Void mask legend --------------------------------------------- #
@@ -1532,9 +1485,9 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
         a("  RECOMMENDED NEXT STEPS")
         a("-" * 70)
 
-        has_large_voids    = len(large_regions) > 0
+        has_large_voids = len(large_regions) > 0
         has_high_artifacts = mad.get("cells_flagged_pct", 0.0) > 1.0
-        has_geo_crs        = s0.get("crs_is_geographic", False)
+        has_geo_crs = s0.get("crs_is_geographic", False)
 
         if has_large_voids:
             a("  1. [REQUIRED] Address large void regions before")
@@ -1594,13 +1547,9 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
         # -- Write to file ------------------------------------------------ #
         report_text = "\n".join(lines)
 
-        with open(
-            paths["qa_report_txt"], "w", encoding="utf-8"
-        ) as f:
+        with open(paths["qa_report_txt"], "w", encoding="utf-8") as f:
             f.write(report_text)
 
         self.log(
-            f"  QA report written     : "
-            f"{paths['qa_report_txt'].name}",
-            feedback
+            f"  QA report written     : " f"{paths['qa_report_txt'].name}", feedback
         )

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Mayim Tools – Processing Provider
 Registers Mayim Tools with the QGIS Processing Framework,
@@ -38,6 +37,7 @@ class MayimToolsProvider(QgsProcessingProvider):
     def icon(self) -> QIcon:
         """Provider icon shown in the Processing Toolbox."""
         from mayim_tools.resources_rc import get_icon_path
+
         return QIcon(get_icon_path("mayim_logo.png"))
 
     def loadAlgorithms(self) -> None:
@@ -67,4 +67,3 @@ class MayimToolsProvider(QgsProcessingProvider):
     def supportedOutputVectorLayerExtensions(self) -> list[str]:
         """Declare supported vector output formats."""
         return ["gpkg", "shp", "geojson"]
-

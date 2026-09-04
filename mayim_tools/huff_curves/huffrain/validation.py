@@ -27,22 +27,32 @@ def parse_and_validate(
     Raises ValueError if the required columns are missing.
     """
     if timestamp_col not in df.columns:
-        raise ValueError(f"Timestamp column {timestamp_col!r} not found. Available: {list(df.columns)}")
+        raise ValueError(
+            f"Timestamp column {timestamp_col!r} not found. Available: {list(df.columns)}"
+        )
     if depth_col not in df.columns:
-        raise ValueError(f"Depth column {depth_col!r} not found. Available: {list(df.columns)}")
+        raise ValueError(
+            f"Depth column {depth_col!r} not found. Available: {list(df.columns)}"
+        )
 
     diagnostics: dict = {"warnings": []}
 
-    work = pd.DataFrame({
-        "source_row": df.index,
-        "timestamp_raw": df[timestamp_col],
-        "depth_raw": df[depth_col],
-    })
+    work = pd.DataFrame(
+        {
+            "source_row": df.index,
+            "timestamp_raw": df[timestamp_col],
+            "depth_raw": df[depth_col],
+        }
+    )
 
-    work["timestamp"] = pd.to_datetime(work["timestamp_raw"], format=timestamp_format, errors="coerce")
+    work["timestamp"] = pd.to_datetime(
+        work["timestamp_raw"], format=timestamp_format, errors="coerce"
+    )
     n_bad_ts = int(work["timestamp"].isna().sum())
     if n_bad_ts:
-        diagnostics["warnings"].append(f"{n_bad_ts} row(s) had unparseable timestamps and were dropped.")
+        diagnostics["warnings"].append(
+            f"{n_bad_ts} row(s) had unparseable timestamps and were dropped."
+        )
     work = work.dropna(subset=["timestamp"]).copy()
 
     # depth: coerce to numeric, but NEVER fill NaN with 0 - a blank cell
@@ -70,12 +80,16 @@ def parse_and_validate(
             f"{n_dupe} duplicate timestamp(s) found. Keeping the first occurrence of each; "
             "review the source file if this is unexpected."
         )
-        work = work.drop_duplicates(subset="timestamp", keep="first").reset_index(drop=True)
+        work = work.drop_duplicates(subset="timestamp", keep="first").reset_index(
+            drop=True
+        )
 
     diagnostics["n_rows_in"] = len(df)
     diagnostics["n_rows_valid"] = len(work)
     diagnostics["timestamp_range"] = (
-        (str(work["timestamp"].min()), str(work["timestamp"].max())) if len(work) else (None, None)
+        (str(work["timestamp"].min()), str(work["timestamp"].max()))
+        if len(work)
+        else (None, None)
     )
 
     return work[["source_row", "timestamp", "depth_mm"]], diagnostics

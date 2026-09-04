@@ -1,11 +1,9 @@
-# -*- coding: utf-8 -*-
 """
 Mayim Tools – Base Dialog
 Abstract base class for all custom tool dialogs in Mayim Tools.
 Provides consistent styling, layout helpers, and shared behaviour.
 """
 
-from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -71,8 +69,7 @@ class MayimBaseDialog(QDialog):
 
         # ── Standard OK / Cancel buttons ──
         self.button_box = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok |
-            QDialogButtonBox.StandardButton.Cancel
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
         self.button_box.accepted.connect(self._on_accept)
         self.button_box.rejected.connect(self.reject)
@@ -104,6 +101,7 @@ class MayimBaseDialog(QDialog):
         :param message: Error message string
         """
         from qgis.PyQt.QtWidgets import QMessageBox
+
         MayimLogger.warning(message)
         QMessageBox.critical(self, "Mayim Tools — Input Error", message)
 
@@ -114,5 +112,6 @@ class MayimBaseDialog(QDialog):
         :param message: Info message string
         """
         from qgis.PyQt.QtWidgets import QMessageBox
+
         MayimLogger.info(message)
         QMessageBox.information(self, "Mayim Tools", message)

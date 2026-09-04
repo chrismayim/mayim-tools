@@ -1,0 +1,20 @@
+[general]
+name=Design Rainfall Estimation (South Africa)
+qgisMinimumVersion=3.38
+qgisMaximumVersion=4.99
+description=Modern successor to the legacy "Design Rainfall Estimation in South Africa" Java tool. Estimates design rainfall depths (5min-7day durations, 2-200yr return periods, with 90% confidence bounds) for any point in South Africa using the Smithers & Schulze regional L-moment methodology, with report-ready output.
+version=0.2.0
+author=Chris
+email=
+
+about=Rebuild of the original rainfall2/rainfall3 Java desktop tool as a QGIS plugin. Point of interest may be given by clicking the map canvas, typing coordinates, or selecting a vector point layer (every feature processed). Computes design rainfall depths and 90% confidence bounds from the bundled national grid dataset and exports report-ready tables (CSV / Word) and/or a point layer with results as attributes. Formulae validated against the source WRC report (K5/1060, 2002) - see dev/VALIDATED_FORMULAE.md.
+
+tracker=
+repository=
+category=Analysis
+tags=hydrology,rainfall,design storm,IDF,South Africa
+
+experimental=True
+deprecated=False
+
+hasProcessingProvider=yes

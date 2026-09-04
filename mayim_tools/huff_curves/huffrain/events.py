@@ -23,7 +23,9 @@ import pandas as pd
 from .schemas import RainfallEvent
 
 
-def delineate_events(intervals: "pd.DataFrame", mit_s: float, wet_threshold_mm: float) -> list[RainfallEvent]:
+def delineate_events(
+    intervals: "pd.DataFrame", mit_s: float, wet_threshold_mm: float
+) -> list[RainfallEvent]:
     events: list[RainfallEvent] = []
 
     in_event = False
@@ -39,7 +41,9 @@ def delineate_events(intervals: "pd.DataFrame", mit_s: float, wet_threshold_mm: 
         sub = intervals.loc[rows]
         wet_rows = sub[sub["quality_code"] != "missing"]
         if wet_rows.empty:
-            return None  # an event made entirely of missing intervals is not a real event
+            return (
+                None  # an event made entirely of missing intervals is not a real event
+            )
         wet_only = wet_rows[wet_rows["depth_mm"] > wet_threshold_mm]
         if wet_only.empty:
             return None
@@ -51,12 +55,13 @@ def delineate_events(intervals: "pd.DataFrame", mit_s: float, wet_threshold_mm: 
         event_id += 1
         return RainfallEvent(
             event_id=event_id,
-            start=start, end=end,
+            start=start,
+            end=end,
             wet_duration_s=wet_duration_s,
             analysis_duration_s=wet_duration_s,  # v1: no dry padding, see module docstring
             total_depth_mm=total_depth,
             max_interval_depth_mm=max_depth,
-            n_wet_intervals=int(len(wet_only)),
+            n_wet_intervals=len(wet_only),
             n_dry_gaps=n_dry_gaps,
             mit_used_s=mit_s,
             source_rows=tuple(int(r) for r in sub["source_row"]),
@@ -72,7 +77,9 @@ def delineate_events(intervals: "pd.DataFrame", mit_s: float, wet_threshold_mm: 
             if in_event:
                 event_rows.append(i)
                 contains_missing = True
-            dry_run_active = False  # missing data doesn't count as a dry run for gap counting
+            dry_run_active = (
+                False  # missing data doesn't count as a dry run for gap counting
+            )
             continue
 
         is_wet = depth > wet_threshold_mm
@@ -126,9 +133,13 @@ def screen_events(
         if quality_mode == "strict" and ev.contains_missing:
             reasons.append("contains missing interval(s) within the event window")
         if depth_threshold_mm is not None and ev.total_depth_mm < depth_threshold_mm:
-            reasons.append(f"total depth {ev.total_depth_mm:.2f}mm below threshold {depth_threshold_mm}mm")
+            reasons.append(
+                f"total depth {ev.total_depth_mm:.2f}mm below threshold {depth_threshold_mm}mm"
+            )
         if min_duration_s is not None and ev.wet_duration_s < min_duration_s:
-            reasons.append(f"duration {ev.wet_duration_s/3600:.2f}h below minimum {min_duration_s/3600:.2f}h")
+            reasons.append(
+                f"duration {ev.wet_duration_s/3600:.2f}h below minimum {min_duration_s/3600:.2f}h"
+            )
 
         ev.excluded = bool(reasons)
         ev.exclusion_reason = "; ".join(reasons) if reasons else None

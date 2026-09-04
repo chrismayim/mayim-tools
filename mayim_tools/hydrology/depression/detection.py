@@ -38,9 +38,14 @@ import numpy as np
 
 # Eight-connected neighbour offsets (D8).
 _D8 = [
-    (-1, -1), (-1, 0), (-1, 1),
-    ( 0, -1),          ( 0, 1),
-    ( 1, -1), ( 1, 0), ( 1, 1),
+    (-1, -1),
+    (-1, 0),
+    (-1, 1),
+    (0, -1),
+    (0, 1),
+    (1, -1),
+    (1, 0),
+    (1, 1),
 ]
 
 
@@ -96,7 +101,7 @@ def detect_depressions(
     depression_ids[~valid] = -1
 
     pit_cells = np.zeros((rows, cols), dtype=bool)
-    visited   = np.zeros((rows, cols), dtype=bool)
+    visited = np.zeros((rows, cols), dtype=bool)
 
     # flood_level tracks the water surface elevation at each cell
     # as the Priority-Flood traversal proceeds.
@@ -108,14 +113,14 @@ def detect_depressions(
     for r in range(rows):
         for c in [0, cols - 1]:
             if valid[r, c] and not visited[r, c]:
-                visited[r, c]    = True
+                visited[r, c] = True
                 flood_level[r, c] = dem[r, c]
                 heapq.heappush(heap, (dem[r, c], r, c))
 
     for c in range(cols):
         for r in [0, rows - 1]:
             if valid[r, c] and not visited[r, c]:
-                visited[r, c]    = True
+                visited[r, c] = True
                 flood_level[r, c] = dem[r, c]
                 heapq.heappush(heap, (dem[r, c], r, c))
 
@@ -164,7 +169,7 @@ def detect_depressions(
 
                     if is_pit:
                         depression_ids[nr, nc] = next_id
-                        pit_cells[nr, nc]      = True
+                        pit_cells[nr, nc] = True
                         next_id += 1
                     else:
                         # Propagate the ID from the upstream neighbour

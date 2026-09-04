@@ -70,49 +70,61 @@ class GribToCsvAlgorithm(QgsProcessingAlgorithm):
     def initAlgorithm(self, config=None):
         self.addParameter(
             QgsProcessingParameterFile(
-                self.INPUT, "GRIB file",
+                self.INPUT,
+                "GRIB file",
                 fileFilter="GRIB files (*.grib *.grib2 *.grb *.grb2);;All files (*.*)",
             )
         )
         self.addParameter(
             QgsProcessingParameterString(
-                self.VARIABLE, "Variable (leave empty for the first variable found)",
+                self.VARIABLE,
+                "Variable (leave empty for the first variable found)",
                 optional=True,
             )
         )
         self.addParameter(
             QgsProcessingParameterBoolean(
-                self.CONVERT_MM, "Convert metre-based precipitation to millimetres",
+                self.CONVERT_MM,
+                "Convert metre-based precipitation to millimetres",
                 defaultValue=True,
             )
         )
         self.addParameter(
             QgsProcessingParameterBoolean(
-                self.DROP_NA, "Drop rows with no data for the selected variable",
+                self.DROP_NA,
+                "Drop rows with no data for the selected variable",
                 defaultValue=True,
             )
         )
         self.addParameter(
             QgsProcessingParameterNumber(
-                self.DECIMALS, "Round values to this many decimal places (leave unset for full precision)",
+                self.DECIMALS,
+                "Round values to this many decimal places (leave unset for full precision)",
                 type=QgsProcessingParameterNumber.Type.Integer,
-                minValue=0, maxValue=15, optional=True,
+                minValue=0,
+                maxValue=15,
+                optional=True,
             )
         )
         self.addParameter(
             QgsProcessingParameterFileDestination(
-                self.OUTPUT_CSV, "Output CSV", fileFilter="CSV files (*.csv)",
+                self.OUTPUT_CSV,
+                "Output CSV",
+                fileFilter="CSV files (*.csv)",
             )
         )
 
-    def processAlgorithm(self, parameters, context: QgsProcessingContext, feedback: QgsProcessingFeedback):
+    def processAlgorithm(
+        self, parameters, context: QgsProcessingContext, feedback: QgsProcessingFeedback
+    ):
         input_path = self.parameterAsFile(parameters, self.INPUT, context)
         variable = self.parameterAsString(parameters, self.VARIABLE, context) or None
         convert_mm = self.parameterAsBoolean(parameters, self.CONVERT_MM, context)
         drop_na = self.parameterAsBoolean(parameters, self.DROP_NA, context)
         decimals = (
             self.parameterAsInt(parameters, self.DECIMALS, context)
-            if parameters.get(self.DECIMALS) is not None else None
+            if parameters.get(self.DECIMALS) is not None
+            else None
         )
         output_csv = self.parameterAsFileOutput(parameters, self.OUTPUT_CSV, context)
 
@@ -123,8 +135,14 @@ class GribToCsvAlgorithm(QgsProcessingAlgorithm):
             raise
         feedback.pushInfo(f"{len(var_info)} variable(s) found in {input_path}")
         for v in var_info:
-            marker = " <- selected" if (variable == v.name) or (variable is None and v is var_info[0]) else ""
-            feedback.pushInfo(f"  {v.name}: {v.long_name} [{v.units}] dims={v.dims}{marker}")
+            marker = (
+                " <- selected"
+                if (variable == v.name) or (variable is None and v is var_info[0])
+                else ""
+            )
+            feedback.pushInfo(
+                f"  {v.name}: {v.long_name} [{v.units}] dims={v.dims}{marker}"
+            )
 
         def _progress(pct):
             if feedback.isCanceled():
@@ -133,9 +151,12 @@ class GribToCsvAlgorithm(QgsProcessingAlgorithm):
 
         try:
             n_rows = grib_to_csv(
-                input_path, output_csv,
-                variable=variable, convert_metres_to_mm=convert_mm,
-                drop_na=drop_na, decimal_places=decimals,
+                input_path,
+                output_csv,
+                variable=variable,
+                convert_metres_to_mm=convert_mm,
+                drop_na=drop_na,
+                decimal_places=decimals,
                 progress_callback=_progress,
             )
         except InterruptedError:

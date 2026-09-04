@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Mayim Tools – File IO Utilities
 Helpers for reading and writing common geospatial and data file formats.
@@ -7,11 +6,9 @@ Helpers for reading and writing common geospatial and data file formats.
 import csv
 import json
 from pathlib import Path
-from typing import Optional
 
 from qgis.core import (
     QgsCoordinateTransformContext,
-    QgsProject,
     QgsVectorFileWriter,
     QgsVectorLayer,
 )
@@ -31,7 +28,7 @@ class FileIO:
     }
 
     @staticmethod
-    def read_json(file_path: str) -> Optional[dict]:
+    def read_json(file_path: str) -> dict | None:
         """
         Read a JSON file and return its contents as a dictionary.
 
@@ -43,7 +40,7 @@ class FileIO:
             MayimLogger.warning(f"File not found: {file_path}")
             return None
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 return json.load(f)
         except Exception as e:
             MayimLogger.critical(f"Failed to read JSON: {e}")
@@ -67,7 +64,7 @@ class FileIO:
             return False
 
     @staticmethod
-    def read_csv(file_path: str) -> Optional[list[dict]]:
+    def read_csv(file_path: str) -> list[dict] | None:
         """
         Read a CSV file and return rows as a list of dictionaries.
 
@@ -79,7 +76,7 @@ class FileIO:
             MayimLogger.warning(f"File not found: {file_path}")
             return None
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 reader = csv.DictReader(f)
                 return list(reader)
         except Exception as e:

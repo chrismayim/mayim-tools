@@ -1,11 +1,10 @@
-# -*- coding: utf-8 -*-
 """
 Mayim Tools – Event Bus
 A lightweight publish/subscribe system for inter-module communication.
 Prevents tight coupling between categories and core components.
 """
 
-from typing import Callable
+from collections.abc import Callable
 
 
 class EventBus:

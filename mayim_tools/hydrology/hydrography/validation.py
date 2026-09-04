@@ -93,17 +93,13 @@ def validate_hydrography(
         try:
             geometry_values = list(geometries)
         except TypeError as error:
-            errors.append(
-                f"Hydrography geometries are not iterable: {error}"
-            )
+            errors.append(f"Hydrography geometries are not iterable: {error}")
             geometry_values = []
 
     bounds = _normalise_bounds(dem_bounds)
 
     if bounds is None:
-        errors.append(
-            "DEM bounds could not be interpreted."
-        )
+        errors.append("DEM bounds could not be interpreted.")
 
     crs_match = _crs_equal(
         dem_crs,
@@ -128,29 +124,21 @@ def validate_hydrography(
 
         if geometry is None:
             invalid_geometry_count += 1
-            errors.append(
-                f"Hydrography feature {geometry_count} is null."
-            )
+            errors.append(f"Hydrography feature {geometry_count} is null.")
             continue
 
         if bool(getattr(geometry, "is_empty", False)):
             empty_geometry_count += 1
             invalid_geometry_count += 1
-            errors.append(
-                f"Hydrography feature {geometry_count} is empty."
-            )
+            errors.append(f"Hydrography feature {geometry_count} is empty.")
             continue
 
         if not bool(getattr(geometry, "is_valid", False)):
             invalid_geometry_count += 1
-            errors.append(
-                f"Hydrography feature {geometry_count} is invalid."
-            )
+            errors.append(f"Hydrography feature {geometry_count} is invalid.")
             continue
 
-        geometry_type = str(
-            getattr(geometry, "geom_type", "")
-        ).lower()
+        geometry_type = str(getattr(geometry, "geom_type", "")).lower()
 
         if geometry_type not in {
             "line",
@@ -180,20 +168,15 @@ def validate_hydrography(
                 )
 
     if geometry_count == 0:
-        warnings.append(
-            "No hydrography geometries were supplied."
-        )
+        warnings.append("No hydrography geometries were supplied.")
 
     if outside_dem_count > 0:
         warnings.append(
-            f"{outside_dem_count} hydrography feature(s) lie "
-            "outside the DEM extent."
+            f"{outside_dem_count} hydrography feature(s) lie " "outside the DEM extent."
         )
 
     if geometry_count > 0 and intersecting_dem_count == 0:
-        warnings.append(
-            "No hydrography features intersect the DEM extent."
-        )
+        warnings.append("No hydrography features intersect the DEM extent.")
 
     valid = not errors and geometry_count > 0
 
@@ -225,20 +208,17 @@ def _normalise_bounds(
 
     try:
         values = (
-            float(getattr(dem_bounds, "left")),
-            float(getattr(dem_bounds, "bottom")),
-            float(getattr(dem_bounds, "right")),
-            float(getattr(dem_bounds, "top")),
+            float(dem_bounds.left),
+            float(dem_bounds.bottom),
+            float(dem_bounds.right),
+            float(dem_bounds.top),
         )
     except (AttributeError, TypeError, ValueError):
         try:
             if len(dem_bounds) != 4:
                 return None
 
-            values = tuple(
-                float(value)
-                for value in dem_bounds
-            )
+            values = tuple(float(value) for value in dem_bounds)
         except (TypeError, ValueError):
             return None
 
@@ -309,11 +289,7 @@ def _geometry_intersects_bounds(
     try:
         from shapely.geometry import box
 
-        return bool(
-            geometry.intersects(
-                box(left, bottom, right, top)
-            )
-        )
+        return bool(geometry.intersects(box(left, bottom, right, top)))
     except ImportError as error:
         raise RuntimeError(
             "Shapely is required for geometry-boundary validation."

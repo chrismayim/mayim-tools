@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Mayim Tools – Resource Compilation Script
 Compiles the Qt resource file (resources.qrc) into resources_rc.py.
@@ -12,9 +11,9 @@ from pathlib import Path
 
 # ── Paths ──────────────────────────────────────────────────────────────────── #
 
-PROJECT_ROOT  = Path(__file__).resolve().parent.parent
-QRC_FILE      = PROJECT_ROOT / "resources.qrc"
-OUTPUT_FILE   = PROJECT_ROOT / "resources_rc.py"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+QRC_FILE = PROJECT_ROOT / "resources.qrc"
+OUTPUT_FILE = PROJECT_ROOT / "resources_rc.py"
 
 # ── pyrcc6 location options ────────────────────────────────────────────────── #
 # pyrcc6 is the Qt6 resource compiler.
@@ -22,7 +21,7 @@ OUTPUT_FILE   = PROJECT_ROOT / "resources_rc.py"
 # Update this path if pyrcc6 is installed elsewhere on your system.
 
 PYRCC6_OPTIONS = [
-    "pyrcc6",                                           # If on system PATH
+    "pyrcc6",  # If on system PATH
     r"C:\Program Files\QGIS 4.x\apps\Python3xx\Scripts\pyrcc6.exe",
 ]
 
@@ -54,7 +53,7 @@ def compile_resources() -> None:
     """
 
     print(f"\n{'─' * 55}")
-    print(f"  Mayim Tools — Resource Compiler")
+    print("  Mayim Tools — Resource Compiler")
     print(f"{'─' * 55}")
     print(f"  Input  : {QRC_FILE}")
     print(f"  Output : {OUTPUT_FILE}")
@@ -74,7 +73,7 @@ def compile_resources() -> None:
         sys.exit(1)
 
     # ── Run pyrcc6 ──
-    print(f"⚙️  Compiling resources...")
+    print("⚙️  Compiling resources...")
     result = subprocess.run(
         [pyrcc6, str(QRC_FILE), "-o", str(OUTPUT_FILE)],
         capture_output=True,
@@ -88,7 +87,7 @@ def compile_resources() -> None:
         sys.exit(1)
 
     print(f"\n{'─' * 55}")
-    print(f"  ✅ Resource compilation complete!")
+    print("  ✅ Resource compilation complete!")
     print(f"{'─' * 55}\n")
 
 

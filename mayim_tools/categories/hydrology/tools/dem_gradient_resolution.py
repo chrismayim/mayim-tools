@@ -78,27 +78,27 @@ class DEMGradientResolution(MayimBaseAlgorithm):
 
     TOOL_VERSION = "dem-gradient-resolution-0.2.0"
 
-    def name(self) -> str:  # noqa: N802
+    def name(self) -> str:
         """Return the Processing algorithm identifier."""
         return "demgradientresolution"
 
-    def displayName(self) -> str:  # noqa: N802
+    def displayName(self) -> str:
         """Return the human-readable algorithm name."""
         return "DEM Gradient Resolution"
 
-    def group(self) -> str:  # noqa: N802
+    def group(self) -> str:
         """Return the Processing Toolbox group."""
         return "Hydrology Tools"
 
-    def groupId(self) -> str:  # noqa: N802
+    def groupId(self) -> str:
         """Return the Processing group identifier."""
         return "hydrology"
 
-    def createInstance(self) -> DEMGradientResolution:  # noqa: N802
+    def createInstance(self) -> DEMGradientResolution:
         """Return a new adapter instance."""
         return DEMGradientResolution()
 
-    def shortHelpString(self) -> str:  # noqa: N802
+    def shortHelpString(self) -> str:
         """Return the Processing help text."""
         return (
             "<b>DEM Gradient Resolution</b><br><br>"
@@ -113,7 +113,7 @@ class DEMGradientResolution(MayimBaseAlgorithm):
             "using the resolved DEM downstream."
         )
 
-    def helpUrl(self) -> str:  # noqa: N802
+    def helpUrl(self) -> str:
         """Return the project documentation URL."""
         return "https://github.com/chrismayim/mayim-tools"
 
@@ -132,7 +132,7 @@ class DEMGradientResolution(MayimBaseAlgorithm):
             "stage-6",
         ]
 
-    def initAlgorithm(self, config=None) -> None:  # noqa: N802
+    def initAlgorithm(self, config=None) -> None:
         """Define Processing parameters and outputs."""
         self.addParameter(
             QgsProcessingParameterRasterLayer(
@@ -166,8 +166,7 @@ class DEMGradientResolution(MayimBaseAlgorithm):
         self.addParameter(
             QgsProcessingParameterNumber(
                 self.PARAM_CELL_SIZE,
-                "Cell size in map units "
-                "(recommended: use input DEM resolution)",
+                "Cell size in map units " "(recommended: use input DEM resolution)",
                 type=QgsProcessingParameterNumber.Double,
                 defaultValue=1.0,
                 minValue=0.000001,
@@ -178,8 +177,7 @@ class DEMGradientResolution(MayimBaseAlgorithm):
         self.addParameter(
             QgsProcessingParameterNumber(
                 self.PARAM_CONNECTIVITY,
-                "Flat-region connectivity "
-                "(recommended: 8; valid values: 4 or 8)",
+                "Flat-region connectivity " "(recommended: 8; valid values: 4 or 8)",
                 type=QgsProcessingParameterNumber.Integer,
                 defaultValue=8,
                 minValue=4,
@@ -275,7 +273,7 @@ class DEMGradientResolution(MayimBaseAlgorithm):
             )
         )
 
-    def processAlgorithm(  # noqa: N802
+    def processAlgorithm(
         self,
         parameters: dict,
         context: QgsProcessingContext,
@@ -296,9 +294,7 @@ class DEMGradientResolution(MayimBaseAlgorithm):
         )
 
         if not ValidationUtils.is_valid_raster_layer(dem_layer):
-            raise QgsProcessingException(
-                "The input DEM is missing or invalid."
-            )
+            raise QgsProcessingException("The input DEM is missing or invalid.")
 
         manifest_path = self.parameterAsString(
             parameters,
@@ -355,26 +351,18 @@ class DEMGradientResolution(MayimBaseAlgorithm):
         )
 
         if vertical_accuracy <= 0:
-            raise QgsProcessingException(
-                "Vertical accuracy must be greater than zero."
-            )
+            raise QgsProcessingException("Vertical accuracy must be greater than zero.")
 
         if cell_size <= 0:
-            raise QgsProcessingException(
-                "Cell size must be greater than zero."
-            )
+            raise QgsProcessingException("Cell size must be greater than zero.")
 
         if connectivity not in (4, 8):
-            raise QgsProcessingException(
-                "Connectivity must be either 4 or 8."
-            )
+            raise QgsProcessingException("Connectivity must be either 4 or 8.")
 
         if not output_folder or output_folder == "TEMPORARY_OUTPUT":
             import tempfile
 
-            output_folder = tempfile.mkdtemp(
-                prefix="mayim_gradient_"
-            )
+            output_folder = tempfile.mkdtemp(prefix="mayim_gradient_")
 
         output_dir = Path(output_folder)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -405,9 +393,7 @@ class DEMGradientResolution(MayimBaseAlgorithm):
                         feedback,
                     )
                 else:
-                    vertical_accuracy = float(
-                        input_manifest.vertical_accuracy
-                    )
+                    vertical_accuracy = float(input_manifest.vertical_accuracy)
                     cell_size = float(input_manifest.cell_size)
 
                     self.log(
@@ -457,10 +443,7 @@ class DEMGradientResolution(MayimBaseAlgorithm):
                 "cell_size": cell_size,
                 "connectivity": connectivity,
             },
-            "outputs": {
-                key: str(value)
-                for key, value in paths.items()
-            },
+            "outputs": {key: str(value) for key, value in paths.items()},
             "statistics": {},
             "warnings": [],
         }
@@ -475,11 +458,7 @@ class DEMGradientResolution(MayimBaseAlgorithm):
                 profile = source.profile.copy()
                 dem = source.read(1).astype(np.float64)
 
-                nodata = (
-                    source.nodata
-                    if source.nodata is not None
-                    else -9999.0
-                )
+                nodata = source.nodata if source.nodata is not None else -9999.0
 
                 width = int(source.width)
                 height = int(source.height)
@@ -488,20 +467,13 @@ class DEMGradientResolution(MayimBaseAlgorithm):
                 resolution_y = abs(float(source.transform.e))
 
                 if cell_size <= 0.0:
-                    cell_size = (
-                        resolution_x + resolution_y
-                    ) / 2.0
+                    cell_size = (resolution_x + resolution_y) / 2.0
 
                 crs_string = (
-                    source.crs.to_string()
-                    if source.crs is not None
-                    else "Unknown"
+                    source.crs.to_string() if source.crs is not None else "Unknown"
                 )
 
-            valid_mask = (
-                np.isfinite(dem)
-                & (dem != nodata)
-            )
+            valid_mask = np.isfinite(dem) & (dem != nodata)
 
             if not np.any(valid_mask):
                 raise QgsProcessingException(
@@ -606,37 +578,26 @@ class DEMGradientResolution(MayimBaseAlgorithm):
 
             difference = resolved_dem - dem
 
-
-            valid_mask = (
-                np.isfinite(dem)
-                & (dem != nodata)
-            )
+            valid_mask = np.isfinite(dem) & (dem != nodata)
 
             difference[~valid_mask] = 0.0
 
-            changed_mask = (
-                valid_mask
-                & (np.abs(difference) > 0.0)
-            )
+            changed_mask = valid_mask & (np.abs(difference) > 0.0)
 
             changed_cells = int(np.sum(changed_mask))
-            total_change = float(
-                np.sum(np.abs(difference[changed_mask]))
+            total_change = float(np.sum(np.abs(difference[changed_mask])))
+            maximum_change = (
+                float(np.max(np.abs(difference[changed_mask])))
+                if changed_cells
+                else 0.0
             )
-            maximum_change = float(
-                np.max(np.abs(difference[changed_mask]))
-            ) if changed_cells else 0.0
 
             provenance["statistics"].update(
                 {
                     "flat_cells": flat_cells,
                     "region_count": region_count,
-                    "higher_boundary_cells": int(
-                        np.sum(higher_boundary)
-                    ),
-                    "lower_boundary_cells": int(
-                        np.sum(lower_boundary)
-                    ),
+                    "higher_boundary_cells": int(np.sum(higher_boundary)),
+                    "lower_boundary_cells": int(np.sum(lower_boundary)),
                     "changed_cells": changed_cells,
                     "total_absolute_change": total_change,
                     "maximum_absolute_change": maximum_change,
@@ -650,8 +611,7 @@ class DEMGradientResolution(MayimBaseAlgorithm):
                 feedback,
             )
             self.log(
-                f"Maximum absolute correction: "
-                f"{maximum_change:.8f}",
+                f"Maximum absolute correction: " f"{maximum_change:.8f}",
                 feedback,
             )
 
@@ -817,9 +777,7 @@ class DEMGradientResolution(MayimBaseAlgorithm):
                         stage=6,
                         audit_log_path=str(paths["provenance"]),
                         warnings=(
-                            provenance["warnings"]
-                            if provenance["warnings"]
-                            else None
+                            provenance["warnings"] if provenance["warnings"] else None
                         ),
                         width=width,
                         height=height,
@@ -831,18 +789,12 @@ class DEMGradientResolution(MayimBaseAlgorithm):
                         crs=crs_string,
                         cell_size=cell_size,
                         vertical_accuracy=vertical_accuracy,
-                        nodata=float(
-                            nodata
-                            if nodata is not None
-                            else -9999.0
-                        ),
+                        nodata=float(nodata if nodata is not None else -9999.0),
                         produced_by=self.TOOL_VERSION,
                         stage=6,
                         audit_log_path=str(paths["provenance"]),
                         warnings=(
-                            provenance["warnings"]
-                            if provenance["warnings"]
-                            else None
+                            provenance["warnings"] if provenance["warnings"] else None
                         ),
                         width=width,
                         height=height,
@@ -852,16 +804,12 @@ class DEMGradientResolution(MayimBaseAlgorithm):
                 manifest.write(str(paths["manifest"]))
 
                 self.log(
-                    f"MayimManifest written: "
-                    f"{paths['manifest'].name}",
+                    f"MayimManifest written: " f"{paths['manifest'].name}",
                     feedback,
                 )
 
             except Exception as manifest_error:
-                warning = (
-                    f"Could not write MayimManifest: "
-                    f"{manifest_error}"
-                )
+                warning = f"Could not write MayimManifest: " f"{manifest_error}"
                 provenance["warnings"].append(warning)
                 self.log_warning(warning, feedback)
 
@@ -944,8 +892,7 @@ class DEMGradientResolution(MayimBaseAlgorithm):
 
                 if not layer.isValid():
                     self.log_warning(
-                        f"Could not load output layer: "
-                        f"{layer_name}",
+                        f"Could not load output layer: " f"{layer_name}",
                         feedback,
                     )
                     return
@@ -1014,63 +961,35 @@ class DEMGradientResolution(MayimBaseAlgorithm):
         append("=" * 70)
         append("MAYIM TOOLS - DEM GRADIENT RESOLUTION REPORT")
         append("=" * 70)
-        append(
-            f"Generated: {provenance.get('timestamp', '')}"
-        )
-        append(
-            f"Tool: {provenance.get('tool', '')}"
-        )
-        append(
-            f"Version: {provenance.get('version', '')}"
-        )
-        append(
-            f"Stage: {provenance.get('stage', 6)}"
-        )
-        append(
-            f"Input DEM: {provenance.get('input_dem', '')}"
-        )
+        append(f"Generated: {provenance.get('timestamp', '')}")
+        append(f"Tool: {provenance.get('tool', '')}")
+        append(f"Version: {provenance.get('version', '')}")
+        append(f"Stage: {provenance.get('stage', 6)}")
+        append(f"Input DEM: {provenance.get('input_dem', '')}")
         append("")
 
         append("-" * 70)
         append("PARAMETERS")
         append("-" * 70)
         append(
-            f"Vertical accuracy: "
-            f"{parameters.get('vertical_accuracy', 'Unknown')}"
+            f"Vertical accuracy: " f"{parameters.get('vertical_accuracy', 'Unknown')}"
         )
-        append(
-            f"Cell size: "
-            f"{parameters.get('cell_size', 'Unknown')}"
-        )
-        append(
-            f"Connectivity: "
-            f"{parameters.get('connectivity', 'Unknown')}"
-        )
+        append(f"Cell size: " f"{parameters.get('cell_size', 'Unknown')}")
+        append(f"Connectivity: " f"{parameters.get('connectivity', 'Unknown')}")
         append("")
 
         append("-" * 70)
         append("RESULTS")
         append("-" * 70)
+        append(f"Flat candidate cells: " f"{statistics.get('flat_cells', 0):,}")
+        append(f"Connected flat regions: " f"{statistics.get('region_count', 0):,}")
         append(
-            f"Flat candidate cells: "
-            f"{statistics.get('flat_cells', 0):,}"
+            f"Higher-boundary cells: " f"{statistics.get('higher_boundary_cells', 0):,}"
         )
         append(
-            f"Connected flat regions: "
-            f"{statistics.get('region_count', 0):,}"
+            f"Lower-boundary cells: " f"{statistics.get('lower_boundary_cells', 0):,}"
         )
-        append(
-            f"Higher-boundary cells: "
-            f"{statistics.get('higher_boundary_cells', 0):,}"
-        )
-        append(
-            f"Lower-boundary cells: "
-            f"{statistics.get('lower_boundary_cells', 0):,}"
-        )
-        append(
-            f"Changed cells: "
-            f"{statistics.get('changed_cells', 0):,}"
-        )
+        append(f"Changed cells: " f"{statistics.get('changed_cells', 0):,}")
         append(
             f"Total absolute change: "
             f"{statistics.get('total_absolute_change', 0.0):.8f}"
@@ -1104,61 +1023,31 @@ class DEMGradientResolution(MayimBaseAlgorithm):
         append("-" * 70)
         append("OUTPUT FILES")
         append("-" * 70)
-        append(
-            f"Gradient-resolved DEM: "
-            f"{paths['resolved'].name}"
-        )
-        append(
-            f"Flat mask: "
-            f"{paths['flat_mask'].name}"
-        )
-        append(
-            f"Flat-region IDs: "
-            f"{paths['region_ids'].name}"
-        )
-        append(
-            f"Gradient difference: "
-            f"{paths['difference'].name}"
-        )
-        append(
-            f"Report: "
-            f"{paths['report'].name}"
-        )
-        append(
-            f"Provenance: "
-            f"{paths['provenance'].name}"
-        )
-        append(
-            f"MayimManifest: "
-            f"{paths['manifest'].name}"
-        )
+        append(f"Gradient-resolved DEM: " f"{paths['resolved'].name}")
+        append(f"Flat mask: " f"{paths['flat_mask'].name}")
+        append(f"Flat-region IDs: " f"{paths['region_ids'].name}")
+        append(f"Gradient difference: " f"{paths['difference'].name}")
+        append(f"Report: " f"{paths['report'].name}")
+        append(f"Provenance: " f"{paths['provenance'].name}")
+        append(f"MayimManifest: " f"{paths['manifest'].name}")
         append("")
 
         append("-" * 70)
         append("INTERPRETATION")
         append("-" * 70)
-        append(
-            "The gradient-resolved DEM is a Stage 6 product."
-        )
+        append("The gradient-resolved DEM is a Stage 6 product.")
         append(
             "A small synthetic gradient has been introduced across "
             "detected flat regions."
         )
         append(
-            "The gradient difference raster records the change from "
-            "the input DEM."
+            "The gradient difference raster records the change from " "the input DEM."
         )
+        append("The flat mask identifies candidate cells considered for " "resolution.")
         append(
-            "The flat mask identifies candidate cells considered for "
-            "resolution."
+            "The flat-region ID raster identifies each connected " "candidate region."
         )
-        append(
-            "The flat-region ID raster identifies each connected "
-            "candidate region."
-        )
-        append(
-            "Review the outputs before using the DEM for flow routing."
-        )
+        append("Review the outputs before using the DEM for flow routing.")
         append("")
 
         if warnings:
@@ -1200,7 +1089,6 @@ class DEMGradientResolution(MayimBaseAlgorithm):
             file.write(report_text)
 
         self.log(
-            f"Enforcement report written: "
-            f"{paths['report'].name}",
+            f"Enforcement report written: " f"{paths['report'].name}",
             feedback,
         )

@@ -1,10 +1,7 @@
-# -*- coding: utf-8 -*-
 """
 Mayim Tools – Layer Utilities
 Shared helpers for layer inspection, access, and manipulation.
 """
-
-from typing import Optional
 
 from qgis.core import (
     QgsMapLayer,
@@ -27,7 +24,8 @@ class LayerUtils:
     def get_vector_layers() -> list[QgsVectorLayer]:
         """Return all vector layers in the current project."""
         return [
-            layer for layer in QgsProject.instance().mapLayers().values()
+            layer
+            for layer in QgsProject.instance().mapLayers().values()
             if isinstance(layer, QgsVectorLayer)
         ]
 
@@ -35,12 +33,13 @@ class LayerUtils:
     def get_raster_layers() -> list[QgsRasterLayer]:
         """Return all raster layers in the current project."""
         return [
-            layer for layer in QgsProject.instance().mapLayers().values()
+            layer
+            for layer in QgsProject.instance().mapLayers().values()
             if isinstance(layer, QgsRasterLayer)
         ]
 
     @staticmethod
-    def get_layer_by_name(name: str) -> Optional[QgsMapLayer]:
+    def get_layer_by_name(name: str) -> QgsMapLayer | None:
         """
         Find a layer by its name.
 
@@ -76,7 +75,7 @@ class LayerUtils:
         return [field.name() for field in layer.fields()]
 
     @staticmethod
-    def layer_is_valid(layer: Optional[QgsMapLayer]) -> bool:
+    def layer_is_valid(layer: QgsMapLayer | None) -> bool:
         """
         Check if a layer exists and is valid.
 

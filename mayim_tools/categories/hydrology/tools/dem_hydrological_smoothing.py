@@ -91,50 +91,50 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
     """
 
     # ── Parameter identifiers ──────────────────────────────────────── #
-    PARAM_DEM              = "INPUT_DEM"
-    PARAM_MANIFEST         = "INPUT_MANIFEST"
-    PARAM_ITERATIONS       = "ITERATIONS"
-    PARAM_DIFFUSION        = "DIFFUSION_STRENGTH"
-    PARAM_EDGE_THRESHOLD   = "EDGE_THRESHOLD"
+    PARAM_DEM = "INPUT_DEM"
+    PARAM_MANIFEST = "INPUT_MANIFEST"
+    PARAM_ITERATIONS = "ITERATIONS"
+    PARAM_DIFFUSION = "DIFFUSION_STRENGTH"
+    PARAM_EDGE_THRESHOLD = "EDGE_THRESHOLD"
     PARAM_RESOLUTION_SCALE = "RESOLUTION_SCALE"
-    PARAM_OUTPUT_FOLDER    = "OUTPUT_FOLDER"
-    PARAM_LOAD_SMOOTHED    = "LOAD_SMOOTHED_DEM"
-    PARAM_LOAD_DIFFERENCE  = "LOAD_DIFFERENCE"
-    PARAM_LOAD_MASK        = "LOAD_SMOOTHING_MASK"
+    PARAM_OUTPUT_FOLDER = "OUTPUT_FOLDER"
+    PARAM_LOAD_SMOOTHED = "LOAD_SMOOTHED_DEM"
+    PARAM_LOAD_DIFFERENCE = "LOAD_DIFFERENCE"
+    PARAM_LOAD_MASK = "LOAD_SMOOTHING_MASK"
 
     # ── Output identifiers ─────────────────────────────────────────── #
-    OUTPUT_SMOOTHED    = "OUTPUT_SMOOTHED"
-    OUTPUT_DIFFERENCE  = "OUTPUT_DIFFERENCE"
-    OUTPUT_MASK        = "OUTPUT_MASK"
-    OUTPUT_REPORT      = "OUTPUT_REPORT"
-    OUTPUT_PROVENANCE  = "OUTPUT_PROVENANCE"
+    OUTPUT_SMOOTHED = "OUTPUT_SMOOTHED"
+    OUTPUT_DIFFERENCE = "OUTPUT_DIFFERENCE"
+    OUTPUT_MASK = "OUTPUT_MASK"
+    OUTPUT_REPORT = "OUTPUT_REPORT"
+    OUTPUT_PROVENANCE = "OUTPUT_PROVENANCE"
 
     # ── Tool version — update on every release ─────────────────────── #
     TOOL_VERSION = "dem-hydrological-smoothing-0.2.0"
 
     # ── MayimBaseAlgorithm interface ───────────────────────────────── #
 
-    def name(self) -> str:  # noqa: N802
+    def name(self) -> str:
         """Return the unique Processing algorithm identifier."""
         return "demhydrologicalsmoothing"
 
-    def displayName(self) -> str:  # noqa: N802
+    def displayName(self) -> str:
         """Return the human-readable algorithm name."""
         return "DEM Hydrological Smoothing"
 
-    def group(self) -> str:  # noqa: N802
+    def group(self) -> str:
         """Return the Processing Toolbox group name."""
         return "Hydrology Tools"
 
-    def groupId(self) -> str:  # noqa: N802
+    def groupId(self) -> str:
         """Return the unique Processing Toolbox group identifier."""
         return "hydrology"
 
-    def createInstance(self) -> DEMHydrologicalSmoothing:  # noqa: N802
+    def createInstance(self) -> DEMHydrologicalSmoothing:
         """Return a new instance of this algorithm."""
         return DEMHydrologicalSmoothing()
 
-    def shortHelpString(self) -> str:  # noqa: N802
+    def shortHelpString(self) -> str:
         """Return the Processing Toolbox help text."""
         return (
             "<b>DEM Hydrological Smoothing</b> — Stage 2<br><br>"
@@ -166,7 +166,7 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
             "diffusion. IEEE TPAMI, 12(7), 629-639."
         )
 
-    def helpUrl(self) -> str:  # noqa: N802
+    def helpUrl(self) -> str:
         """Return the project documentation URL."""
         return "https://github.com/chrismayim/mayim-tools"
 
@@ -187,7 +187,7 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
 
     # ── Parameter definition ───────────────────────────────────────── #
 
-    def initAlgorithm(self, config=None) -> None:  # noqa: N802
+    def initAlgorithm(self, config=None) -> None:
         """Define all Processing Toolbox parameters and outputs."""
 
         # ── Required: input DEM ────────────────────────────────────── #
@@ -212,8 +212,7 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
         self.addParameter(
             QgsProcessingParameterNumber(
                 self.PARAM_ITERATIONS,
-                "Diffusion iterations "
-                "(recommended: 5; valid range: 1-100)",
+                "Diffusion iterations " "(recommended: 5; valid range: 1-100)",
                 type=QgsProcessingParameterNumber.Integer,
                 defaultValue=5,
                 minValue=1,
@@ -225,8 +224,7 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
         self.addParameter(
             QgsProcessingParameterNumber(
                 self.PARAM_DIFFUSION,
-                "Diffusion strength "
-                "(recommended: 0.20; valid range: 0.01-0.25)",
+                "Diffusion strength " "(recommended: 0.20; valid range: 0.01-0.25)",
                 type=QgsProcessingParameterNumber.Double,
                 defaultValue=0.20,
                 minValue=0.01,
@@ -327,7 +325,7 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
 
     # ── Main processing method ─────────────────────────────────────── #
 
-    def processAlgorithm(  # noqa: N802
+    def processAlgorithm(
         self,
         parameters: dict,
         context: QgsProcessingContext,
@@ -359,22 +357,16 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
 
         # ── Read parameters ────────────────────────────────────────── #
 
-        dem_layer = self.parameterAsRasterLayer(
-            parameters, self.PARAM_DEM, context
-        )
+        dem_layer = self.parameterAsRasterLayer(parameters, self.PARAM_DEM, context)
 
         if not ValidationUtils.is_valid_raster_layer(dem_layer):
-            raise QgsProcessingException(
-                "The input DEM is missing or invalid."
-            )
+            raise QgsProcessingException("The input DEM is missing or invalid.")
 
         input_manifest_path = self.parameterAsString(
             parameters, self.PARAM_MANIFEST, context
         )
 
-        iterations = self.parameterAsInt(
-            parameters, self.PARAM_ITERATIONS, context
-        )
+        iterations = self.parameterAsInt(parameters, self.PARAM_ITERATIONS, context)
 
         diffusion_strength = self.parameterAsDouble(
             parameters, self.PARAM_DIFFUSION, context
@@ -400,16 +392,12 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
             parameters, self.PARAM_LOAD_DIFFERENCE, context
         )
 
-        load_mask = self.parameterAsBoolean(
-            parameters, self.PARAM_LOAD_MASK, context
-        )
+        load_mask = self.parameterAsBoolean(parameters, self.PARAM_LOAD_MASK, context)
 
         # ── Validate parameters ────────────────────────────────────── #
 
         if iterations < 1:
-            raise QgsProcessingException(
-                "Diffusion iterations must be at least 1."
-            )
+            raise QgsProcessingException("Diffusion iterations must be at least 1.")
 
         if not (0.01 <= diffusion_strength <= 0.25):
             raise QgsProcessingException(
@@ -417,17 +405,14 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
             )
 
         if edge_threshold <= 0:
-            raise QgsProcessingException(
-                "Edge threshold must be greater than zero."
-            )
+            raise QgsProcessingException("Edge threshold must be greater than zero.")
 
         # ── Handle temporary output folder ─────────────────────────── #
 
         if not output_folder or output_folder == "TEMPORARY_OUTPUT":
             import tempfile
-            output_folder = tempfile.mkdtemp(
-                prefix="mayim_smoothing_"
-            )
+
+            output_folder = tempfile.mkdtemp(prefix="mayim_smoothing_")
             self.log(
                 f"Using temporary folder: {output_folder}",
                 feedback,
@@ -441,12 +426,12 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
         # ── Set up output paths ────────────────────────────────────── #
 
         paths = {
-            "smoothed":    output_dir / f"{dem_stem}_smoothed.tif",
-            "difference":  output_dir / f"{dem_stem}_smoothing_difference.tif",
-            "mask":        output_dir / f"{dem_stem}_smoothing_mask.tif",
-            "report":      output_dir / f"{dem_stem}_smoothing_report.txt",
-            "provenance":  output_dir / f"{dem_stem}_smoothing_provenance.json",
-            "manifest":    output_dir / f"{dem_stem}_smoothed.manifest.json",
+            "smoothed": output_dir / f"{dem_stem}_smoothed.tif",
+            "difference": output_dir / f"{dem_stem}_smoothing_difference.tif",
+            "mask": output_dir / f"{dem_stem}_smoothing_mask.tif",
+            "report": output_dir / f"{dem_stem}_smoothing_report.txt",
+            "provenance": output_dir / f"{dem_stem}_smoothing_provenance.json",
+            "manifest": output_dir / f"{dem_stem}_smoothed.manifest.json",
         }
 
         # ── Read input manifest if supplied ────────────────────────── #
@@ -459,14 +444,12 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
                 errors = input_manifest.validate()
                 if errors:
                     self.log_warning(
-                        f"Input manifest validation issues: "
-                        f"{'; '.join(errors)}",
+                        f"Input manifest validation issues: " f"{'; '.join(errors)}",
                         feedback,
                     )
                 else:
                     self.log(
-                        f"Input manifest loaded: "
-                        f"{input_manifest.summary()}",
+                        f"Input manifest loaded: " f"{input_manifest.summary()}",
                         feedback,
                     )
             except Exception as _e:
@@ -479,8 +462,8 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
         # ── Initialise provenance record ───────────────────────────── #
 
         provenance = {
-            "tool":          "DEM Hydrological Smoothing",
-            "algorithm":     "Perona-Malik anisotropic diffusion",
+            "tool": "DEM Hydrological Smoothing",
+            "algorithm": "Perona-Malik anisotropic diffusion",
             "algorithm_ref": (
                 "Perona, P. and Malik, J. (1990). Scale-space and "
                 "edge detection using anisotropic diffusion. "
@@ -491,20 +474,20 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
                 "solely from the published paper. No WhiteboxTools or "
                 "RichDEM source consulted."
             ),
-            "version":       self.TOOL_VERSION,
-            "stage":         2,
-            "timestamp":     datetime.now().isoformat(),
-            "input_dem":     dem_layer.source(),
+            "version": self.TOOL_VERSION,
+            "stage": 2,
+            "timestamp": datetime.now().isoformat(),
+            "input_dem": dem_layer.source(),
             "input_manifest": input_manifest_path or None,
             "parameters": {
-                "iterations":        iterations,
+                "iterations": iterations,
                 "diffusion_strength": diffusion_strength,
-                "edge_threshold":    edge_threshold,
-                "resolution_scale":  resolution_scale,
+                "edge_threshold": edge_threshold,
+                "resolution_scale": resolution_scale,
             },
-            "outputs":   {k: str(v) for k, v in paths.items()},
+            "outputs": {k: str(v) for k, v in paths.items()},
             "statistics": {},
-            "warnings":  [],
+            "warnings": [],
         }
 
         # ── Log run header ─────────────────────────────────────────── #
@@ -514,8 +497,7 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
         self.log("=" * 60, feedback)
         self.log(f"Input DEM   : {dem_layer.source()}", feedback)
         self.log(
-            f"Iterations  : {iterations} "
-            "(recommended: 5; valid range: 1-100)",
+            f"Iterations  : {iterations} " "(recommended: 5; valid range: 1-100)",
             feedback,
         )
         self.log(
@@ -524,8 +506,7 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
             feedback,
         )
         self.log(
-            f"Edge thresh : {edge_threshold} "
-            "(recommended: 1.0 elevation unit)",
+            f"Edge thresh : {edge_threshold} " "(recommended: 1.0 elevation unit)",
             feedback,
         )
         self.log(
@@ -562,9 +543,9 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
                     provenance["warnings"].append(warning)
                     self.log_warning(warning, feedback)
 
-                profile  = source.profile.copy()
+                profile = source.profile.copy()
                 original = source.read(1).astype(np.float64)
-                nodata   = source.nodata
+                nodata = source.nodata
                 height, width = original.shape
 
                 res_x = abs(float(source.transform.a))
@@ -572,9 +553,7 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
                 mean_res = (res_x + res_y) / 2.0
 
                 crs_string = (
-                    source.crs.to_string()
-                    if source.crs is not None
-                    else "Unknown"
+                    source.crs.to_string() if source.crs is not None else "Unknown"
                 )
 
                 # ── Build valid-cell mask ──────────────────────────── #
@@ -589,30 +568,28 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
                     )
 
                 valid_values = original[valid_mask]
-                mean_elevation   = float(np.mean(valid_values))
+                mean_elevation = float(np.mean(valid_values))
                 median_elevation = float(np.median(valid_values))
 
                 provenance["statistics"].update(
                     {
-                        "crs":             crs_string,
-                        "resolution_x":    res_x,
-                        "resolution_y":    res_y,
+                        "crs": crs_string,
+                        "resolution_x": res_x,
+                        "resolution_y": res_y,
                         "mean_resolution": mean_res,
-                        "width":           width,
-                        "height":          height,
-                        "nodata":          str(nodata),
-                        "dtype":           str(source.dtypes[0]),
-                        "valid_cells":     int(np.sum(valid_mask)),
-                        "mean_elevation":  mean_elevation,
+                        "width": width,
+                        "height": height,
+                        "nodata": str(nodata),
+                        "dtype": str(source.dtypes[0]),
+                        "valid_cells": int(np.sum(valid_mask)),
+                        "mean_elevation": mean_elevation,
                         "median_elevation": median_elevation,
                     }
                 )
 
                 # ── Resolution scaling ─────────────────────────────── #
                 if resolution_scale:
-                    scale_factor = self._resolution_scale_factor(
-                        mean_res
-                    )
+                    scale_factor = self._resolution_scale_factor(mean_res)
                 else:
                     scale_factor = 1.0
 
@@ -630,7 +607,7 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
                 provenance["statistics"].update(
                     {
                         "resolution_scale_factor": scale_factor,
-                        "effective_diffusion":     effective_diffusion,
+                        "effective_diffusion": effective_diffusion,
                     }
                 )
 
@@ -675,24 +652,17 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
 
                 # ── Compute difference and modification mask ───────── #
                 difference = np.zeros_like(original, dtype=np.float64)
-                difference[valid_mask] = (
-                    smoothed[valid_mask] - original[valid_mask]
-                )
+                difference[valid_mask] = smoothed[valid_mask] - original[valid_mask]
 
                 change_tolerance = max(
                     np.finfo(np.float64).eps * 100.0,
                     abs(edge_threshold) * 1e-9,
                 )
 
-                smoothing_mask = np.zeros(
-                    original.shape, dtype=np.uint8
-                )
-                smoothing_mask[
-                    valid_mask
-                    & (np.abs(difference) > change_tolerance)
-                ] = 1
+                smoothing_mask = np.zeros(original.shape, dtype=np.uint8)
+                smoothing_mask[valid_mask & (np.abs(difference) > change_tolerance)] = 1
 
-                changed_cells   = int(np.sum(smoothing_mask == 1))
+                changed_cells = int(np.sum(smoothing_mask == 1))
                 valid_cell_count = int(np.sum(valid_mask))
 
                 changed_pct = (
@@ -705,20 +675,12 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
 
                 provenance["statistics"].update(
                     {
-                        "changed_cells":           changed_cells,
-                        "changed_percentage":      round(changed_pct, 6),
-                        "mean_absolute_change":    float(
-                            np.mean(np.abs(valid_diff))
-                        ),
-                        "max_absolute_change":     float(
-                            np.max(np.abs(valid_diff))
-                        ),
-                        "minimum_change":          float(
-                            np.min(valid_diff)
-                        ),
-                        "maximum_change":          float(
-                            np.max(valid_diff)
-                        ),
+                        "changed_cells": changed_cells,
+                        "changed_percentage": round(changed_pct, 6),
+                        "mean_absolute_change": float(np.mean(np.abs(valid_diff))),
+                        "max_absolute_change": float(np.max(np.abs(valid_diff))),
+                        "minimum_change": float(np.min(valid_diff)),
+                        "maximum_change": float(np.max(valid_diff)),
                     }
                 )
 
@@ -766,9 +728,7 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
                     smoothed_out = smoothed.astype(np.float32)
                     smoothed_out[~valid_mask] = nodata
 
-                with rasterio.open(
-                    paths["smoothed"], "w", **smoothed_profile
-                ) as dst:
+                with rasterio.open(paths["smoothed"], "w", **smoothed_profile) as dst:
                     dst.write(smoothed_out, 1)
 
                 # ── Write difference raster ────────────────────────── #
@@ -783,9 +743,7 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
                 diff_out = difference.astype(np.float32)
                 diff_out[~valid_mask] = -9999.0
 
-                with rasterio.open(
-                    paths["difference"], "w", **diff_profile
-                ) as dst:
+                with rasterio.open(paths["difference"], "w", **diff_profile) as dst:
                     dst.write(diff_out, 1)
 
                 # ── Write smoothing mask ───────────────────────────── #
@@ -800,9 +758,7 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
                 mask_out = smoothing_mask.copy()
                 mask_out[~valid_mask] = 255
 
-                with rasterio.open(
-                    paths["mask"], "w", **mask_profile
-                ) as dst:
+                with rasterio.open(paths["mask"], "w", **mask_profile) as dst:
                     dst.write(mask_out, 1)
 
                 self.log(
@@ -819,9 +775,7 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
             raise
 
         except Exception as error:
-            MayimLogger.critical(
-                f"DEM Hydrological Smoothing failed: {error}"
-            )
+            MayimLogger.critical(f"DEM Hydrological Smoothing failed: {error}")
             raise QgsProcessingException(
                 f"DEM Hydrological Smoothing failed: {error}"
             ) from error
@@ -836,21 +790,17 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
             feedback=feedback,
         )
 
-        with open(
-            paths["provenance"], "w", encoding="utf-8"
-        ) as f:
+        with open(paths["provenance"], "w", encoding="utf-8") as f:
             json.dump(provenance, f, indent=4, default=str)
 
         report_path = Path(paths["report"]).resolve()
-        report_uri  = report_path.as_uri()
+        report_uri = report_path.as_uri()
 
         self.log(
             f"Stage 2 report    : {report_path}",
             feedback,
         )
-        feedback.pushInfo(
-            f"Open Stage 2 report: {report_uri}"
-        )
+        feedback.pushInfo(f"Open Stage 2 report: {report_uri}")
 
         feedback.setProgress(92)
 
@@ -868,9 +818,7 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
                     stage=2,
                     audit_log_path=str(paths["provenance"]),
                     warnings=(
-                        provenance["warnings"]
-                        if provenance["warnings"]
-                        else None
+                        provenance["warnings"] if provenance["warnings"] else None
                     ),
                     width=provenance["statistics"].get("width"),
                     height=provenance["statistics"].get("height"),
@@ -894,9 +842,7 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
                     stage=2,
                     audit_log_path=str(paths["provenance"]),
                     warnings=(
-                        provenance["warnings"]
-                        if provenance["warnings"]
-                        else None
+                        provenance["warnings"] if provenance["warnings"] else None
                     ),
                     width=provenance["statistics"].get("width"),
                     height=provenance["statistics"].get("height"),
@@ -942,10 +888,10 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
         )
 
         return {
-            self.OUTPUT_SMOOTHED:   str(paths["smoothed"]),
+            self.OUTPUT_SMOOTHED: str(paths["smoothed"]),
             self.OUTPUT_DIFFERENCE: str(paths["difference"]),
-            self.OUTPUT_MASK:       str(paths["mask"]),
-            self.OUTPUT_REPORT:     str(paths["report"]),
+            self.OUTPUT_MASK: str(paths["mask"]),
+            self.OUTPUT_REPORT: str(paths["report"]),
             self.OUTPUT_PROVENANCE: str(paths["provenance"]),
         }
 
@@ -1027,24 +973,24 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
             # ── Compute gradients to four-connected neighbours ─────── #
             north = np.full_like(result, np.nan)
             south = np.full_like(result, np.nan)
-            west  = np.full_like(result, np.nan)
-            east  = np.full_like(result, np.nan)
+            west = np.full_like(result, np.nan)
+            east = np.full_like(result, np.nan)
 
-            north[1:,  :]  = result[:-1, :]
-            south[:-1, :]  = result[1:,  :]
-            west[ :,  1:]  = result[:,  :-1]
-            east[ :, :-1]  = result[:,   1:]
+            north[1:, :] = result[:-1, :]
+            south[:-1, :] = result[1:, :]
+            west[:, 1:] = result[:, :-1]
+            east[:, :-1] = result[:, 1:]
 
             # ── Valid-neighbour masks ──────────────────────────────── #
             valid_north = np.zeros_like(valid_mask)
             valid_south = np.zeros_like(valid_mask)
-            valid_west  = np.zeros_like(valid_mask)
-            valid_east  = np.zeros_like(valid_mask)
+            valid_west = np.zeros_like(valid_mask)
+            valid_east = np.zeros_like(valid_mask)
 
-            valid_north[1:,  :] = valid_mask[:-1, :] & valid_mask[1:,  :]
-            valid_south[:-1, :] = valid_mask[1:,  :] & valid_mask[:-1, :]
-            valid_west[ :,  1:] = valid_mask[:,  :-1] & valid_mask[:,   1:]
-            valid_east[ :, :-1] = valid_mask[:,   1:] & valid_mask[:,  :-1]
+            valid_north[1:, :] = valid_mask[:-1, :] & valid_mask[1:, :]
+            valid_south[:-1, :] = valid_mask[1:, :] & valid_mask[:-1, :]
+            valid_west[:, 1:] = valid_mask[:, :-1] & valid_mask[:, 1:]
+            valid_east[:, :-1] = valid_mask[:, 1:] & valid_mask[:, :-1]
 
             result_valid = valid_mask & np.isfinite(result)
             update = np.zeros_like(result)
@@ -1054,17 +1000,15 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
             for neighbour, neighbour_valid in (
                 (north, valid_north),
                 (south, valid_south),
-                (west,  valid_west),
-                (east,  valid_east),
+                (west, valid_west),
+                (east, valid_east),
             ):
                 gradient = neighbour - result
 
                 # Gaussian conductance function — eq. (13), Perona &
                 # Malik (1990):
                 #   c = exp(-(|grad|^2) / kappa^2)
-                conductance = np.exp(
-                    -(gradient ** 2) / kappa_sq
-                )
+                conductance = np.exp(-(gradient**2) / kappa_sq)
 
                 contribution = np.where(
                     neighbour_valid & np.isfinite(gradient),
@@ -1076,16 +1020,14 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
 
             # ── Update valid cells ─────────────────────────────────── #
             result[result_valid] = (
-                result[result_valid]
-                + diffusion_strength * update[result_valid]
+                result[result_valid] + diffusion_strength * update[result_valid]
             )
 
             progress = int(((iteration + 1) / iterations) * 60) + 15
             feedback.setProgress(progress)
 
             self.log(
-                f"Diffusion iteration {iteration + 1} of "
-                f"{iterations} complete.",
+                f"Diffusion iteration {iteration + 1} of " f"{iterations} complete.",
                 feedback,
             )
 
@@ -1117,13 +1059,11 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
             from qgis.core import QgsProject, QgsRasterLayer
 
             project = QgsProject.instance()
-            loaded  = 0
+            loaded = 0
 
             def load_raster(file_path: Path, layer_name: str) -> None:
                 nonlocal loaded
-                layer = QgsRasterLayer(
-                    str(file_path), layer_name, "gdal"
-                )
+                layer = QgsRasterLayer(str(file_path), layer_name, "gdal")
                 if not layer.isValid():
                     self.log_warning(
                         f"Could not load layer: {layer_name}",
@@ -1183,12 +1123,12 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
         :param provenance: Provenance record dictionary.
         :param feedback: QGIS processing feedback object.
         """
-        stats  = provenance.get("statistics", {})
+        stats = provenance.get("statistics", {})
         params = provenance.get("parameters", {})
-        warns  = provenance.get("warnings",   [])
+        warns = provenance.get("warnings", [])
 
-        lines  = []
-        a      = lines.append
+        lines = []
+        a = lines.append
 
         a("=" * 70)
         a("MAYIM TOOLS - DEM HYDROLOGICAL SMOOTHING REPORT")
@@ -1222,10 +1162,7 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
             f"{params.get('edge_threshold', 'Unknown')} "
             "elevation units (recommended: 1.0)"
         )
-        a(
-            f"Resolution scaling : "
-            f"{params.get('resolution_scale', 'Unknown')}"
-        )
+        a(f"Resolution scaling : " f"{params.get('resolution_scale', 'Unknown')}")
         a("")
 
         a("-" * 70)
@@ -1247,40 +1184,19 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
         a("-" * 70)
         a("DIFFUSION PARAMETERS (DERIVED)")
         a("-" * 70)
-        a(
-            f"Scale factor       : "
-            f"{stats.get('resolution_scale_factor', 1.0):.6f}"
-        )
-        a(
-            f"Effective diffusion: "
-            f"{stats.get('effective_diffusion', 0.0):.6f}"
-        )
+        a(f"Scale factor       : " f"{stats.get('resolution_scale_factor', 1.0):.6f}")
+        a(f"Effective diffusion: " f"{stats.get('effective_diffusion', 0.0):.6f}")
         a("")
 
         a("-" * 70)
         a("SMOOTHING RESULTS")
         a("-" * 70)
         a(f"Changed cells      : {stats.get('changed_cells', 0):,}")
-        a(
-            f"Changed percentage : "
-            f"{stats.get('changed_percentage', 0.0):.4f}%"
-        )
-        a(
-            f"Mean abs change    : "
-            f"{stats.get('mean_absolute_change', 0.0):.6f}"
-        )
-        a(
-            f"Max abs change     : "
-            f"{stats.get('max_absolute_change', 0.0):.6f}"
-        )
-        a(
-            f"Minimum change     : "
-            f"{stats.get('minimum_change', 0.0):.6f}"
-        )
-        a(
-            f"Maximum change     : "
-            f"{stats.get('maximum_change', 0.0):.6f}"
-        )
+        a(f"Changed percentage : " f"{stats.get('changed_percentage', 0.0):.4f}%")
+        a(f"Mean abs change    : " f"{stats.get('mean_absolute_change', 0.0):.6f}")
+        a(f"Max abs change     : " f"{stats.get('max_absolute_change', 0.0):.6f}")
+        a(f"Minimum change     : " f"{stats.get('minimum_change', 0.0):.6f}")
+        a(f"Maximum change     : " f"{stats.get('maximum_change', 0.0):.6f}")
         a("")
 
         # ── Interpretation ─────────────────────────────────────────── #
@@ -1330,7 +1246,7 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
             a("-" * 70)
             for i, w in enumerate(warns, 1):
                 words = w.split()
-                line  = f"  {i}. "
+                line = f"  {i}. "
                 for word in words:
                     if len(line) + len(word) + 1 > 68:
                         a(line)
@@ -1423,9 +1339,7 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
         # ── Write to file ──────────────────────────────────────────── #
         report_text = "\n".join(lines)
 
-        with open(
-            paths["report"], "w", encoding="utf-8"
-        ) as f:
+        with open(paths["report"], "w", encoding="utf-8") as f:
             f.write(report_text)
 
         self.log(

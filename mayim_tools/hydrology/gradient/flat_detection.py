@@ -92,9 +92,7 @@ def detect_flats(
         If dem is not a two-dimensional NumPy array.
     """
     if not isinstance(dem, np.ndarray) or dem.ndim != 2:
-        raise ValueError(
-            "dem must be a two-dimensional NumPy array."
-        )
+        raise ValueError("dem must be a two-dimensional NumPy array.")
 
     rows, cols = dem.shape
     valid = np.isfinite(dem) & (dem != nodata)
@@ -123,19 +121,14 @@ def detect_flats(
                 neighbour_row = row + row_offset
                 neighbour_col = col + col_offset
 
-                if not (
-                    0 <= neighbour_row < rows
-                    and 0 <= neighbour_col < cols
-                ):
+                if not (0 <= neighbour_row < rows and 0 <= neighbour_col < cols):
                     continue
 
                 if not valid[neighbour_row, neighbour_col]:
                     continue
 
                 cell_elevation = float(dem[row, col])
-                neighbour_elevation = float(
-                    dem[neighbour_row, neighbour_col]
-                )
+                neighbour_elevation = float(dem[neighbour_row, neighbour_col])
 
                 if neighbour_elevation == cell_elevation:
                     has_equal_neighbour[row, col] = True
@@ -155,19 +148,14 @@ def detect_flats(
                 neighbour_row = row + row_offset
                 neighbour_col = col + col_offset
 
-                if not (
-                    0 <= neighbour_row < rows
-                    and 0 <= neighbour_col < cols
-                ):
+                if not (0 <= neighbour_row < rows and 0 <= neighbour_col < cols):
                     continue
 
                 if not valid[neighbour_row, neighbour_col]:
                     continue
 
                 cell_elevation = float(dem[row, col])
-                neighbour_elevation = float(
-                    dem[neighbour_row, neighbour_col]
-                )
+                neighbour_elevation = float(dem[neighbour_row, neighbour_col])
 
                 if neighbour_elevation > cell_elevation:
                     higher_boundary[row, col] = True

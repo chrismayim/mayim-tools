@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Mayim Tools – Local Deploy Script
 Copies the plugin to the QGIS user plugins folder for live testing.
@@ -16,8 +15,7 @@ PLUGIN_NAME = "mayim_tools"
 
 # Update this path to match your QGIS plugins folder:
 QGIS_PLUGINS_DIR = Path(
-    r"C:\Users\caets\AppData\Roaming\QGIS\QGIS4"
-    r"\profiles\default\python\plugins"
+    r"C:\Users\caets\AppData\Roaming\QGIS\QGIS4" r"\profiles\default\python\plugins"
 )
 
 # ── Source: the mayim_tools package folder ──────────────────────────────────  #
@@ -53,7 +51,7 @@ def deploy() -> None:
     """
 
     print(f"\n{'─' * 55}")
-    print(f"  Mayim Tools — Local Deploy Script")
+    print("  Mayim Tools — Local Deploy Script")
     print(f"{'─' * 55}")
     print(f"  Source : {SOURCE_DIR}")
     print(f"  Target : {DEST_DIR}")
@@ -70,12 +68,12 @@ def deploy() -> None:
 
     # ── Remove existing deployment ──
     if DEST_DIR.exists():
-        print(f"🗑️  Removing existing deployment...")
+        print("🗑️  Removing existing deployment...")
         shutil.rmtree(DEST_DIR)
-        print(f"   Done.\n")
+        print("   Done.\n")
 
     # ── Copy plugin files to QGIS plugins folder ──
-    print(f"📦 Copying plugin files...")
+    print("📦 Copying plugin files...")
 
     copied = 0
     skipped = 0
@@ -104,13 +102,13 @@ def deploy() -> None:
     root_metadata = SOURCE_DIR.parent / "metadata.txt"
     if root_metadata.exists():
         shutil.copy2(root_metadata, DEST_DIR / "metadata.txt")
-        print(f"   📄 metadata.txt copied from project root.\n")
+        print("   📄 metadata.txt copied from project root.\n")
 
     print(f"{'─' * 55}")
-    print(f"  ✅ Deploy complete!")
-    print(f"  👉 Reload the plugin in QGIS:")
-    print(f"     Plugins > Manage and Install Plugins >")
-    print(f"     Installed > Mayim Tools > Reload")
+    print("  ✅ Deploy complete!")
+    print("  👉 Reload the plugin in QGIS:")
+    print("     Plugins > Manage and Install Plugins >")
+    print("     Installed > Mayim Tools > Reload")
     print(f"{'─' * 55}\n")
 
 

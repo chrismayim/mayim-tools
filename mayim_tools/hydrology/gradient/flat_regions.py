@@ -113,10 +113,7 @@ def label_flat_regions(
                     neighbour_row = current_row + row_offset
                     neighbour_col = current_col + col_offset
 
-                    if not (
-                        0 <= neighbour_row < rows
-                        and 0 <= neighbour_col < cols
-                    ):
+                    if not (0 <= neighbour_row < rows and 0 <= neighbour_col < cols):
                         continue
 
                     if not flat_mask[neighbour_row, neighbour_col]:
@@ -125,9 +122,7 @@ def label_flat_regions(
                     if region_ids[neighbour_row, neighbour_col] != 0:
                         continue
 
-                    region_ids[neighbour_row, neighbour_col] = (
-                        next_region_id
-                    )
+                    region_ids[neighbour_row, neighbour_col] = next_region_id
                     queue.append((neighbour_row, neighbour_col))
 
             region_rows = [cell[0] for cell in cells]
@@ -155,21 +150,13 @@ def _validate_inputs(
     Validate flat-region inputs.
     """
     if not isinstance(flat_mask, np.ndarray):
-        raise ValueError(
-            "flat_mask must be a NumPy array."
-        )
+        raise ValueError("flat_mask must be a NumPy array.")
 
     if flat_mask.ndim != 2:
-        raise ValueError(
-            "flat_mask must be a two-dimensional array."
-        )
+        raise ValueError("flat_mask must be a two-dimensional array.")
 
     if flat_mask.dtype != np.bool_:
-        raise ValueError(
-            "flat_mask must have Boolean dtype."
-        )
+        raise ValueError("flat_mask must have Boolean dtype.")
 
     if connectivity not in (4, 8):
-        raise ValueError(
-            "connectivity must be either 4 or 8."
-        )
+        raise ValueError("connectivity must be either 4 or 8.")

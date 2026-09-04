@@ -1,9 +1,6 @@
-# -*- coding: utf-8 -*-
 """
 Tests for mayim_tools.core.validation_utils
 """
-
-import pytest
 
 from mayim_tools.core.validation_utils import ValidationUtils
 
@@ -63,14 +60,18 @@ class TestValidationUtils:
 
     # ── is_valid_file_path ──
     def test_is_valid_file_path_nonexistent(self):
-        assert ValidationUtils.is_valid_file_path(
-            "C:/nonexistent/path.gpkg", must_exist=True
-        ) is False
+        assert (
+            ValidationUtils.is_valid_file_path(
+                "C:/nonexistent/path.gpkg", must_exist=True
+            )
+            is False
+        )
 
     def test_is_valid_file_path_no_existence_check(self):
-        assert ValidationUtils.is_valid_file_path(
-            "C:/some/path.gpkg", must_exist=False
-        ) is True
+        assert (
+            ValidationUtils.is_valid_file_path("C:/some/path.gpkg", must_exist=False)
+            is True
+        )
 
     def test_is_valid_file_path_empty(self):
         assert ValidationUtils.is_valid_file_path("") is False

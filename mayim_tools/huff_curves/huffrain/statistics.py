@@ -14,7 +14,9 @@ import numpy as np
 from .schemas import EventCurve, HuffCurveSet
 
 DEFAULT_PERCENTILES = (0.10, 0.25, 0.50, 0.75, 0.90)
-MIN_SAMPLE_DEFAULT = 5  # paper item 49: "require a minimum sample size per quartile and stratum"
+MIN_SAMPLE_DEFAULT = (
+    5  # paper item 49: "require a minimum sample size per quartile and stratum"
+)
 
 
 def summarize_curves(
@@ -37,17 +39,21 @@ def summarize_curves(
 
         pct_results = {}
         for p in percentiles:
-            pct_results[p] = tuple(np.percentile(y_matrix, p * 100, axis=0, method="median_unbiased"))
+            pct_results[p] = tuple(
+                np.percentile(y_matrix, p * 100, axis=0, method="median_unbiased")
+            )
 
-        out.append(HuffCurveSet(
-            quartile=q,
-            x_grid=tuple(grid),
-            percentiles=pct_results,
-            n_events=n,
-            mean_curve=tuple(y_matrix.mean(axis=0)),
-            min_curve=tuple(y_matrix.min(axis=0)),
-            max_curve=tuple(y_matrix.max(axis=0)),
-            insufficient_sample=n < min_sample,
-            min_sample_threshold=min_sample,
-        ))
+        out.append(
+            HuffCurveSet(
+                quartile=q,
+                x_grid=tuple(grid),
+                percentiles=pct_results,
+                n_events=n,
+                mean_curve=tuple(y_matrix.mean(axis=0)),
+                min_curve=tuple(y_matrix.min(axis=0)),
+                max_curve=tuple(y_matrix.max(axis=0)),
+                insufficient_sample=n < min_sample,
+                min_sample_threshold=min_sample,
+            )
+        )
     return out

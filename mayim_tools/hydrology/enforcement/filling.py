@@ -96,17 +96,12 @@ def confined_priority_flood_fill(
 
     result = dem.astype(np.float64, copy=True)
 
-    valid_mask = (
-        np.isfinite(dem)
-        & (dem != nodata)
-    )
+    valid_mask = np.isfinite(dem) & (dem != nodata)
 
     eligible_mask = depression_mask & valid_mask
 
     if not np.any(eligible_mask):
-        raise ValueError(
-            "The depression mask contains no valid cells."
-        )
+        raise ValueError("The depression mask contains no valid cells.")
 
     original_values = dem[eligible_mask].astype(np.float64)
 
@@ -122,9 +117,7 @@ def confined_priority_flood_fill(
 
     result[eligible_mask] = filled_values
 
-    modified_rows, modified_cols = np.where(
-        eligible_mask & (result > dem)
-    )
+    modified_rows, modified_cols = np.where(eligible_mask & (result > dem))
 
     valid_changes = changes[modified]
 
@@ -136,28 +129,18 @@ def confined_priority_flood_fill(
         "eligible_cells": int(np.sum(eligible_mask)),
         "nodata_cells": int(np.sum(depression_mask & ~valid_mask)),
         "modified_cells": int(np.sum(modified)),
-        "total_elevation_change": float(
-            np.sum(valid_changes)
-        ) if valid_changes.size else 0.0,
-        "maximum_change": float(
-            np.max(valid_changes)
-        ) if valid_changes.size else 0.0,
-        "minimum_change": float(
-            np.min(changes)
-        ) if changes.size else 0.0,
+        "total_elevation_change": (
+            float(np.sum(valid_changes)) if valid_changes.size else 0.0
+        ),
+        "maximum_change": float(np.max(valid_changes)) if valid_changes.size else 0.0,
+        "minimum_change": float(np.min(changes)) if changes.size else 0.0,
         "modified_cell_coordinates": [
             {
                 "row": int(row),
                 "column": int(col),
-                "original_elevation": float(
-                    dem[row, col]
-                ),
-                "new_elevation": float(
-                    result[row, col]
-                ),
-                "elevation_change": float(
-                    result[row, col] - dem[row, col]
-                ),
+                "original_elevation": float(dem[row, col]),
+                "new_elevation": float(result[row, col]),
+                "elevation_change": float(result[row, col] - dem[row, col]),
             }
             for row, col in zip(
                 modified_rows.tolist(),
@@ -188,41 +171,25 @@ def _validate_inputs(
         raise ValueError("dem must be a NumPy array.")
 
     if dem.ndim != 2:
-        raise ValueError(
-            "dem must be a two-dimensional array."
-        )
+        raise ValueError("dem must be a two-dimensional array.")
 
     if not isinstance(depression_mask, np.ndarray):
-        raise ValueError(
-            "depression_mask must be a NumPy array."
-        )
+        raise ValueError("depression_mask must be a NumPy array.")
 
     if depression_mask.ndim != 2:
-        raise ValueError(
-            "depression_mask must be a two-dimensional array."
-        )
+        raise ValueError("depression_mask must be a two-dimensional array.")
 
     if dem.shape != depression_mask.shape:
-        raise ValueError(
-            "dem and depression_mask must have the same shape."
-        )
+        raise ValueError("dem and depression_mask must have the same shape.")
 
     if depression_mask.dtype != np.bool_:
-        raise ValueError(
-            "depression_mask must have Boolean dtype."
-        )
+        raise ValueError("depression_mask must have Boolean dtype.")
 
     if not np.any(depression_mask):
-        raise ValueError(
-            "The depression mask is empty."
-        )
+        raise ValueError("The depression mask is empty.")
 
     if not np.isfinite(spill_elevation):
-        raise ValueError(
-            "spill_elevation must be finite."
-        )
+        raise ValueError("spill_elevation must be finite.")
 
     if connectivity not in (4, 8):
-        raise ValueError(
-            "connectivity must be either 4 or 8."
-        )
+        raise ValueError("connectivity must be either 4 or 8.")
