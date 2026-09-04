@@ -143,12 +143,22 @@ class HydrologyCategory(BaseCategory):
             from mayim_tools.categories.hydrology.tools.dem_d8_flow_direction import (
                 D8FlowDirection,
             )
+
             algorithms.append(D8FlowDirection())
             MayimLogger.info("Registered: D8 Flow Direction")
         except Exception as e:  # noqa: BLE001
-            MayimLogger.critical(
-                f"Failed to register D8 Flow Direction: {e}"
+            MayimLogger.critical(f"Failed to register D8 Flow Direction: {e}")
+
+        # ── D8 Flow Accumulation ──────────────────────────────────────
+        try:
+            from mayim_tools.categories.hydrology.tools.dem_d8_flow_accumulation import (
+                D8FlowAccumulation,
             )
+
+            algorithms.append(D8FlowAccumulation())
+            MayimLogger.info("Registered: D8 Flow Accumulation")
+        except Exception as e:  # noqa: BLE001
+            MayimLogger.critical(f"Failed to register D8 Flow Accumulation: {e}")
 
         # ── Add future tools below this line ──────────────────────────
 

@@ -40,11 +40,11 @@ References
 ----------
 O'Callaghan, J.F. and Mark, D.M. (1984). The extraction of drainage
 networks from digital elevation data. Computer Vision, Graphics, and
-Image Processing, 28(3), 323–344.
+Image Processing, 28(3), 323-344.
 
 Garbrecht, J. and Martz, L.W. (1997). The assignment of drainage
 direction over flat surfaces in raster digital elevation models.
-Journal of Hydrology, 193(1–4), 204–213.
+Journal of Hydrology, 193(1-4), 204-213.
 
 IP Status
 ---------
@@ -71,7 +71,8 @@ from qgis.core import (
     QgsProcessingFeedback,
     QgsProcessingOutputFile,
     QgsProcessingParameterBoolean,
-    QgsProcessingParameterFolderDestination,
+    QgsProcessingParameterFileDestination,
+    QgsProcessingParameterRasterDestination,
     QgsProcessingParameterRasterLayer,
 )
 
@@ -133,9 +134,8 @@ _SCHEME_FLAT: dict[str, int] = {
 # Parameter / output keys
 _PARAM_INPUT_DEM: str = "INPUT_DEM"
 _PARAM_USE_ESRI: str = "USE_ESRI_ENCODING"
-_PARAM_OUTPUT_FOLDER: str = "OUTPUT_FOLDER"
-_OUT_FLOW_DIRECTION: str = "OUTPUT_FLOW_DIRECTION"
-_OUT_REPORT: str = "OUTPUT_REPORT"
+_PARAM_OUTPUT_RASTER: str = "OUTPUT_RASTER"
+_PARAM_OUTPUT_REPORT: str = "OUTPUT_REPORT"
 _OUT_PROVENANCE: str = "OUTPUT_PROVENANCE"
 
 
@@ -150,8 +150,8 @@ class D8FlowDirection(MayimBaseAlgorithm):
     Outputs
     -------
     - D8 flow direction raster (int16, GeoTIFF, DEFLATE compressed)
-    - Plain-text summary report
-    - Provenance JSON record
+    - Plain-text summary report (.txt)
+    - Provenance JSON record (auto-derived from report path)
     """
 
     # ------------------------------------------------------------------
@@ -190,7 +190,7 @@ class D8FlowDirection(MayimBaseAlgorithm):
             "or 255 (ESRI).\n\n"
             "Input  : A hydrologically corrected (filled / conditioned) DEM.\n"
             "Outputs: Flow direction raster, plain-text report, provenance "
-            "JSON.\n\n"
+            "JSON (auto-named alongside the report).\n\n"
             "References:\n"
             "  O'Callaghan and Mark (1984)\n"
             "  Garbrecht and Martz (1997)\n\n"
@@ -216,6 +216,7 @@ class D8FlowDirection(MayimBaseAlgorithm):
         config : dict | None
             Optional algorithm configuration (unused).
         """
+        # Input: hydrologically corrected DEM
         self.addParameter(
             QgsProcessingParameterRasterLayer(
                 name=_PARAM_INPUT_DEM,
@@ -223,6 +224,7 @@ class D8FlowDirection(MayimBaseAlgorithm):
             )
         )
 
+        # Option: ESRI encoding scheme
         self.addParameter(
             QgsProcessingParameterBoolean(
                 name=_PARAM_USE_ESRI,
@@ -235,31 +237,28 @@ class D8FlowDirection(MayimBaseAlgorithm):
             )
         )
 
+        # Output: flow direction raster — user specifies full path
         self.addParameter(
-            QgsProcessingParameterFolderDestination(
-                name=_PARAM_OUTPUT_FOLDER,
-                description="Output folder",
+            QgsProcessingParameterRasterDestination(
+                name=_PARAM_OUTPUT_RASTER,
+                description="Flow direction raster",
             )
         )
 
-        self.addOutput(
-            QgsProcessingOutputFile(
-                name=_OUT_FLOW_DIRECTION,
-                description="D8 flow direction raster",
+        # Output: plain-text report — user specifies full path
+        self.addParameter(
+            QgsProcessingParameterFileDestination(
+                name=_PARAM_OUTPUT_REPORT,
+                description="Summary report",
+                fileFilter="Text files (*.txt)",
             )
         )
 
-        self.addOutput(
-            QgsProcessingOutputFile(
-                name=_OUT_REPORT,
-                description="D8 flow direction report (.txt)",
-            )
-        )
-
+        # Output: provenance JSON — auto-derived, exposed as output only
         self.addOutput(
             QgsProcessingOutputFile(
                 name=_OUT_PROVENANCE,
-                description="D8 flow direction provenance (.json)",
+                description="Provenance JSON (auto-named alongside report)",
             )
         )
 
@@ -283,8 +282,8 @@ class D8FlowDirection(MayimBaseAlgorithm):
         3. Build the valid-cell mask.
         4. Compute D8 flow direction (steepest descent).
         5. Encode output array per selected scheme.
-        6. Write the flow direction raster.
-        7. Compute per-direction cell statistics.
+        6. Gather cell statistics.
+        7. Write the flow direction raster.
         8. Write the plain-text report.
         9. Write the provenance JSON.
 
@@ -332,18 +331,26 @@ class D8FlowDirection(MayimBaseAlgorithm):
             out_nodata: int = _SCHEME_NODATA[scheme]
             out_flat: int = _SCHEME_FLAT[scheme]
 
-            output_folder = Path(
-                self.parameterAsString(parameters, _PARAM_OUTPUT_FOLDER, context)
+            # Resolve user-specified output paths
+            output_raster_path: str = self.parameterAsOutputLayer(
+                parameters, _PARAM_OUTPUT_RASTER, context
             )
-            output_folder.mkdir(parents=True, exist_ok=True)
+            output_report_path: str = self.parameterAsFileOutput(
+                parameters, _PARAM_OUTPUT_REPORT, context
+            )
+
+            # Derive provenance path from report path (same folder, .json)
+            report_path: Path = Path(output_report_path)
+            provenance_path: Path = report_path.with_suffix(".json")
 
             dem_source: str = dem_layer.source()
-            dem_stem: str = Path(dem_source).stem
 
             feedback.pushInfo(f"Input DEM        : {dem_source}")
             feedback.pushInfo(f"Encoding scheme  : {scheme}")
             feedback.pushInfo(f"Flat / NoData    : {out_nodata}")
-            feedback.pushInfo(f"Output folder    : {output_folder}")
+            feedback.pushInfo(f"Output raster    : {output_raster_path}")
+            feedback.pushInfo(f"Output report    : {output_report_path}")
+            feedback.pushInfo(f"Output provenance: {provenance_path}")
 
             # ----------------------------------------------------------
             # Step 2 — Read DEM via rasterio
@@ -457,8 +464,7 @@ class D8FlowDirection(MayimBaseAlgorithm):
             # Step 7 — Write flow direction raster
             # ----------------------------------------------------------
             feedback.setProgress(85)
-
-            flow_dir_path: Path = output_folder / f"{dem_stem}_d8_flow_direction.tif"
+            feedback.pushInfo("Writing flow direction raster.")
 
             out_profile: dict = profile.copy()
             out_profile.update(
@@ -468,23 +474,16 @@ class D8FlowDirection(MayimBaseAlgorithm):
                 compress="deflate",
             )
 
-            with rasterio.open(flow_dir_path, "w", **out_profile) as dst:
+            with rasterio.open(output_raster_path, "w", **out_profile) as dst:
                 dst.write(output_array, 1)
 
-            feedback.pushInfo(f"Flow direction raster written: {flow_dir_path}")
+            feedback.pushInfo(f"Flow direction raster written: {output_raster_path}")
 
             # ----------------------------------------------------------
             # Step 8 — Write plain-text report
             # ----------------------------------------------------------
             feedback.setProgress(90)
             feedback.pushInfo("Writing summary report.")
-
-            report_path: Path = (
-                output_folder / f"{dem_stem}_d8_flow_direction_report.txt"
-            )
-            provenance_path: Path = (
-                output_folder / f"{dem_stem}_d8_flow_direction_provenance.json"
-            )
 
             report_lines: list[str] = [
                 "═" * 72,
@@ -493,7 +492,6 @@ class D8FlowDirection(MayimBaseAlgorithm):
                 "═" * 72,
                 "",
                 f"  Run timestamp (UTC)  : {run_timestamp}",
-                f"  Output folder        : {output_folder}",
                 "",
                 "── Inputs ───────────────────────────────────────────────────",
                 f"  Input DEM            : {dem_source}",
@@ -539,8 +537,8 @@ class D8FlowDirection(MayimBaseAlgorithm):
                     f"  NoData output value  : {out_nodata}",
                     "",
                     "── Outputs ──────────────────────────────────────────────────",
-                    f"  Flow direction raster : {flow_dir_path}",
-                    f"  Report                : {report_path}",
+                    f"  Flow direction raster : {output_raster_path}",
+                    f"  Report                : {output_report_path}",
                     f"  Provenance            : {provenance_path}",
                     "",
                     "── Warnings ─────────────────────────────────────────────────",
@@ -624,8 +622,8 @@ class D8FlowDirection(MayimBaseAlgorithm):
                 },
                 "warnings": warnings,
                 "outputs": {
-                    "flow_direction_raster": str(flow_dir_path),
-                    "report": str(report_path),
+                    "flow_direction_raster": str(output_raster_path),
+                    "report": str(output_report_path),
                     "provenance": str(provenance_path),
                 },
             }
@@ -644,8 +642,8 @@ class D8FlowDirection(MayimBaseAlgorithm):
             MayimLogger.success("D8 Flow Direction completed successfully.")
 
             return {
-                _OUT_FLOW_DIRECTION: str(flow_dir_path),
-                _OUT_REPORT: str(report_path),
+                _PARAM_OUTPUT_RASTER: output_raster_path,
+                _PARAM_OUTPUT_REPORT: output_report_path,
                 _OUT_PROVENANCE: str(provenance_path),
             }
 
@@ -681,13 +679,12 @@ class D8FlowDirection(MayimBaseAlgorithm):
         sentinel value ``_FLAT_SENTINEL`` (-1) and re-encoded to the
         scheme-appropriate output value in ``processAlgorithm``.
 
-        NoData cells retain the value ``0`` (default fill).
+        NoData cells retain the value 0 (default fill).
 
         Parameters
         ----------
         dem_array : np.ndarray
-            2-D float64 elevation array. NoData cells may contain any
-            value — they are excluded via ``valid_mask``.
+            2-D float64 elevation array.
         valid_mask : np.ndarray
             Boolean array, True where cells are valid (not NoData).
         cell_width : float
