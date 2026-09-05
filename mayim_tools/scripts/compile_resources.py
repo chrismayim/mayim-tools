@@ -77,6 +77,7 @@ def compile_resources() -> None:
     result = subprocess.run(
         [pyrcc6, str(QRC_FILE), "-o", str(OUTPUT_FILE)],
         capture_output=True,
+        check=False,
         text=True,
     )
 

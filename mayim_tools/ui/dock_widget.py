@@ -100,7 +100,7 @@ class MayimDockWidget:
 
             MayimLogger.info("Mayim Tools dock widget created.")
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             MayimLogger.critical(f"Mayim Tools: Dock widget setup failed: {e}")
 
     def _populate_tree(self) -> None:
@@ -143,7 +143,7 @@ class MayimDockWidget:
             # ── Expand all categories by default ──
             self.tree.expandAll()
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             MayimLogger.critical(f"Mayim Tools: Tree population failed: {e}")
 
     def _on_item_double_clicked(self, item: QTreeWidgetItem, column: int) -> None:
@@ -173,7 +173,7 @@ class MayimDockWidget:
                 # Top-level category node — toggle expand/collapse
                 item.setExpanded(not item.isExpanded())
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             MayimLogger.critical(f"Mayim Tools: Failed to open tool: {e}")
             import traceback
 
@@ -196,5 +196,5 @@ class MayimDockWidget:
                 self.dock.deleteLater()
                 self.dock = None
             MayimLogger.info("Mayim Tools dock widget removed.")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             MayimLogger.critical(f"Mayim Tools: Dock teardown failed: {e}")

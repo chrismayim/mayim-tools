@@ -37,7 +37,7 @@ Phase 3 (this version): Adaptive enforcement.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -233,7 +233,8 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
         logger = MayimLogger(__name__)
         logger.info("Stage 7E — DEM Hydrography Enforcement started.")
 
-        run_timestamp = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        run_timestamp = datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
+
         warnings: list[str] = []
 
         # ── Resolve inputs ────────────────────────────────────────────────────
@@ -675,8 +676,10 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
             [
                 "",
                 "── Phase 1: Grid Alignment ──────────────────────────────────────",
-                f"  DEM grid shape      : {dem_metadata['height']} rows x "
-                f"{dem_metadata['width']} columns",
+                (
+                    f"  DEM grid shape      : {dem_metadata['height']} rows x "
+                    f"{dem_metadata['width']} columns"
+                ),
                 f"  DEM resolution X    : {dem_metadata['resolution_x']:.6f}",
                 f"  DEM resolution Y    : {dem_metadata['resolution_y']:.6f}",
                 f"  DEM dtype           : {dem_metadata['dtype']}",
@@ -684,55 +687,97 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
                 f"  DEM CRS (rasterio)  : {dem_metadata['crs']}",
                 f"  DEM transform       : {dem_metadata['transform']}",
                 f"  Hydrography burned cells        : {burned_cell_count}",
-                f"  Flow-evidence shape             : "
-                f"{flow_evidence_array.shape[0]} rows x "
-                f"{flow_evidence_array.shape[1]} columns",
+                (
+                    f"  Flow-evidence shape             : "
+                    f"{flow_evidence_array.shape[0]} rows x "
+                    f"{flow_evidence_array.shape[1]} columns"
+                ),
                 "  Flow-evidence alignment         : verified — matches DEM grid",
                 "",
                 "── Phase 2: Divergence Analysis ─────────────────────────────────",
-                f"  Assessable cells            : "
-                f"{divergence_stats['assessable_cells']}",
-                f"  NoData cells                : "
-                f"{divergence_stats['nodata_cells']}",
-                f"  Hydrography cells           : "
-                f"{divergence_stats['hydrography_cells']}",
-                f"  DEM flow cells              : "
-                f"{divergence_stats['dem_flow_cells']}",
-                f"  Aligned cells (exact)       : "
-                f"{divergence_stats['aligned_cells']}",
-                f"  Tolerated cells             : "
-                f"{divergence_stats['tolerated_cells']}",
-                f"  Hydrography-only cells      : "
-                f"{divergence_stats['hydrography_only_cells']}",
-                f"  DEM-only cells              : "
-                f"{divergence_stats['dem_only_cells']}",
-                f"  Material divergence cells   : "
-                f"{divergence_stats['material_divergence_cells']}",
-                f"  Conflict cells              : "
-                f"{divergence_stats['conflict_cells']}",
-                f"  Positional tolerance used   : "
-                f"{divergence_stats['positional_tolerance_cells']} cells",
+                (
+                    f"  Assessable cells            : "
+                    f"{divergence_stats['assessable_cells']}"
+                ),
+                (
+                    f"  NoData cells                : "
+                    f"{divergence_stats['nodata_cells']}"
+                ),
+                (
+                    f"  Hydrography cells           : "
+                    f"{divergence_stats['hydrography_cells']}"
+                ),
+                (
+                    f"  DEM flow cells              : "
+                    f"{divergence_stats['dem_flow_cells']}"
+                ),
+                (
+                    f"  Aligned cells (exact)       : "
+                    f"{divergence_stats['aligned_cells']}"
+                ),
+                (
+                    f"  Tolerated cells             : "
+                    f"{divergence_stats['tolerated_cells']}"
+                ),
+                (
+                    f"  Hydrography-only cells      : "
+                    f"{divergence_stats['hydrography_only_cells']}"
+                ),
+                (
+                    f"  DEM-only cells              : "
+                    f"{divergence_stats['dem_only_cells']}"
+                ),
+                (
+                    f"  Material divergence cells   : "
+                    f"{divergence_stats['material_divergence_cells']}"
+                ),
+                (
+                    f"  Conflict cells              : "
+                    f"{divergence_stats['conflict_cells']}"
+                ),
+                (
+                    f"  Positional tolerance used   : "
+                    f"{divergence_stats['positional_tolerance_cells']} cells"
+                ),
                 "",
                 "── Phase 3: Enforcement ─────────────────────────────────────────",
                 f"  Cell size                       : {cell_size:.4f}",
                 f"  Vertical accuracy               : {vertical_accuracy}",
                 f"  Maximum burn depth configured   : {maximum_burn_depth}",
-                f"  Base burn depth applied         : "
-                f"{audit['base_burn_depth']:.4f}",
+                (
+                    f"  Base burn depth applied         : "
+                    f"{audit['base_burn_depth']:.4f}"
+                ),
                 f"  Eligible cells                  : {eligible_cell_count}",
-                f"  Authorised hydrography cells    : "
-                f"{audit['authorised_hydrography_cells']}",
+                (
+                    f"  Authorised hydrography cells    : "
+                    f"{audit['authorised_hydrography_cells']}"
+                ),
                 f"  Modified cells                  : {audit['modified_cells']}",
-                f"  Conflict excluded cells         : "
-                f"{audit['conflict_excluded_cells']}",
-                f"  Total lowering                  : "
-                f"{audit['total_lowering']:.4f}",
-                f"  Maximum lowering                : "
-                f"{audit['maximum_lowering']:.4f}",
-                f"  Mean lowering                   : " f"{audit['mean_lowering']:.4f}",
-                f"  Minimum lowering                : "
-                f"{audit['minimum_lowering']:.4f}",
-                f"  Area scaling used               : " f"{audit['area_scaling_used']}",
+                (
+                    f"  Conflict excluded cells         : "
+                    f"{audit['conflict_excluded_cells']}"
+                ),
+                (
+                    f"  Total lowering                  : "
+                    f"{audit['total_lowering']:.4f}"
+                ),
+                (
+                    f"  Maximum lowering                : "
+                    f"{audit['maximum_lowering']:.4f}"
+                ),
+                (
+                    f"  Mean lowering                   : "
+                    f"{audit['mean_lowering']:.4f}"
+                ),
+                (
+                    f"  Minimum lowering                : "
+                    f"{audit['minimum_lowering']:.4f}"
+                ),
+                (
+                    f"  Area scaling used               : "
+                    f"{audit['area_scaling_used']}"
+                ),
                 "",
                 "── Outputs ──────────────────────────────────────────────────────",
                 f"  Enforced DEM        : {enforced_dem_path}",
@@ -1026,13 +1071,12 @@ class DEMHydrographyEnforcement(MayimBaseAlgorithm):
         # --- CRS check ---
         dem_crs = dem_metadata["crs"]
 
-        if flow_crs and dem_crs:
-            if flow_crs.to_epsg() != dem_crs.to_epsg():
-                feedback.pushWarning(
-                    f"Flow-evidence CRS (EPSG:{flow_crs.to_epsg()}) "
-                    f"differs from DEM CRS (EPSG:{dem_crs.to_epsg()}). "
-                    "Verify that both rasters are in the same projection."
-                )
+        if flow_crs and dem_crs and flow_crs.to_epsg() != dem_crs.to_epsg():
+            feedback.pushWarning(
+                f"Flow-evidence CRS (EPSG:{flow_crs.to_epsg()}) "
+                f"differs from DEM CRS (EPSG:{dem_crs.to_epsg()}). "
+                "Verify that both rasters are in the same projection."
+            )
 
         feedback.pushInfo(
             f"Flow-evidence raster verified. " f"Shape: {flow_height} x {flow_width}."

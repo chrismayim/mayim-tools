@@ -60,7 +60,7 @@ class MayimToolsPlugin:
                 self.dock_widget.teardown()
                 self.dock_widget = None
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             MayimLogger.warning(f"{self.PLUGIN_NAME} cleanup warning: {e}")
 
     def unload(self) -> None:

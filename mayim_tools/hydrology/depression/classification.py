@@ -493,7 +493,7 @@ def classify_depressions(
         Results sorted by integer depression ID.
     """
     if not isinstance(depression_features, dict):
-        raise ValueError("depression_features must be a dictionary keyed by ID.")
+        raise TypeError("depression_features must be a dictionary keyed by ID.")
 
     evidence_values = evidence if isinstance(evidence, dict) else {}
 
@@ -542,7 +542,7 @@ def _build_config(
         return ClassificationConfig()
 
     if not isinstance(thresholds, dict):
-        raise ValueError("thresholds must be a dictionary or None.")
+        raise TypeError("thresholds must be a dictionary or None.")
 
     valid_keys = set(ClassificationConfig.__dataclass_fields__)
     unknown_keys = set(thresholds) - valid_keys
@@ -563,7 +563,7 @@ def _validate_features(features: dict) -> None:
     :raises ValueError: If required values are absent or invalid.
     """
     if not isinstance(features, dict):
-        raise ValueError("features must be a dictionary.")
+        raise TypeError("features must be a dictionary.")
 
     required_keys = {
         "depression_id",

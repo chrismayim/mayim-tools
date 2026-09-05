@@ -87,7 +87,7 @@ class MayimMenu:
                             try:
                                 alg_id = f"mayimtools:{alg_name}"
                                 processing.execAlgorithmDialog(alg_id)
-                            except Exception as e:
+                            except Exception as e:  # noqa: BLE001
                                 MayimLogger.critical(
                                     f"Failed to open tool " f"{alg_name}: {e}"
                                 )

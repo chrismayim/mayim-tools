@@ -58,7 +58,7 @@ Pipeline position
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -452,7 +452,7 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
                         f"Input manifest loaded: " f"{input_manifest.summary()}",
                         feedback,
                     )
-            except Exception as _e:
+            except Exception as _e:  # noqa: BLE001
                 self.log_warning(
                     f"Could not read input manifest: {_e}. "
                     f"A new manifest will be created.",
@@ -476,7 +476,7 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
             ),
             "version": self.TOOL_VERSION,
             "stage": 2,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(tz=timezone.utc).isoformat(timespec="seconds"),
             "input_dem": dem_layer.source(),
             "input_manifest": input_manifest_path or None,
             "parameters": {
@@ -771,9 +771,6 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
         except QgsProcessingException:
             raise
 
-        except QgsProcessingException:
-            raise
-
         except Exception as error:
             MayimLogger.critical(f"DEM Hydrological Smoothing failed: {error}")
             raise QgsProcessingException(
@@ -856,7 +853,7 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
                 feedback,
             )
 
-        except Exception as _manifest_error:
+        except Exception as _manifest_error:  # noqa: BLE001
             self.log_warning(
                 f"Could not write MayimManifest: {_manifest_error}",
                 feedback,
@@ -1100,7 +1097,7 @@ class DEMHydrologicalSmoothing(MayimBaseAlgorithm):
                 feedback,
             )
 
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001
             self.log_warning(
                 f"Could not load Stage 2 outputs: {error}",
                 feedback,

@@ -28,7 +28,7 @@ runtime is used.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -402,7 +402,7 @@ class DEMGradientResolution(MayimBaseAlgorithm):
                         feedback,
                     )
 
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001
                 self.log_warning(
                     f"Could not read input manifest: {error}",
                     feedback,
@@ -435,7 +435,7 @@ class DEMGradientResolution(MayimBaseAlgorithm):
             ),
             "version": self.TOOL_VERSION,
             "stage": 6,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(tz=timezone.utc).isoformat(timespec="seconds"),
             "input_dem": dem_layer.source(),
             "input_manifest": manifest_path or None,
             "parameters": {
@@ -808,7 +808,7 @@ class DEMGradientResolution(MayimBaseAlgorithm):
                     feedback,
                 )
 
-            except Exception as manifest_error:
+            except Exception as manifest_error:  # noqa: BLE001
                 warning = f"Could not write MayimManifest: " f"{manifest_error}"
                 provenance["warnings"].append(warning)
                 self.log_warning(warning, feedback)
@@ -935,7 +935,7 @@ class DEMGradientResolution(MayimBaseAlgorithm):
                 feedback,
             )
 
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001
             self.log_warning(
                 f"Could not load Stage 6 outputs: {error}",
                 feedback,

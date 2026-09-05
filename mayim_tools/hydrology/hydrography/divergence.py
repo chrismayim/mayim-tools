@@ -362,7 +362,7 @@ def _validate_inputs(
         (dem_flow_mask, "dem_flow_mask"),
     ):
         if not isinstance(mask, np.ndarray):
-            raise ValueError(f"{name} must be a NumPy array.")
+            raise TypeError(f"{name} must be a NumPy array.")
 
         if mask.ndim != 2:
             raise ValueError(f"{name} must be two-dimensional.")
@@ -379,7 +379,7 @@ def _validate_inputs(
         positional_tolerance_cells,
         (int, np.integer),
     ):
-        raise ValueError("positional_tolerance_cells must be an integer.")
+        raise TypeError("positional_tolerance_cells must be an integer.")
 
     if positional_tolerance_cells < 0:
         raise ValueError("positional_tolerance_cells must be non-negative.")

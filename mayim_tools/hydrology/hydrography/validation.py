@@ -112,12 +112,11 @@ def validate_hydrography(
     if hydrography_crs is None:
         errors.append("Hydrography CRS is missing.")
 
-    if dem_crs is not None and hydrography_crs is not None:
-        if not crs_match:
-            errors.append(
-                "DEM CRS and hydrography CRS do not match. "
-                "Reprojection is required before enforcement."
-            )
+    if dem_crs is not None and hydrography_crs is not None and not crs_match:
+        errors.append(
+            "DEM CRS and hydrography CRS do not match. "
+            "Reprojection is required before enforcement."
+        )
 
     for geometry in geometry_values:
         geometry_count += 1
@@ -268,7 +267,7 @@ def _crs_value(crs: Any) -> str:
                 value = method()
                 if value:
                     return str(value)
-            except Exception:
+            except Exception:  # noqa: BLE001, S112
                 continue
 
     return str(crs)

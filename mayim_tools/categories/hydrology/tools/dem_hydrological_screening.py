@@ -43,8 +43,9 @@ License:    GPL-2.0+
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import ClassVar
 
 import numpy as np
 from qgis.core import (
@@ -80,7 +81,7 @@ class DEMSourceType:
     AERIAL_PHOTOGRAMMETRY = 6
     UNKNOWN = 7
 
-    LABELS = [
+    LABELS: ClassVar[list[str]] = [
         "Auto-detect",
         "LiDAR bare-earth (DTM)",
         "LiDAR surface model (DSM, uncorrected)",
@@ -96,7 +97,7 @@ class DEMSourceType:
     # LiDAR DTM: ±0.1-0.3m, LiDAR DSM: ±0.3-0.5m
     # SRTM/Copernicus: ±3-5m, FABDEM: ±1-2m
     # Aerial: ±0.5-1.0m, Unknown: ±5m (conservative)
-    DEFAULT_RMSE = {
+    DEFAULT_RMSE: ClassVar[dict] = {
         AUTO_DETECT: None,
         LIDAR_DTM: 0.15,
         LIDAR_DSM: 0.40,
@@ -453,8 +454,7 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
         output_dir.mkdir(parents=True, exist_ok=True)
 
         dem_stem = Path(dem_layer.source()).stem
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
+        timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
         paths = {
             "screened_dem": output_dir / f"{dem_stem}_screened.tif",
             "void_mask": output_dir / f"{dem_stem}_void_mask.tif",
@@ -468,7 +468,7 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
         provenance = {
             "tool": "DEM Hydrological Screening",
             "version": "0.1.0",
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(tz=timezone.utc).isoformat(timespec="seconds"),
             "input_dem": dem_layer.source(),
             "parameters": {
                 "source_type": DEMSourceType.LABELS[source_type_idx],
@@ -927,7 +927,7 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
             # Re-raise QGIS processing exceptions directly
             raise
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             MayimLogger.critical(f"DEM Hydrological Screening failed: {e}")
             raise QgsProcessingException(f"DEM Hydrological Screening failed: {e}")
 
@@ -1046,7 +1046,7 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
                 feedback,
             )
 
-        except Exception as _e:
+        except Exception as _e:  # noqa: BLE001
             self.log_warning(
                 f"Could not write MayimManifest: {_e}",
                 feedback,
@@ -1152,7 +1152,7 @@ class DEMHydrologicalScreening(MayimBaseAlgorithm):
                     feedback,
                 )
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             self.log_warning(
                 f"Could not load output layers into project: {e}",
                 feedback,

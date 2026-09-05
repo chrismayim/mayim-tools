@@ -364,7 +364,7 @@ def _validate_inputs(
     Validate gradient-resolution inputs.
     """
     if not isinstance(dem, np.ndarray):
-        raise ValueError("dem must be a NumPy array.")
+        raise TypeError("dem must be a NumPy array.")
 
     if dem.ndim != 2:
         raise ValueError("dem must be a two-dimensional array.")
@@ -419,7 +419,7 @@ def _validate_boolean_mask(
     Validate a Boolean mask.
     """
     if not isinstance(mask, np.ndarray):
-        raise ValueError(f"{name} must be a NumPy array.")
+        raise TypeError(f"{name} must be a NumPy array.")
 
     if mask.ndim != 2:
         raise ValueError(f"{name} must be a two-dimensional array.")

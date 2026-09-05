@@ -103,7 +103,7 @@ class MayimToolbar:
                     f"Tools are being developed and will appear "
                     f"here in a future release.",
                 )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             MayimLogger.critical(f"Failed to open category {category.name}: {e}")
 
     def _show_about(self) -> None:
@@ -113,7 +113,7 @@ class MayimToolbar:
 
             dialog = AboutDialog(self.iface.mainWindow())
             dialog.exec()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             MayimLogger.critical(f"Failed to open About dialog: {e}")
 
     def teardown(self) -> None:

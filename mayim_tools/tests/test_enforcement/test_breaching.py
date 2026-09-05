@@ -61,7 +61,9 @@ class TestLeastCostBreach:
 
         assert path is not None
 
-        for current, following in zip(path, path[1:]):
+        import itertools
+
+        for current, following in itertools.pairwise(path):
             row_distance = abs(current[0] - following[0])
             col_distance = abs(current[1] - following[1])
 
