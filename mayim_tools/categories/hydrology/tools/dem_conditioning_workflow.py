@@ -36,8 +36,9 @@ additional hydrography and flow-evidence inputs.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import ClassVar
 
 import processing
 from qgis.core import (
@@ -117,7 +118,7 @@ class DEMConditioningWorkflow(MayimBaseAlgorithm):
 
     # ── Defaults ──────────────────────────────────────────────────────────────
 
-    DEM_SOURCE_TYPES = [
+    DEM_SOURCE_TYPES: ClassVar[list[str]] = [
         "Unknown",
         "LiDAR DTM",
         "LiDAR DSM",
@@ -543,7 +544,7 @@ class DEMConditioningWorkflow(MayimBaseAlgorithm):
         logger = MayimLogger()
         logger.info("DEM Conditioning Workflow started.")
 
-        run_timestamp = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        run_timestamp = datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
         warnings: list[str] = []
         stage_provenance: dict = {}
 
@@ -939,50 +940,84 @@ class DEMConditioningWorkflow(MayimBaseAlgorithm):
             f"  Output folder       : {output_folder}",
             "",
             "── Stage Summary ────────────────────────────────────────────────",
-            f"  Stage 1 — DEM Hydrological Screening  : "
-            f"{stage_provenance['stage_1_screening']['status']}",
-            f"  Stage 2 — DEM Hydrological Smoothing  : "
-            f"{stage_provenance['stage_2_smoothing']['status']}",
-            f"  Stage 3 — DEM Depression Analysis     : "
-            f"{stage_provenance['stage_3_depression']['status']}",
-            f"  Stage 4 — DEM Hydrological Filling    : "
-            f"{stage_provenance['stage_4_filling']['status']}",
-            f"  Stage 5 — DEM Gradient Resolution     : "
-            f"{stage_provenance['stage_5_gradient']['status']}",
-            f"  Stage 6 — DEM Hydrography Enforcement : "
-            f"{stage_provenance['stage_6_enforcement']['status']}",
+            (
+                f"  Stage 1 — DEM Hydrological Screening  : "
+                f"{stage_provenance['stage_1_screening']['status']}"
+            ),
+            (
+                f"  Stage 2 — DEM Hydrological Smoothing  : "
+                f"{stage_provenance['stage_2_smoothing']['status']}"
+            ),
+            (
+                f"  Stage 3 — DEM Depression Analysis     : "
+                f"{stage_provenance['stage_3_depression']['status']}"
+            ),
+            (
+                f"  Stage 4 — DEM Hydrological Filling    : "
+                f"{stage_provenance['stage_4_filling']['status']}"
+            ),
+            (
+                f"  Stage 5 — DEM Gradient Resolution     : "
+                f"{stage_provenance['stage_5_gradient']['status']}"
+            ),
+            (
+                f"  Stage 6 — DEM Hydrography Enforcement : "
+                f"{stage_provenance['stage_6_enforcement']['status']}"
+            ),
             "",
             "── Stage 1: DEM Hydrological Screening ──────────────────────────",
-            f"  Output DEM    : "
-            f"{stage_provenance['stage_1_screening']['output_dem']}",
-            f"  Output folder : "
-            f"{stage_provenance['stage_1_screening']['output_folder']}",
+            (
+                f"  Output DEM    : "
+                f"{stage_provenance['stage_1_screening']['output_dem']}"
+            ),
+            (
+                f"  Output folder : "
+                f"{stage_provenance['stage_1_screening']['output_folder']}"
+            ),
             "",
             "── Stage 2: DEM Hydrological Smoothing ──────────────────────────",
-            f"  Output DEM    : "
-            f"{stage_provenance['stage_2_smoothing']['output_dem']}",
-            f"  Output folder : "
-            f"{stage_provenance['stage_2_smoothing']['output_folder']}",
+            (
+                f"  Output DEM    : "
+                f"{stage_provenance['stage_2_smoothing']['output_dem']}"
+            ),
+            (
+                f"  Output folder : "
+                f"{stage_provenance['stage_2_smoothing']['output_folder']}"
+            ),
             "",
             "── Stage 3: DEM Depression Analysis ─────────────────────────────",
-            f"  Output manifest   : "
-            f"{stage_provenance['stage_3_depression']['output_manifest']}",
-            f"  Output inventory  : "
-            f"{stage_provenance['stage_3_depression']['output_inventory']}",
-            f"  Output folder     : "
-            f"{stage_provenance['stage_3_depression']['output_folder']}",
+            (
+                f"  Output manifest   : "
+                f"{stage_provenance['stage_3_depression']['output_manifest']}"
+            ),
+            (
+                f"  Output inventory  : "
+                f"{stage_provenance['stage_3_depression']['output_inventory']}"
+            ),
+            (
+                f"  Output folder     : "
+                f"{stage_provenance['stage_3_depression']['output_folder']}"
+            ),
             "",
             "── Stage 4: DEM Hydrological Filling ────────────────────────────",
-            f"  Output DEM    : "
-            f"{stage_provenance['stage_4_filling']['output_dem']}",
-            f"  Output folder : "
-            f"{stage_provenance['stage_4_filling']['output_folder']}",
+            (
+                f"  Output DEM    : "
+                f"{stage_provenance['stage_4_filling']['output_dem']}"
+            ),
+            (
+                f"  Output folder : "
+                f"{stage_provenance['stage_4_filling']['output_folder']}"
+            ),
             "",
             "── Stage 5: DEM Gradient Resolution ─────────────────────────────",
-            f"  Output DEM    : "
-            f"{stage_provenance['stage_5_gradient']['output_dem']}",
-            f"  Output folder : "
-            f"{stage_provenance['stage_5_gradient']['output_folder']}",
+            (
+                f"  Output DEM    : "
+                f"{stage_provenance['stage_5_gradient']['output_dem']}"
+            ),
+            (
+                f"  Output folder : "
+                f"{stage_provenance['stage_5_gradient']['output_folder']}"
+            ),
             "",
             "── Stage 6: DEM Hydrography Enforcement ─────────────────────────",
         ]
@@ -990,12 +1025,18 @@ class DEMConditioningWorkflow(MayimBaseAlgorithm):
         if stage_provenance["stage_6_enforcement"]["status"] == "complete":
             report_lines.extend(
                 [
-                    f"  Output report     : "
-                    f"{stage_provenance['stage_6_enforcement']['output_report']}",
-                    f"  Output provenance : "
-                    f"{stage_provenance['stage_6_enforcement']['output_provenance']}",
-                    f"  Output folder     : "
-                    f"{stage_provenance['stage_6_enforcement']['output_folder']}",
+                    (
+                        f"  Output report     : "
+                        f"{stage_provenance['stage_6_enforcement']['output_report']}"
+                    ),
+                    (
+                        f"  Output provenance : "
+                        f"{stage_provenance['stage_6_enforcement']['output_provenance']}"
+                    ),
+                    (
+                        f"  Output folder     : "
+                        f"{stage_provenance['stage_6_enforcement']['output_folder']}"
+                    ),
                 ]
             )
         else:

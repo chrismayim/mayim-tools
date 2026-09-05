@@ -49,6 +49,7 @@ and the published literature cited by that methodology.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import Any
 
 import numpy as np
 
@@ -56,9 +57,7 @@ from mayim_tools.hydrology.enforcement.breaching import (
     apply_breach_path,
     least_cost_breach,
 )
-from mayim_tools.hydrology.enforcement.depitting import (
-    depit_single_cell,
-)
+from mayim_tools.hydrology.enforcement.depitting import depit_single_cell
 from mayim_tools.hydrology.enforcement.filling import (
     confined_priority_flood_fill,
 )
@@ -77,13 +76,13 @@ DECISION_REVIEW_PRESERVED = 5
 
 def enforce_selectively(
     dem: np.ndarray,
-    depression_records: Mapping[int, Mapping],
+    depression_records: Mapping[int, Mapping[str, Any]],
     depression_masks: Mapping[int, np.ndarray],
     max_breach_length: int,
     max_breach_depth: float,
     nodata: float,
     connectivity: int = 8,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[dict]]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[dict[str, Any]]]:
     """
     Apply classification-driven Stage 5 selective enforcement.
 
@@ -140,12 +139,14 @@ def enforce_selectively(
 
     Returns
     -------
-    tuple[np.ndarray, np.ndarray, np.ndarray, list[dict]]
+    tuple[np.ndarray, np.ndarray, np.ndarray, list[dict[str, Any]]]
         Preserved DEM, hydrology-ready DEM, decision-code raster and
         per-depression audit records.
 
     Raises
     ------
+    TypeError
+        If typed inputs are of the wrong type.
     ValueError
         If inputs are invalid or a depression record is incomplete.
     """
@@ -169,12 +170,9 @@ def enforce_selectively(
     )
     decision_codes[~valid_mask] = 255
 
-    audit_records = []
+    audit_records: list[dict[str, Any]] = []
 
-    for depression_id in sorted(
-        depression_records,
-        key=lambda value: int(value),
-    ):
+    for depression_id in sorted(depression_records, key=lambda value: int(value)):
         depression_id = int(depression_id)
         record = depression_records[depression_id]
 
@@ -184,7 +182,7 @@ def enforce_selectively(
         depression_mask = depression_masks[depression_id]
 
         if not isinstance(depression_mask, np.ndarray):
-            raise ValueError(f"Depression mask {depression_id} must be a NumPy array.")
+            raise TypeError(f"Depression mask {depression_id} must be a NumPy array.")
 
         if depression_mask.shape != dem.shape:
             raise ValueError(f"Depression mask {depression_id} has the wrong shape.")
@@ -203,7 +201,6 @@ def enforce_selectively(
         if not np.any(cell_mask):
             raise ValueError(f"Depression {depression_id} contains no valid cells.")
 
-        # Preserve real features and unresolved review cases.
         if classification == REAL_FEATURE:
             decision_codes[cell_mask] = DECISION_REAL_PRESERVED
 
@@ -249,7 +246,6 @@ def enforce_selectively(
             )
         )
 
-        # A single-cell artifact is handled by de-pitting.
         if area_cells == 1:
             result, depit_audit = depit_single_cell(
                 dem=preserved_dem,
@@ -261,9 +257,6 @@ def enforce_selectively(
             preserved_dem = result
             hydrology_ready_dem = result.copy()
 
-            # Record the decision across the complete depression
-            # footprint. The change mask remains available through
-            # the audit record to identify cells actually modified.
             decision_codes[cell_mask] = DECISION_DEPITTED
 
             audit_records.append(
@@ -275,11 +268,11 @@ def enforce_selectively(
                     "modified": bool(depit_audit["elevation_change"] > 0.0),
                     "method": "single_cell_depitting",
                     "details": depit_audit,
+                    "changed_cell_count": int(np.sum(change_mask)),
                 }
             )
             continue
 
-        # Attempt constrained breaching for larger artifacts.
         breach_path, breach_audit = least_cost_breach(
             dem=preserved_dem,
             pit=pit,
@@ -302,8 +295,6 @@ def enforce_selectively(
             preserved_dem = result
             hydrology_ready_dem = result.copy()
 
-            # Decision code applies to the whole depression footprint,
-            # not only to cells whose elevation changed.
             decision_codes[cell_mask] = DECISION_BREACHED
 
             audit_records.append(
@@ -316,11 +307,11 @@ def enforce_selectively(
                     "method": "constrained_least_cost_breach",
                     "search": breach_audit,
                     "application": apply_audit,
+                    "changed_cell_count": int(np.sum(change_mask)),
                 }
             )
             continue
 
-        # Breach failed: use confined filling fallback.
         filled, fill_audit = confined_priority_flood_fill(
             dem=preserved_dem,
             depression_mask=depression_mask,
@@ -333,8 +324,6 @@ def enforce_selectively(
         preserved_dem = filled
         hydrology_ready_dem = filled.copy()
 
-        # Record the fallback-fill decision across the full depression
-        # footprint. The fill audit identifies actual changed cells.
         decision_codes[cell_mask] = DECISION_FILLED
 
         audit_records.append(
@@ -347,6 +336,7 @@ def enforce_selectively(
                 "method": "confined_priority_flood_fill",
                 "search": breach_audit,
                 "application": fill_audit,
+                "changed_cell_count": int(np.sum(change_mask)),
             }
         )
 
@@ -358,7 +348,7 @@ def enforce_selectively(
     )
 
 
-def _classification_value(record: Mapping) -> str:
+def _classification_value(record: Mapping[str, Any]) -> str:
     """
     Extract a classification label from a depression record.
     """
@@ -368,14 +358,12 @@ def _classification_value(record: Mapping) -> str:
         classification = classification.classification
 
     if not isinstance(classification, str):
-        raise ValueError("Depression classification must be a string or result object.")
+        raise TypeError("Depression classification must be a string or result object.")
 
     return classification
 
 
-def _pit_from_record(
-    record: Mapping,
-) -> tuple[int, int]:
+def _pit_from_record(record: Mapping[str, Any]) -> tuple[int, int]:
     """
     Extract a pit coordinate from a depression record.
     """
@@ -391,7 +379,7 @@ def _pit_from_record(
     raise ValueError("Depression record must contain pit or pit_row and pit_col.")
 
 
-def _spill_from_record(record: Mapping) -> float:
+def _spill_from_record(record: Mapping[str, Any]) -> float:
     """
     Extract and validate a spill elevation.
     """
@@ -408,7 +396,7 @@ def _spill_from_record(record: Mapping) -> float:
 
 def _validate_inputs(
     dem: np.ndarray,
-    depression_records: Mapping[int, Mapping],
+    depression_records: Mapping[int, Mapping[str, Any]],
     depression_masks: Mapping[int, np.ndarray],
     max_breach_length: int,
     max_breach_depth: float,
@@ -418,16 +406,16 @@ def _validate_inputs(
     Validate orchestration inputs.
     """
     if not isinstance(dem, np.ndarray):
-        raise ValueError("dem must be a NumPy array.")
+        raise TypeError("dem must be a NumPy array.")
 
     if dem.ndim != 2:
         raise ValueError("dem must be a two-dimensional array.")
 
     if not isinstance(depression_records, Mapping):
-        raise ValueError("depression_records must be a mapping.")
+        raise TypeError("depression_records must be a mapping.")
 
     if not isinstance(depression_masks, Mapping):
-        raise ValueError("depression_masks must be a mapping.")
+        raise TypeError("depression_masks must be a mapping.")
 
     if max_breach_length <= 0:
         raise ValueError("max_breach_length must be greater than zero.")

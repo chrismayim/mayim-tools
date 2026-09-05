@@ -123,13 +123,6 @@ def least_cost_breach(
     tuple[list[tuple[int, int]] | None, dict]
         Ordered path and audit record. The path is ``None`` if no
         admissible path is found.
-
-    Notes
-    -----
-    The returned path is a proposed breach path. It is not an edited
-    elevation profile. The Stage 5 enforcement layer must apply the
-    path using an explicit breach-profile rule and record the resulting
-    elevation changes separately.
     """
     _validate_inputs(
         dem=dem,
@@ -147,15 +140,6 @@ def least_cost_breach(
 
     offsets = _D4 if connectivity == 4 else _D8
 
-    # Each heap item is ordered by:
-    #
-    #   cumulative cost,
-    #   maximum local excavation depth,
-    #   path length,
-    #   row,
-    #   column
-    #
-    # The row and column tie-breakers make the result deterministic.
     queue: list[tuple[float, float, int, int, int]] = [
         (0.0, 0.0, 0, pit_row, pit_col),
     ]
@@ -184,28 +168,25 @@ def least_cost_breach(
 
         visited_cells += 1
 
-        # The starting pit is not considered a successful outlet even
-        # when its elevation is already below the spill elevation.
-        if current != (pit_row, pit_col):
-            if dem[row, col] <= spill_elevation:
-                path = _reconstruct_path(
-                    came_from=came_from,
-                    endpoint=current,
-                )
+        if current != (pit_row, pit_col) and dem[row, col] <= spill_elevation:
+            path = _reconstruct_path(
+                came_from=came_from,
+                endpoint=current,
+            )
 
-                audit = _success_audit(
-                    path=path,
-                    total_cost=cost,
-                    maximum_excavation_depth=maximum_depth,
-                    visited_cells=visited_cells,
-                    nodata_cells_encountered=nodata_cells_encountered,
-                    spill_elevation=spill_elevation,
-                    max_length=max_length,
-                    max_depth=max_depth,
-                    connectivity=connectivity,
-                )
+            audit = _success_audit(
+                path=path,
+                total_cost=cost,
+                maximum_excavation_depth=maximum_depth,
+                visited_cells=visited_cells,
+                nodata_cells_encountered=nodata_cells_encountered,
+                spill_elevation=spill_elevation,
+                max_length=max_length,
+                max_depth=max_depth,
+                connectivity=connectivity,
+            )
 
-                return path, audit
+            return path, audit
 
         if length >= max_length:
             continue
@@ -250,12 +231,11 @@ def least_cost_breach(
 
             previous_state = best_cost.get(neighbour)
 
-            if previous_state is not None:
-                if not _is_better_state(
-                    candidate=candidate_state,
-                    previous=previous_state,
-                ):
-                    continue
+            if previous_state is not None and not _is_better_state(
+                candidate=candidate_state,
+                previous=previous_state,
+            ):
+                continue
 
             best_cost[neighbour] = candidate_state
             came_from[neighbour] = current
@@ -324,10 +304,15 @@ def apply_breach_path(
 
     Raises
     ------
+    TypeError
+        If the DEM is not a NumPy array.
     ValueError
         If the path or inputs are invalid.
     """
-    if not isinstance(dem, np.ndarray) or dem.ndim != 2:
+    if not isinstance(dem, np.ndarray):
+        raise TypeError("dem must be a two-dimensional NumPy array.")
+
+    if dem.ndim != 2:
         raise ValueError("dem must be a two-dimensional NumPy array.")
 
     if not isinstance(path, list) or not path:
@@ -412,7 +397,7 @@ def _validate_inputs(
     Validate least-cost breach inputs.
     """
     if not isinstance(dem, np.ndarray):
-        raise ValueError("dem must be a NumPy array.")
+        raise TypeError("dem must be a NumPy array.")
 
     if dem.ndim != 2:
         raise ValueError("dem must be a two-dimensional array.")
@@ -424,7 +409,7 @@ def _validate_inputs(
         raise ValueError("spill_elevation must be finite.")
 
     if not isinstance(max_length, (int, np.integer)):
-        raise ValueError("max_length must be an integer.")
+        raise TypeError("max_length must be an integer.")
 
     if max_length <= 0:
         raise ValueError("max_length must be greater than zero.")
@@ -452,7 +437,7 @@ def _validate_pit_coordinate(
         col,
         (int, np.integer),
     ):
-        raise ValueError("Coordinate values must be integers.")
+        raise TypeError("Coordinate values must be integers.")
 
     row = int(row)
     col = int(col)
@@ -469,14 +454,6 @@ def _is_better_state(
 ) -> bool:
     """
     Return whether a candidate search state is better.
-
-    States are compared lexicographically by:
-
-        1. total cost,
-        2. maximum local excavation depth,
-        3. path length.
-
-    This produces deterministic behaviour for equal-cost paths.
     """
     return candidate < previous
 
@@ -487,10 +464,6 @@ def _reconstruct_path(
 ) -> list[tuple[int, int]]:
     """
     Reconstruct an ordered path from the search origin to an endpoint.
-
-    :param came_from: Predecessor mapping generated by the search.
-    :param endpoint: Final path coordinate.
-    :returns: Ordered list of ``(row, column)`` coordinates.
     """
     path = [endpoint]
     current = endpoint
@@ -516,17 +489,6 @@ def _success_audit(
 ) -> dict:
     """
     Build an audit record for a successful breach search.
-
-    :param path: Ordered proposed breach path.
-    :param total_cost: Cumulative excavation cost.
-    :param maximum_excavation_depth: Largest excavation depth on path.
-    :param visited_cells: Number of search states visited.
-    :param nodata_cells_encountered: NoData neighbours encountered.
-    :param spill_elevation: Target spill elevation.
-    :param max_length: Maximum allowed path length.
-    :param max_depth: Maximum allowed local excavation depth.
-    :param connectivity: Search connectivity.
-    :returns: Serialisable audit dictionary.
     """
     return {
         "success": True,

@@ -78,6 +78,8 @@ def label_flat_regions(
 
     Raises
     ------
+    TypeError
+        If the input mask is not a NumPy array.
     ValueError
         If the input mask or connectivity is invalid.
     """
@@ -150,7 +152,7 @@ def _validate_inputs(
     Validate flat-region inputs.
     """
     if not isinstance(flat_mask, np.ndarray):
-        raise ValueError("flat_mask must be a NumPy array.")
+        raise TypeError("flat_mask must be a NumPy array.")
 
     if flat_mask.ndim != 2:
         raise ValueError("flat_mask must be a two-dimensional array.")

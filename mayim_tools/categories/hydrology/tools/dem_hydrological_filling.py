@@ -54,7 +54,7 @@ No third-party hydrological runtime is used.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -393,11 +393,10 @@ class DEMHydrologicalFilling(MayimBaseAlgorithm):
             "manifest": output_dir / f"{dem_stem}_enforcement.manifest.json",
         }
 
-        input_manifest = None
         if manifest_path and Path(manifest_path).exists():
             try:
                 input_manifest = MayimManifest.read(manifest_path)
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001
                 self.log_warning(
                     f"Could not read input manifest: {error}",
                     feedback,
@@ -655,7 +654,7 @@ class DEMHydrologicalFilling(MayimBaseAlgorithm):
             ),
             "version": self.TOOL_VERSION,
             "stage": 5,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(tz=timezone.utc).isoformat(timespec="seconds"),
             "input_dem": dem_layer.source(),
             "input_manifest": manifest_path or None,
             "input_inventory": inventory_path,
@@ -754,7 +753,7 @@ class DEMHydrologicalFilling(MayimBaseAlgorithm):
                 feedback,
             )
 
-        except Exception as manifest_error:
+        except Exception as manifest_error:  # noqa: BLE001
             self.log_warning(
                 f"Could not write MayimManifest: {manifest_error}",
                 feedback,
@@ -851,7 +850,7 @@ class DEMHydrologicalFilling(MayimBaseAlgorithm):
                 feedback,
             )
 
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001
             self.log_warning(
                 f"Could not load Stage 5 outputs: {error}",
                 feedback,

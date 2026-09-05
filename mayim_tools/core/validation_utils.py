@@ -1,145 +1,126 @@
 """
-Mayim Tools – Validation Utilities
-Input validation helpers used across all tools and categories.
+Mayim Tools - Validation utilities.
 """
+
+from __future__ import annotations
 
 from typing import Any
 
-from qgis.core import QgsRasterLayer, QgsVectorLayer
-
 
 class ValidationUtils:
-    """Static utility class for input validation."""
+    """
+    Shared input validation helpers.
+    """
 
     @staticmethod
     def is_not_none(value: Any, label: str = "Value") -> bool:
-        """Check that a value is not None."""
-        if value is None:
-            return False
-        return True
+        """
+        Check that a value is not None.
+
+        Parameters
+        ----------
+        value : Any
+            Value to test.
+        label : str
+            Optional label for future compatibility.
+
+        Returns
+        -------
+        bool
+            True if the value is not None.
+        """
+        _ = label
+        return value is not None
 
     @staticmethod
-    def is_not_empty_string(value: str, label: str = "Value") -> bool:
+    def is_non_empty_string(value: str | None) -> bool:
         """
-        Check that a string is not None or empty.
+        Check that a string is non-empty after stripping whitespace.
 
-        :param value: String to check
-        :param label: Label used in error messages
-        :returns: True if valid, False otherwise
+        Parameters
+        ----------
+        value : str | None
+            Value to test.
+
+        Returns
+        -------
+        bool
+            True if the string contains non-whitespace characters.
         """
-        if not value or not value.strip():
-            return False
-        return True
+        return not (not value or not value.strip())
 
     @staticmethod
-    def is_positive_number(value: Any, label: str = "Value") -> bool:
+    def is_positive_number(value: float) -> bool:
         """
-        Check that a value is a positive number (int or float).
+        Check that a number is positive.
 
-        :param value: Value to check
-        :param label: Label used in error messages
-        :returns: True if positive number, False otherwise
+        Parameters
+        ----------
+        value : int | float
+            Number to test.
+
+        Returns
+        -------
+        bool
+            True if the number is greater than zero.
         """
-        try:
-            return float(value) > 0
-        except (TypeError, ValueError):
-            return False
+        return value > 0
 
     @staticmethod
     def is_in_range(
         value: float,
-        min_val: float,
-        max_val: float,
-        label: str = "Value",
+        minimum: float,
+        maximum: float,
     ) -> bool:
         """
-        Check that a numeric value falls within a specified range.
+        Check that a value lies within an inclusive numeric range.
 
-        :param value: Value to check
-        :param min_val: Minimum allowed value (inclusive)
-        :param max_val: Maximum allowed value (inclusive)
-        :param label: Label used in error messages
-        :returns: True if in range, False otherwise
-        """
-        try:
-            return min_val <= float(value) <= max_val
-        except (TypeError, ValueError):
-            return False
+        Parameters
+        ----------
+        value : int | float
+            Value to test.
+        minimum : int | float
+            Minimum permitted value.
+        maximum : int | float
+            Maximum permitted value.
 
-    @staticmethod
-    def is_valid_vector_layer(layer: Any) -> bool:
+        Returns
+        -------
+        bool
+            True if minimum <= value <= maximum.
         """
-        Check that the input is a valid, loaded QgsVectorLayer.
-
-        :param layer: Object to check
-        :returns: True if valid vector layer, False otherwise
-        """
-        return (
-            layer is not None and isinstance(layer, QgsVectorLayer) and layer.isValid()
-        )
+        return minimum <= value <= maximum
 
     @staticmethod
     def is_valid_raster_layer(layer: Any) -> bool:
         """
-        Check that the input is a valid, loaded QgsRasterLayer.
+        Check that a raster layer object exists and is valid.
 
-        :param layer: Object to check
-        :returns: True if valid raster layer, False otherwise
+        Parameters
+        ----------
+        layer : Any
+            Candidate QGIS raster layer.
+
+        Returns
+        -------
+        bool
+            True if the layer exists and reports valid.
         """
-        return (
-            layer is not None and isinstance(layer, QgsRasterLayer) and layer.isValid()
-        )
+        return layer is not None and hasattr(layer, "isValid") and layer.isValid()
 
     @staticmethod
-    def is_valid_file_path(path: str, must_exist: bool = True) -> bool:
+    def is_valid_vector_layer(layer: Any) -> bool:
         """
-        Check that a file path is valid and optionally that it exists.
+        Check that a vector layer object exists and is valid.
 
-        :param path: File path string to check
-        :param must_exist: If True, also checks that the file exists on disk
-        :returns: True if valid, False otherwise
+        Parameters
+        ----------
+        layer : Any
+            Candidate QGIS vector layer.
+
+        Returns
+        -------
+        bool
+            True if the layer exists and reports valid.
         """
-        from pathlib import Path
-
-        if not path or not path.strip():
-            return False
-        if must_exist:
-            return Path(path).exists()
-        return True
-
-    @staticmethod
-    def is_valid_epsg(epsg_code: Any) -> bool:
-        """
-        Check that a value is a valid EPSG code (positive integer).
-
-        :param epsg_code: Value to check
-        :returns: True if valid EPSG code format, False otherwise
-        """
-        try:
-            code = int(epsg_code)
-            return 1024 <= code <= 32767 or 4000 <= code <= 5000
-        except (TypeError, ValueError):
-            return False
-
-    @staticmethod
-    def layer_has_features(layer: QgsVectorLayer) -> bool:
-        """
-        Check that a vector layer contains at least one feature.
-
-        :param layer: QgsVectorLayer to check
-        :returns: True if layer has features, False if empty
-        """
-        return ValidationUtils.is_valid_vector_layer(layer) and layer.featureCount() > 0
-
-    @staticmethod
-    def layer_has_field(layer: QgsVectorLayer, field_name: str) -> bool:
-        """
-        Check that a vector layer contains a specific field by name.
-
-        :param layer: QgsVectorLayer to inspect
-        :param field_name: Field name to look for
-        :returns: True if field exists, False otherwise
-        """
-        if not ValidationUtils.is_valid_vector_layer(layer):
-            return False
-        return layer.fields().indexFromName(field_name) != -1
+        return layer is not None and hasattr(layer, "isValid") and layer.isValid()

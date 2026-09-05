@@ -83,6 +83,8 @@ def confined_priority_flood_fill(
 
     Raises
     ------
+    TypeError
+        If typed inputs are of the wrong type.
     ValueError
         If the DEM or mask is invalid, the mask is empty, the spill
         elevation is not finite, or connectivity is unsupported.
@@ -97,7 +99,6 @@ def confined_priority_flood_fill(
     result = dem.astype(np.float64, copy=True)
 
     valid_mask = np.isfinite(dem) & (dem != nodata)
-
     eligible_mask = depression_mask & valid_mask
 
     if not np.any(eligible_mask):
@@ -105,8 +106,6 @@ def confined_priority_flood_fill(
 
     original_values = dem[eligible_mask].astype(np.float64)
 
-    # Filling may raise cells to the spill elevation, but never lowers
-    # terrain and never changes cells above the spill elevation.
     filled_values = np.maximum(
         original_values,
         float(spill_elevation),
@@ -132,8 +131,8 @@ def confined_priority_flood_fill(
         "total_elevation_change": (
             float(np.sum(valid_changes)) if valid_changes.size else 0.0
         ),
-        "maximum_change": float(np.max(valid_changes)) if valid_changes.size else 0.0,
-        "minimum_change": float(np.min(changes)) if changes.size else 0.0,
+        "maximum_change": (float(np.max(valid_changes)) if valid_changes.size else 0.0),
+        "minimum_change": (float(np.min(changes)) if changes.size else 0.0),
         "modified_cell_coordinates": [
             {
                 "row": int(row),
@@ -161,20 +160,32 @@ def _validate_inputs(
     """
     Validate confined-fill inputs.
 
-    :param dem: DEM array.
-    :param depression_mask: Boolean depression footprint.
-    :param spill_elevation: Target spill elevation.
-    :param connectivity: Connectivity convention.
-    :raises ValueError: If any input is invalid.
+    Parameters
+    ----------
+    dem : np.ndarray
+        DEM array.
+    depression_mask : np.ndarray
+        Boolean depression footprint.
+    spill_elevation : float
+        Target spill elevation.
+    connectivity : int
+        Connectivity convention.
+
+    Raises
+    ------
+    TypeError
+        If typed inputs are of the wrong type.
+    ValueError
+        If any input is invalid.
     """
     if not isinstance(dem, np.ndarray):
-        raise ValueError("dem must be a NumPy array.")
+        raise TypeError("dem must be a NumPy array.")
 
     if dem.ndim != 2:
         raise ValueError("dem must be a two-dimensional array.")
 
     if not isinstance(depression_mask, np.ndarray):
-        raise ValueError("depression_mask must be a NumPy array.")
+        raise TypeError("depression_mask must be a NumPy array.")
 
     if depression_mask.ndim != 2:
         raise ValueError("depression_mask must be a two-dimensional array.")

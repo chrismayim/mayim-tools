@@ -1,26 +1,22 @@
 """
-Mayim Tools – File IO Utilities
-Helpers for reading and writing common geospatial and data file formats.
+Mayim Tools - File I/O utilities.
 """
+
+from __future__ import annotations
 
 import csv
 import json
-from pathlib import Path
-
-from qgis.core import (
-    QgsCoordinateTransformContext,
-    QgsVectorFileWriter,
-    QgsVectorLayer,
-)
+from typing import Any, ClassVar
 
 from mayim_tools.core.logger import MayimLogger
 
 
 class FileIO:
-    """Static utility class for file input/output operations."""
+    """
+    Shared file read/write helpers.
+    """
 
-    # ── Supported vector formats ──
-    FORMATS = {
+    FORMATS: ClassVar[dict[str, str]] = {
         "gpkg": "GPKG",
         "shp": "ESRI Shapefile",
         "geojson": "GeoJSON",
@@ -28,90 +24,74 @@ class FileIO:
     }
 
     @staticmethod
-    def read_json(file_path: str) -> dict | None:
+    def read_json(path: str) -> dict[str, Any] | list[Any] | None:
         """
-        Read a JSON file and return its contents as a dictionary.
+        Read a JSON file.
 
-        :param file_path: Full path to the JSON file
-        :returns: Parsed dictionary or None on failure
+        Parameters
+        ----------
+        path : str
+            Path to the JSON file.
+
+        Returns
+        -------
+        dict[str, Any] | list[Any] | None
+            Parsed JSON object, or None on failure.
         """
-        path = Path(file_path)
-        if not path.exists():
-            MayimLogger.warning(f"File not found: {file_path}")
-            return None
         try:
-            with open(path, encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            MayimLogger.critical(f"Failed to read JSON: {e}")
+            with open(path, encoding="utf-8") as file:
+                return json.load(file)
+        except Exception as error:  # noqa: BLE001
+            MayimLogger.critical(f"Failed to read JSON: {error}")
             return None
 
     @staticmethod
-    def write_json(file_path: str, data: dict) -> bool:
-        """
-        Write a dictionary to a JSON file.
-
-        :param file_path: Full path to write to
-        :param data: Dictionary to serialise
-        :returns: True on success, False on failure
-        """
-        try:
-            with open(file_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=4)
-            return True
-        except Exception as e:
-            MayimLogger.critical(f"Failed to write JSON: {e}")
-            return False
-
-    @staticmethod
-    def read_csv(file_path: str) -> list[dict] | None:
-        """
-        Read a CSV file and return rows as a list of dictionaries.
-
-        :param file_path: Full path to the CSV file
-        :returns: List of row dictionaries or None on failure
-        """
-        path = Path(file_path)
-        if not path.exists():
-            MayimLogger.warning(f"File not found: {file_path}")
-            return None
-        try:
-            with open(path, encoding="utf-8") as f:
-                reader = csv.DictReader(f)
-                return list(reader)
-        except Exception as e:
-            MayimLogger.critical(f"Failed to read CSV: {e}")
-            return None
-
-    @staticmethod
-    def save_vector_layer(
-        layer: QgsVectorLayer,
-        output_path: str,
-        format_ext: str = "gpkg",
+    def write_json(
+        path: str,
+        data: dict[str, Any] | list[Any],
     ) -> bool:
         """
-        Save a vector layer to disk in the specified format.
+        Write a JSON file.
 
-        :param layer: QgsVectorLayer to save
-        :param output_path: Full output file path
-        :param format_ext: File format extension (gpkg, shp, geojson)
-        :returns: True on success, False on failure
+        Parameters
+        ----------
+        path : str
+            Output path.
+        data : dict[str, Any] | list[Any]
+            JSON-serialisable object.
+
+        Returns
+        -------
+        bool
+            True on success, False on failure.
         """
-        driver = FileIO.FORMATS.get(format_ext.lower(), "GPKG")
-        options = QgsVectorFileWriter.SaveVectorOptions()
-        options.driverName = driver
-        options.fileEncoding = "UTF-8"
-
-        error, msg, _, _ = QgsVectorFileWriter.writeAsVectorFormatV3(
-            layer,
-            output_path,
-            QgsCoordinateTransformContext(),
-            options,
-        )
-
-        if error == QgsVectorFileWriter.NoError:
-            MayimLogger.success(f"Layer saved to: {output_path}")
+        try:
+            with open(path, "w", encoding="utf-8") as file:
+                json.dump(data, file, indent=4)
             return True
-        else:
-            MayimLogger.critical(f"Failed to save layer: {msg}")
+        except Exception as error:  # noqa: BLE001
+            MayimLogger.critical(f"Failed to write JSON: {error}")
             return False
+
+    @staticmethod
+    def read_csv(path: str) -> list[dict[str, str]] | None:
+        """
+        Read a CSV file as a list of dictionaries.
+
+        Parameters
+        ----------
+        path : str
+            Path to the CSV file.
+
+        Returns
+        -------
+        list[dict[str, str]] | None
+            CSV rows as dictionaries, or None on failure.
+        """
+        try:
+            with open(path, encoding="utf-8", newline="") as file:
+                reader = csv.DictReader(file)
+                return list(reader)
+        except Exception as error:  # noqa: BLE001
+            MayimLogger.critical(f"Failed to read CSV: {error}")
+            return None

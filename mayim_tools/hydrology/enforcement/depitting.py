@@ -73,6 +73,9 @@ def depit_single_cell(
 
     Raises
     ------
+    TypeError
+        If the DEM is not a NumPy array or the coordinate values are not
+        integers.
     ValueError
         If the DEM is not two-dimensional, the pit coordinate is
         invalid, the pit is NoData, or no valid neighbours exist.
@@ -131,11 +134,20 @@ def _validate_dem(dem: np.ndarray) -> None:
     """
     Validate the DEM array.
 
-    :param dem: DEM array.
-    :raises ValueError: If the DEM is not two-dimensional.
+    Parameters
+    ----------
+    dem : np.ndarray
+        DEM array.
+
+    Raises
+    ------
+    TypeError
+        If the DEM is not a NumPy array.
+    ValueError
+        If the DEM is not two-dimensional.
     """
     if not isinstance(dem, np.ndarray):
-        raise ValueError("dem must be a NumPy array.")
+        raise TypeError("dem must be a NumPy array.")
 
     if dem.ndim != 2:
         raise ValueError("dem must be a two-dimensional array.")
@@ -148,10 +160,24 @@ def _validate_pit_coordinate(
     """
     Validate and normalise a pit coordinate.
 
-    :param dem: DEM array.
-    :param pit: Row and column coordinate.
-    :returns: Integer row and column.
-    :raises ValueError: If the coordinate is invalid or outside the DEM.
+    Parameters
+    ----------
+    dem : np.ndarray
+        DEM array.
+    pit : tuple[int, int]
+        Row and column coordinate.
+
+    Returns
+    -------
+    tuple[int, int]
+        Integer row and column.
+
+    Raises
+    ------
+    ValueError
+        If the coordinate is invalid or outside the DEM.
+    TypeError
+        If the coordinate values are not integers.
     """
     if not isinstance(pit, tuple) or len(pit) != 2:
         raise ValueError("pit must be a (row, column) tuple.")
@@ -162,7 +188,7 @@ def _validate_pit_coordinate(
         col,
         (int, np.integer),
     ):
-        raise ValueError("Pit coordinates must be integers.")
+        raise TypeError("Pit coordinates must be integers.")
 
     row = int(row)
     col = int(col)
