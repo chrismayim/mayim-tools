@@ -1,0 +1,22 @@
+line-length = 88
+target-version = "py312"
+
+[lint]
+select = [
+    "E",
+    "W",
+    "F",
+    "I",
+    "N",
+    "B",
+    "A",
+    "UP",
+]
+
+ignore = [
+    "N802",
+    "N806",
+]
+
+[lint.per-file-ignores]
+"mayim_tools/tests/*" = ["F401", "F811"]

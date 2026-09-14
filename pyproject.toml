@@ -1,0 +1,9 @@
+[tool.black]
+line-length = 88
+target-version = ["py312"]
+include = '\.pyi?$'
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["mayim_tools/tests"]
+addopts = "-ra"

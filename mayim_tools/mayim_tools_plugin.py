@@ -1,45 +1,57 @@
-# -*- coding: utf-8 -*-
 """
-Mayim Tools - Processing Provider
-===================================
+Mayim Tools - Main Plugin Class
+=================================
 
-Registers the Mayim Tools group inside the QGIS Processing Toolbox.
-No algorithms are registered yet. Tool categories are added back
-deliberately during the rebuild.
+Minimal QGIS plugin entry point. This clean rebuild starts with no
+registered Processing algorithms. Tool categories are added back
+deliberately, one at a time, as they are redesigned.
 """
 
 from __future__ import annotations
 
-from qgis.core import QgsProcessingProvider
-from qgis.PyQt.QtGui import QIcon
+from qgis.core import QgsApplication
 
 
-class MayimToolsProvider(QgsProcessingProvider):
+class MayimToolsPlugin:
     """
-    Mayim Tools Processing provider.
+    Main Mayim Tools plugin class.
 
-    Currently registers zero algorithms. This is intentional: the
-    plugin is being rebuilt from a clean, empty state, and tool
-    categories will be added back one at a time.
+    QGIS instantiates this class through ``classFactory`` and calls
+    ``initGui`` when the plugin is loaded, and ``unload`` when it is
+    unloaded.
     """
 
-    def id(self) -> str:  # noqa: A003 - QGIS API requires this name.
-        """Return the unique provider ID used in algorithm IDs."""
-        return "mayimtools"
-
-    def name(self) -> str:
-        """Return the provider's display name in the Processing Toolbox."""
-        return "Mayim Tools"
-
-    def icon(self) -> QIcon:
-        """Return the provider icon, or a blank icon if unavailable."""
-        return QIcon()
-
-    def loadAlgorithms(self) -> None:  # noqa: N802 - QGIS API requires this name.
+    def __init__(self, iface) -> None:
         """
-        Register algorithms with the provider.
+        Store the QGIS interface for later use.
 
-        Intentionally empty. Algorithms are added back deliberately
-        during the rebuild.
+        Parameters
+        ----------
+        iface:
+            QGIS application interface.
         """
-        return
+        self.iface = iface
+        self.provider = None
+
+    def initGui(self) -> None:  # noqa: N802 - QGIS requires this exact name.
+        """
+        Called by QGIS once the plugin is loaded.
+
+        Registers the Mayim Tools Processing provider. The provider
+        currently registers no algorithms; tool categories are added
+        back deliberately during the rebuild.
+        """
+        from mayim_tools.processing.provider import MayimToolsProvider
+
+        self.provider = MayimToolsProvider()
+        QgsApplication.processingRegistry().addProvider(self.provider)
+
+    def unload(self) -> None:
+        """
+        Called by QGIS when the plugin is unloaded.
+
+        Unregisters the Mayim Tools Processing provider.
+        """
+        if self.provider is not None:
+            QgsApplication.processingRegistry().removeProvider(self.provider)
+            self.provider = None
