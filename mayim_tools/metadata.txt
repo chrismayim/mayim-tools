@@ -1,0 +1,19 @@
+[general]
+name=Mayim Tools
+qgisMinimumVersion=4.0
+description=Mayim Tools - hydrology, rainfall and data processing tools for QGIS.
+version=0.1.0
+author=Mayim Consulting
+email=chris@mayimconsulting.co.za
+
+about=Mayim Tools is a QGIS Processing plugin developed by Mayim Consulting. This is a clean rebuild of the plugin, starting from an empty toolset.
+
+tracker=https://github.com/chrismayim/mayim-tools/issues
+repository=https://github.com/chrismayim/mayim-tools
+homepage=https://github.com/chrismayim/mayim-tools
+
+category=Analysis
+icon=icons/mayim_logo.png
+
+experimental=True
+deprecated=False
