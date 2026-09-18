@@ -1,44 +1,64 @@
-"""
+﻿"""
 Mayim Tools - Processing Provider
-===================================
+=================================
 
-Registers the Mayim Tools group inside the QGIS Processing Toolbox.
-No algorithms are registered yet. Tool categories are added back
-deliberately during the rebuild.
+Registers Mayim Tools algorithms in the QGIS Processing Toolbox.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from qgis.core import QgsProcessingProvider
 from qgis.PyQt.QtGui import QIcon
 
+from mayim_tools.data.grib_to_csv.grib_to_csv_algorithm import GribToCsvAlgorithm
+from mayim_tools.rainfall.chirps.chirps_extract_algorithm import ChirpsExtractAlgorithm
+from mayim_tools.rainfall.cmorph_extract.cmorph_extract_algorithm import (
+    CmorphExtractAlgorithm,
+)
+from mayim_tools.rainfall.ddf_to_hyetographs.ddf_to_hyetographs_algorithm import (
+    DdfToHyetographsAlgorithm,
+)
+from mayim_tools.rainfall.design_rainfall.design_rainfall_algorithm import (
+    DesignRainfallPointAlgorithm,
+)
+from mayim_tools.rainfall.frequency_analysis.rainfall_frequency_algorithm import (
+    RainfallFrequencyAlgorithm,
+)
+from mayim_tools.rainfall.huff_curves.huff_curves_algorithm import HuffCurvesAlgorithm
+from mayim_tools.rainfall.imerg_extract.imerg_extract_algorithm import (
+    ImergExtractAlgorithm,
+)
+from mayim_tools.rainfall.merra2_extract.merra2_extract_algorithm import (
+    Merra2ExtractAlgorithm,
+)
+
 
 class MayimToolsProvider(QgsProcessingProvider):
-    """
-    Mayim Tools Processing provider.
+    """Mayim Tools Processing provider."""
 
-    Currently registers zero algorithms. This is intentional: the
-    plugin is being rebuilt from a clean, empty state, and tool
-    categories will be added back one at a time.
-    """
-
-    def id(self) -> str:  # noqa: A003 - QGIS API requires this name.
-        """Return the unique provider ID used in algorithm IDs."""
+    def id(self) -> str:  # noqa: A003 - required by the QGIS API.
+        """Return the unique provider ID."""
         return "mayimtools"
 
     def name(self) -> str:
-        """Return the provider's display name in the Processing Toolbox."""
+        """Return the provider display name."""
         return "Mayim Tools"
 
     def icon(self) -> QIcon:
-        """Return the provider icon, or a blank icon if unavailable."""
-        return QIcon()
+        """Return the provider icon."""
+        logo = Path(__file__).resolve().parents[1] / "icons" / "mayim_logo.png"
+        return QIcon(str(logo))
 
-    def loadAlgorithms(self) -> None:  # noqa: N802 - QGIS API requires this name.
-        """
-        Register algorithms with the provider.
-
-        Intentionally empty. Algorithms are added back deliberately
-        during the rebuild.
-        """
-        return
+    def loadAlgorithms(self) -> None:  # noqa: N802 - required by QGIS.
+        """Register Mayim Tools algorithms."""
+        self.addAlgorithm(DesignRainfallPointAlgorithm())
+        self.addAlgorithm(ChirpsExtractAlgorithm())
+        self.addAlgorithm(CmorphExtractAlgorithm())
+        self.addAlgorithm(ImergExtractAlgorithm())
+        self.addAlgorithm(Merra2ExtractAlgorithm())
+        self.addAlgorithm(RainfallFrequencyAlgorithm())
+        self.addAlgorithm(HuffCurvesAlgorithm())
+        self.addAlgorithm(GribToCsvAlgorithm())
+        self.addAlgorithm(DdfToHyetographsAlgorithm())

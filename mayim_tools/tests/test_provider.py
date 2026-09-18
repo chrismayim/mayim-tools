@@ -1,4 +1,4 @@
-"""
+﻿"""
 Tests for the Mayim Tools Processing provider.
 
 These tests require the qgis package. When run outside the QGIS Python
@@ -12,26 +12,97 @@ import pytest
 pytest.importorskip("qgis")
 
 
-def test_provider_id() -> None:
-    """The provider ID must be the fixed, lowercase identifier."""
-    from mayim_tools.processing.provider import MayimToolsProvider
-
-    provider = MayimToolsProvider()
-    assert provider.id() == "mayimtools"
-
-
-def test_provider_name() -> None:
-    """The provider display name must be human readable."""
-    from mayim_tools.processing.provider import MayimToolsProvider
-
-    provider = MayimToolsProvider()
-    assert provider.name() == "Mayim Tools"
-
-
-def test_provider_has_no_algorithms_yet() -> None:
-    """The clean-rebuild provider intentionally registers zero algorithms."""
+def loaded_provider():
+    """Create a provider with all Mayim Tools algorithms loaded."""
     from mayim_tools.processing.provider import MayimToolsProvider
 
     provider = MayimToolsProvider()
     provider.loadAlgorithms()
-    assert provider.algorithms() == []
+    return provider
+
+
+def test_provider_id() -> None:
+    provider = loaded_provider()
+
+    assert provider.id() == "mayimtools"
+
+
+def test_provider_name() -> None:
+    provider = loaded_provider()
+
+    assert provider.name() == "Mayim Tools"
+
+
+def test_provider_registers_seven_algorithms() -> None:
+    provider = loaded_provider()
+
+    algorithms = provider.algorithms()
+    assert len(algorithms) == 9
+
+    by_name = {algorithm.name(): algorithm for algorithm in algorithms}
+
+    assert set(by_name) == {
+        "design_rainfall_point",
+        "chirps_point_extract",
+        "rainfall_frequency_stage1",
+        "huff_curves",
+        "grib_to_csv",
+        "ddf_to_hyetographs",
+        "imerg_point_extract",
+        "merra2_point_extract",
+        "cmorph_point_extract",
+    }
+
+    expected = {
+        "design_rainfall_point": (
+            "Design Rainfall Estimation (South Africa)",
+            "Rainfall Tools",
+            "rainfall_tools",
+        ),
+        "chirps_point_extract": (
+            "Extract: CHIRPS precipitation",
+            "Rainfall Tools",
+            "rainfall_tools",
+        ),
+        "rainfall_frequency_stage1": (
+            "Precipitation data to DDF",
+            "Rainfall Tools",
+            "rainfall_tools",
+        ),
+        "huff_curves": (
+            "Precipitation data to Huff Curves",
+            "Rainfall Tools",
+            "rainfall_tools",
+        ),
+        "grib_to_csv": (
+            "GRIB to CSV",
+            "Data Tools",
+            "data_tools",
+        ),
+        "ddf_to_hyetographs": (
+            "DDF to Alternating Block Design Hyetographs",
+            "Rainfall Tools",
+            "rainfall_tools",
+        ),
+        "imerg_point_extract": (
+            "Extract: IMERG precipitation",
+            "Rainfall Tools",
+            "rainfall_tools",
+        ),
+        "merra2_point_extract": (
+            "Extract: MERRA2 precipitation",
+            "Rainfall Tools",
+            "rainfall_tools",
+        ),
+        "cmorph_point_extract": (
+            "Extract: CMORPH precipitation",
+            "Rainfall Tools",
+            "rainfall_tools",
+        ),
+    }
+
+    for name, (display_name, group, group_id) in expected.items():
+        algorithm = by_name[name]
+        assert algorithm.displayName() == display_name
+        assert algorithm.group() == group
+        assert algorithm.groupId() == group_id

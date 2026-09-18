@@ -6,7 +6,7 @@ version=0.1.0
 author=Mayim Consulting
 email=chris@mayimconsulting.co.za
 
-about=Mayim Tools is a QGIS Processing plugin developed by Mayim Consulting. This is a clean rebuild of the plugin, starting from an empty toolset.
+about=Mayim Tools is a QGIS Processing plugin developed by Mayim Consulting, providing a suite of hydrology, rainfall and data processing tools. Rainfall Tools group: Design Rainfall Estimation (South Africa); point extraction of CHIRPS, IMERG, MERRA-2 and CMORPH precipitation records; Precipitation data to DDF (rainfall frequency analysis); Precipitation data to Huff Curves; and DDF to Alternating Block Design Hyetographs. Data Tools group: GRIB to CSV conversion.
 
 tracker=https://github.com/chrismayim/mayim-tools/issues
 repository=https://github.com/chrismayim/mayim-tools

@@ -19,4 +19,12 @@ ignore = [
 ]
 
 [lint.per-file-ignores]
+"mayim_tools/rainfall/imerg_extract/**/*.py" = ["E501"]
+"mayim_tools/tests/test_imerg_extract_core.py" = ["B011", "E501"]
+"mayim_tools/rainfall/ddf_to_hyetographs/**/*.py" = ["E501"]
+"mayim_tools/tests/test_ddf_to_hyetographs_core.py" = ["B007", "B011", "B905", "E501", "F841"]
+"mayim_tools/rainfall/huff_curves/**/*.py" = ["E501", "UP037", "B905", "F841"]
+"mayim_tools/tests/test_huffrain.py" = ["B011", "E501"]
+"mayim_tools/rainfall/frequency_analysis/**/*.py" = ["E501", "N803"]
+"mayim_tools/tests/test_frequency_analysis_core.py" = ["B011", "B905", "E501", "E741", "F841"]
 "mayim_tools/tests/*" = ["F401", "F811"]
