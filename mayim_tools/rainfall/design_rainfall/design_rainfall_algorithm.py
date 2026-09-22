@@ -34,6 +34,7 @@ from qgis.core import (
     QgsProcessingContext,
     QgsProcessingException,
     QgsProcessingFeedback,
+    QgsProcessingLayerPostProcessorInterface,
     QgsProcessingParameterEnum,
     QgsProcessingParameterFeatureSink,
     QgsProcessingParameterFeatureSource,
@@ -50,6 +51,22 @@ from .core import DAILY_DURATIONS, RETURN_PERIODS, SHORT_DURATIONS, DesignRainfa
 from .report import write_csv, write_csv_multi, write_docx, write_docx_multi
 
 WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
+
+STYLES_DIR = Path(__file__).resolve().parent / "styles"
+
+
+class _StylePostProcessor(QgsProcessingLayerPostProcessorInterface):
+    """Loads a saved QML style (symbology + labeling) onto an
+    output layer once Processing has finished loading it into the
+    project."""
+
+    def __init__(self, style_path: Path):
+        super().__init__()
+        self.style_path = str(style_path)
+
+    def postProcessLayer(self, layer, context, feedback):
+        layer.loadNamedStyle(self.style_path)
+        layer.triggerRepaint()
 
 
 def _qmetatype_for_dtype(dtype):
@@ -193,7 +210,7 @@ class DesignRainfallPointAlgorithm(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterFeatureSink(
                 self.OUTPUT_LAYER,
-                "Output point layer (results as attributes)",
+                "Snapped grid point",
                 optional=True,
                 type=QgsProcessing.SourceType.TypeVectorPoint,
             )
@@ -201,7 +218,7 @@ class DesignRainfallPointAlgorithm(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterFeatureSink(
                 self.OUTPUT_QUERY_POINTS,
-                "Output point layer (site location(s) only)",
+                "POI",
                 optional=True,
                 type=QgsProcessing.SourceType.TypeVectorPoint,
             )
@@ -220,7 +237,7 @@ class DesignRainfallPointAlgorithm(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterFeatureSink(
                 self.OUTPUT_STATIONS,
-                "Output point layer (nearest rainfall stations, reference)",
+                "Nearest rainfall stations",
                 optional=True,
                 type=QgsProcessing.SourceType.TypeVectorPoint,
             )
@@ -278,6 +295,7 @@ class DesignRainfallPointAlgorithm(QgsProcessingAlgorithm):
     def processAlgorithm(
         self, parameters, context: QgsProcessingContext, feedback: QgsProcessingFeedback
     ):
+        self._post_processors = []
         sites = self._collect_sites(parameters, context, feedback)
         feedback.pushInfo(f"{len(sites)} site(s) to process.")
 
@@ -374,10 +392,12 @@ class DesignRainfallPointAlgorithm(QgsProcessingAlgorithm):
         )
         if sink_result:
             outputs[self.OUTPUT_LAYER] = sink_result
+            self._register_style(context, sink_result, "snapped_grid_point.qml")
 
         query_points_result = self._write_query_points(parameters, context, sites)
         if query_points_result:
             outputs[self.OUTPUT_QUERY_POINTS] = query_points_result
+            self._register_style(context, query_points_result, "poi.qml")
 
         if num_stations > 0:
             stations_result = self._write_stations_layer(
@@ -385,8 +405,22 @@ class DesignRainfallPointAlgorithm(QgsProcessingAlgorithm):
             )
             if stations_result:
                 outputs[self.OUTPUT_STATIONS] = stations_result
+                self._register_style(context, stations_result, "nearest_stations.qml")
 
         return outputs
+
+    def _register_style(self, context, dest_id, style_filename):
+        """Attaches a saved QML style to an output layer via a
+        post-processor, so it loads already symbolised/labeled -
+        QGIS requires a Python-side reference to the post-processor
+        to be kept alive for the duration of the run, hence
+        self._post_processors."""
+        if not dest_id:
+            return
+        details = context.layerToLoadOnCompletionDetails(dest_id)
+        processor = _StylePostProcessor(STYLES_DIR / style_filename)
+        details.setPostProcessor(processor)
+        self._post_processors.append(processor)
 
     # ------------------------------------------------------------------
     def _write_query_points(self, parameters, context, sites):

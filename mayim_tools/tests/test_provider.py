@@ -37,7 +37,7 @@ def test_provider_registers_seven_algorithms() -> None:
     provider = loaded_provider()
 
     algorithms = provider.algorithms()
-    assert len(algorithms) == 9
+    assert len(algorithms) == 16
 
     by_name = {algorithm.name(): algorithm for algorithm in algorithms}
 
@@ -51,6 +51,13 @@ def test_provider_registers_seven_algorithms() -> None:
         "imerg_point_extract",
         "merra2_point_extract",
         "cmorph_point_extract",
+        "persiann_point_extract",
+        "d8_flow_direction",
+        "netcdf4_to_csv",
+        "netcdf4_list_variables",
+        "generate_design_storm_ensembles",
+        "d8_flow_accumulation",
+        "era5_point_extract",
     }
 
     expected = {
@@ -96,6 +103,41 @@ def test_provider_registers_seven_algorithms() -> None:
         ),
         "cmorph_point_extract": (
             "Extract: CMORPH precipitation",
+            "Rainfall Tools",
+            "rainfall_tools",
+        ),
+        "persiann_point_extract": (
+            "Extract: PERSIANN CDR precipitation",
+            "Rainfall Tools",
+            "rainfall_tools",
+        ),
+        "d8_flow_direction": (
+            "D8 Flow Direction (WBT)",
+            "Hydrological Tools",
+            "hydrological_tools",
+        ),
+        "netcdf4_to_csv": (
+            "NetCDF4 to CSV",
+            "Data Tools",
+            "data_tools",
+        ),
+        "netcdf4_list_variables": (
+            "List NetCDF4 Variables",
+            "Data Tools",
+            "data_tools",
+        ),
+        "generate_design_storm_ensembles": (
+            "Design Storm Ensembles",
+            "Rainfall Tools",
+            "rainfall_tools",
+        ),
+        "d8_flow_accumulation": (
+            "D8 Flow Accumulation (WBT)",
+            "Hydrological Tools",
+            "hydrological_tools",
+        ),
+        "era5_point_extract": (
+            "Extract: ERA5 precipitation",
             "Rainfall Tools",
             "rainfall_tools",
         ),
