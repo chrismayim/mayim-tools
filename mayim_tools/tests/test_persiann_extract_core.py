@@ -19,7 +19,9 @@ from mayim_tools.rainfall.persiann_extract.core import (
     CCS_GRID_ROWS,
     CCS_GRID_TOP_LAT,
     RECORD_START,
+    FetchResult,
     _build_session,
+    _to_signed_lon,
     build_ccs_url,
     build_year_list_url,
     fetch_one_ccs_file,
@@ -29,7 +31,9 @@ from mayim_tools.rainfall.persiann_extract.core import (
     fetch_year_listing,
     parse_azure_blob_list,
     read_ccs_file,
+    read_ccs_file_with_center,
     read_persiann_daily_file,
+    read_persiann_daily_file_with_center,
     three_hourly_range,
     to_0_360,
 )
@@ -57,6 +61,17 @@ def test_to_0_360_zero():
 def test_record_start_confirmed():
     assert RECORD_START == date(1983, 1, 1)
     print("test_record_start_confirmed: PASS")
+
+
+def test_to_signed_lon_converts_past_180():
+    assert abs(_to_signed_lon(358.2666) - (-1.7334)) < 1e-6
+    print("test_to_signed_lon_converts_past_180: PASS")
+
+
+def test_to_signed_lon_leaves_normal_range_unchanged():
+    assert _to_signed_lon(100.0) == 100.0
+    assert _to_signed_lon(0.0) == 0.0
+    print("test_to_signed_lon_leaves_normal_range_unchanged: PASS")
 
 
 # ----------------------------------------------------------------------
@@ -298,6 +313,64 @@ def test_fetch_persiann_daily_failure_warning_includes_attempted_url():
     print("test_fetch_persiann_daily_failure_warning_includes_attempted_url: PASS")
 
 
+def test_fetch_persiann_daily_reports_matched_coordinate():
+    """The fake fetch_fn stands in for fetch_one_daily_file, so it must
+    attach the same .attrs a real read_persiann_daily_file_with_center()
+    call would."""
+
+    def fake_listing(year, **kwargs):
+        return ({"20200101": "https://fake/20200101.nc"}, [])
+
+    def fake_fetch(url, lat, lon, d):
+        df = pd.DataFrame({"Date": [pd.Timestamp(d)], "PrecipitationMM": [1.0]})
+        df.attrs["matched_lat"] = 6.0
+        df.attrs["matched_lon"] = -1.75
+        return df
+
+    result = fetch_persiann_daily(
+        lat=6.0539,
+        lon=-1.7334,
+        start_date="2020-01-01",
+        end_date="2020-01-01",
+        fetch_fn=fake_fetch,
+        listing_fn=fake_listing,
+        max_workers=1,
+    )
+    assert isinstance(result, FetchResult)
+    assert any("matched to the nearest grid cell" in w for w in result.warnings)
+    assert result.requested_lat == 6.0539
+    assert result.requested_lon == -1.7334
+    assert result.matched_lat == 6.0
+    assert result.matched_lon == -1.75
+    assert result.distance_km is not None and result.distance_km > 0
+    print("test_fetch_persiann_daily_reports_matched_coordinate: PASS")
+
+
+def test_fetch_persiann_daily_without_matched_attrs_reports_nothing():
+    """Backward compatibility: a fake fetch_fn returning a plain
+    DataFrame with no .attrs (every OTHER test in this file) must leave
+    matched_lat/matched_lon as None and add no grid-match warning."""
+
+    def fake_listing(year, **kwargs):
+        return ({"20200101": "https://fake/20200101.nc"}, [])
+
+    def fake_fetch(url, lat, lon, d):
+        return pd.DataFrame({"Date": [pd.Timestamp(d)], "PrecipitationMM": [1.0]})
+
+    result = fetch_persiann_daily(
+        lat=0,
+        lon=0,
+        start_date="2020-01-01",
+        end_date="2020-01-01",
+        fetch_fn=fake_fetch,
+        listing_fn=fake_listing,
+        max_workers=1,
+    )
+    assert result.matched_lat is None
+    assert not any("matched to the nearest grid cell" in w for w in result.warnings)
+    print("test_fetch_persiann_daily_without_matched_attrs_reports_nothing: PASS")
+
+
 def test_fetch_persiann_daily_concurrent_speedup():
     def fake_listing(year, **kwargs):
         return (
@@ -394,6 +467,22 @@ def test_read_persiann_daily_file_falls_back_to_sole_data_var():
     value = read_persiann_daily_file(raw, lat=6.0, lon=-1.75)
     assert abs(value - 3.3) < 1e-4
     print("test_read_persiann_daily_file_falls_back_to_sole_data_var: PASS")
+
+
+def test_read_persiann_daily_file_with_center_returns_matched_coordinate():
+    """New: matched-grid-cell reporting, mirroring the treatment already
+    applied to era5_extract/chirps/cmorph_extract - confirms the
+    matched coordinate is the grid cell actually read (lat=6.0,
+    lon_360=358.25 -> signed lon -1.75), not just the requested point
+    echoed back."""
+    raw = _make_synthetic_daily_netcdf(4.2, lat=6.0, lon_360=358.25)
+    value, matched_lat, matched_lon = read_persiann_daily_file_with_center(
+        raw, lat=6.03, lon=-1.78
+    )  # off-grid, should snap to (6.0, 358.25 -> -1.75)
+    assert abs(value - 4.2) < 1e-4
+    assert abs(matched_lat - 6.0) < 1e-6
+    assert abs(matched_lon - (-1.75)) < 1e-6
+    print("test_read_persiann_daily_file_with_center_returns_matched_coordinate: PASS")
 
 
 def test_fetch_one_daily_file_uses_provided_session():
@@ -498,6 +587,22 @@ def test_read_ccs_file_correct_grid_indexing():
     value = read_ccs_file(raw, lat=lat, lon=lon)
     assert abs(value - 3.7) < 1e-4
     print("test_read_ccs_file_correct_grid_indexing: PASS")
+
+
+def test_read_ccs_file_with_center_returns_matched_coordinate():
+    lat, lon = 6.0539, -1.7334
+    lon_360 = to_0_360(lon)
+    expected_row = round((CCS_GRID_TOP_LAT - lat) / 0.04)
+    expected_col = round((lon_360 - CCS_GRID_LEFT_LON) / 0.04)
+    expected_matched_lat = CCS_GRID_TOP_LAT - expected_row * 0.04
+    expected_matched_lon = _to_signed_lon(CCS_GRID_LEFT_LON + expected_col * 0.04)
+
+    raw = _make_synthetic_ccs_file(3.7, expected_row, expected_col)
+    value, matched_lat, matched_lon = read_ccs_file_with_center(raw, lat=lat, lon=lon)
+    assert abs(value - 3.7) < 1e-4
+    assert abs(matched_lat - expected_matched_lat) < 1e-6
+    assert abs(matched_lon - expected_matched_lon) < 1e-6
+    print("test_read_ccs_file_with_center_returns_matched_coordinate: PASS")
 
 
 def test_read_ccs_file_wrong_size_raises_clear_error():
@@ -609,6 +714,52 @@ def test_fetch_persiann_3hourly_isolates_per_file_failures():
     assert len(result.dataframe) == 7  # 8 periods minus the one that always fails
     assert any("failed after" in w for w in result.warnings)
     print("test_fetch_persiann_3hourly_isolates_per_file_failures: PASS")
+
+
+def test_fetch_persiann_3hourly_reports_matched_coordinate():
+    def fake_fetch(url, lat, lon, dt):
+        df = pd.DataFrame({"Timestamp": [pd.Timestamp(dt)], "PrecipitationMM": [0.3]})
+        df.attrs["matched_lat"] = 6.0
+        df.attrs["matched_lon"] = -1.76
+        return df
+
+    result = fetch_persiann_3hourly(
+        lat=6.0539,
+        lon=-1.7334,
+        start_date="2020-01-01",
+        end_date="2020-01-01",
+        fetch_fn=fake_fetch,
+        max_workers=1,
+    )
+    assert any("matched to the nearest grid cell" in w for w in result.warnings)
+    assert result.matched_lat == 6.0
+    assert result.matched_lon == -1.76
+    assert result.distance_km is not None and result.distance_km > 0
+    print("test_fetch_persiann_3hourly_reports_matched_coordinate: PASS")
+
+
+def test_fetch_persiann_3hourly_reports_matched_coordinate_concurrent():
+    """Same as above but through the ThreadPoolExecutor path
+    (max_workers > 1) - confirms the matched-coordinate capture's
+    separate lock keeps this race-free too."""
+
+    def fake_fetch(url, lat, lon, dt):
+        df = pd.DataFrame({"Timestamp": [pd.Timestamp(dt)], "PrecipitationMM": [0.3]})
+        df.attrs["matched_lat"] = 6.0
+        df.attrs["matched_lon"] = -1.76
+        return df
+
+    result = fetch_persiann_3hourly(
+        lat=6.0539,
+        lon=-1.7334,
+        start_date="2020-01-01",
+        end_date="2020-01-03",
+        fetch_fn=fake_fetch,
+        max_workers=8,
+    )
+    assert result.matched_lat == 6.0
+    assert result.matched_lon == -1.76
+    print("test_fetch_persiann_3hourly_reports_matched_coordinate_concurrent: PASS")
 
 
 def test_fetch_persiann_3hourly_concurrent_speedup():

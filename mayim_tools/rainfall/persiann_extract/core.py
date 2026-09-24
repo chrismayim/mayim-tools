@@ -147,6 +147,33 @@ class FetchResult:
     dataframe: pd.DataFrame  # columns: Date/Timestamp, PrecipitationMM
     warnings: list
     product: str = ""
+    # matched-grid-cell reporting - see the *_with_center() readers below
+    requested_lat: float | None = None
+    requested_lon: float | None = None
+    matched_lat: float | None = None
+    matched_lon: float | None = None
+    distance_km: float | None = None
+
+
+def _approx_distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """A simple planar approximation - good enough for reporting how far a
+    requested point sits from the grid cell it was snapped to, not a
+    geodesic-precision distance. Duplicated per-tool rather than shared,
+    matching this suite's existing pattern of each plugin being
+    independently self-contained."""
+    import math
+
+    lat_km = (lat2 - lat1) * 111.0
+    lon_km = (lon2 - lon1) * 111.0 * math.cos(math.radians((lat1 + lat2) / 2))
+    return math.hypot(lat_km, lon_km)
+
+
+def _to_signed_lon(lon_360: float) -> float:
+    """Converts a 0-360 convention longitude back to the standard
+    -180/180 convention both PERSIANN products' own inputs use - so a
+    matched grid-cell coordinate is reported in the same convention the
+    caller's requested point was given in, not the internal 0-360 one."""
+    return lon_360 - 360.0 if lon_360 > 180.0 else lon_360
 
 
 def to_0_360(lon: float) -> float:
@@ -236,15 +263,19 @@ def fetch_year_listing(year: int, session=None, timeout: int = 60) -> tuple:
     return parse_azure_blob_list(resp.text)
 
 
-def read_persiann_daily_file(raw_bytes: bytes, lat: float, lon: float) -> float:
-    """Reads a single PERSIANN-CDR daily NetCDF file (downloaded from
-    Azure), extracts the nearest-gridpoint value. Variable name
-    'precipitation' confirmed directly from this dataset's own ERDDAP
-    metadata; other candidates included defensively in case this
-    per-file NetCDF's internal naming differs from the ERDDAP-exposed
-    name (never directly confirmed against an opened file, the same
-    honest gap this plugin already had for the 3-hourly product's
-    missing-value convention)."""
+def _read_persiann_daily_pixel(raw_bytes: bytes, lat: float, lon: float) -> tuple:
+    """Shared implementation for read_persiann_daily_file() and
+    read_persiann_daily_file_with_center() - reads a single PERSIANN-CDR
+    daily NetCDF file (downloaded from Azure), extracts the
+    nearest-gridpoint value AND the matched grid cell's own coordinate.
+    Variable name 'precipitation' confirmed directly from this dataset's
+    own ERDDAP metadata; other candidates included defensively in case
+    this per-file NetCDF's internal naming differs from the
+    ERDDAP-exposed name (never directly confirmed against an opened
+    file, the same honest gap this plugin already had for the 3-hourly
+    product's missing-value convention). Returns
+    (value, matched_lat, matched_lon) - matched_lon converted back to
+    the standard -180/180 convention, not the internal 0-360 one."""
     import tempfile
 
     import xarray as xr
@@ -282,10 +313,27 @@ def read_persiann_daily_file(raw_bytes: bytes, lat: float, lon: float) -> float:
                 **{lat_name: lat, lon_name: lon_360}, method="nearest"
             )
             value = float(np.asarray(da.values).squeeze())
+            matched_lat = float(da[lat_name].values)
+            matched_lon = _to_signed_lon(float(da[lon_name].values))
     finally:
         Path(tmp_path).unlink(missing_ok=True)
 
+    return value, matched_lat, matched_lon
+
+
+def read_persiann_daily_file(raw_bytes: bytes, lat: float, lon: float) -> float:
+    """Reads a single PERSIANN-CDR daily NetCDF file, extracts the
+    nearest-gridpoint value only - see _read_persiann_daily_pixel()."""
+    value, _matched_lat, _matched_lon = _read_persiann_daily_pixel(raw_bytes, lat, lon)
     return value
+
+
+def read_persiann_daily_file_with_center(
+    raw_bytes: bytes, lat: float, lon: float
+) -> tuple:
+    """Same as read_persiann_daily_file(), but also returns the matched
+    grid cell's own coordinate: (value, matched_lat, matched_lon)."""
+    return _read_persiann_daily_pixel(raw_bytes, lat, lon)
 
 
 def fetch_one_daily_file(
@@ -300,10 +348,15 @@ def fetch_one_daily_file(
     resp = getter(url, timeout=timeout)
     resp.raise_for_status()
 
-    value = read_persiann_daily_file(resp.content, lat=lat, lon=lon)
-    return pd.DataFrame(
+    value, matched_lat, matched_lon = read_persiann_daily_file_with_center(
+        resp.content, lat=lat, lon=lon
+    )
+    out = pd.DataFrame(
         {"Date": [pd.Timestamp(fallback_date)], "PrecipitationMM": [value]}
     )
+    out.attrs["matched_lat"] = matched_lat
+    out.attrs["matched_lon"] = matched_lon
+    return out
 
 
 def fetch_persiann_daily(
@@ -371,6 +424,8 @@ def fetch_persiann_daily(
     frames = []
     completed = 0
     completed_lock = threading.Lock()
+    matched_lock = threading.Lock()
+    matched = {"lat": None, "lon": None}
 
     def _fetch_one(d):
         url = date_to_url[d.strftime("%Y%m%d")]
@@ -387,11 +442,26 @@ def fetch_persiann_daily(
             f"({url}): {last_error}"
         ]
 
+    def _maybe_capture_matched(df):
+        # captures the matched grid-cell coordinate exactly once - only
+        # real fetch_one_daily_file() results carry these attrs; a fake
+        # fetch_fn without them (the existing test suite) simply never
+        # populates this, leaving matched_lat/matched_lon as None.
+        m_lat = df.attrs.get("matched_lat")
+        m_lon = df.attrs.get("matched_lon")
+        if m_lat is None:
+            return
+        with matched_lock:
+            if matched["lat"] is None:
+                matched["lat"] = m_lat
+                matched["lon"] = m_lon
+
     if max_workers <= 1:
         results = [_fetch_one(d) for d in dates_to_fetch]
         for df, w in results:
             if df is not None:
                 frames.append(df)
+                _maybe_capture_matched(df)
             warnings.extend(w)
             completed += 1
             if progress_callback:
@@ -403,6 +473,7 @@ def fetch_persiann_daily(
                 df, w = future.result()
                 if df is not None:
                     frames.append(df)
+                    _maybe_capture_matched(df)
                 warnings.extend(w)
                 with completed_lock:
                     completed += 1
@@ -437,8 +508,25 @@ def fetch_persiann_daily(
             f"not zero or dropped."
         )
 
+    matched_lat, matched_lon = matched["lat"], matched["lon"]
+    distance_km = None
+    if matched_lat is not None:
+        distance_km = _approx_distance_km(lat, lon, matched_lat, matched_lon)
+        grid_warning = (
+            f"Requested point ({lat}, {lon}) was matched to the nearest grid cell "
+            f"({matched_lat}, {matched_lon}), approximately {distance_km:.2f} km away."
+        )
+        warnings.insert(0, grid_warning)
+
     return FetchResult(
-        dataframe=combined, warnings=warnings, product="persiann_cdr_daily"
+        dataframe=combined,
+        warnings=warnings,
+        product="persiann_cdr_daily",
+        requested_lat=lat,
+        requested_lon=lon,
+        matched_lat=matched_lat,
+        matched_lon=matched_lon,
+        distance_km=distance_km,
     )
 
 
@@ -471,14 +559,18 @@ def three_hourly_range(start: date, end: date) -> list:
     return periods
 
 
-def read_ccs_file(raw_bytes: bytes, lat: float, lon: float) -> float:
-    """Decompresses and reads a single value from a PERSIANN-CCS-CDR
-    flat binary file - grid layout confirmed directly from CHRS's own
-    PCCSCDR_readme.txt: 3000 rows x 9000 cols, 0.04 deg resolution,
+def _read_ccs_pixel(raw_bytes: bytes, lat: float, lon: float) -> tuple:
+    """Shared implementation for read_ccs_file() and
+    read_ccs_file_with_center() - decompresses and reads a single value
+    from a PERSIANN-CCS-CDR flat binary file, plus the matched grid
+    cell's own coordinate. Grid layout confirmed directly from CHRS's
+    own PCCSCDR_readme.txt: 3000 rows x 9000 cols, 0.04 deg resolution,
     row-major, first row centred at 59.98N, first column centred at
-    0.02E (0-360 convention). No file header/metadata - the exact
-    byte offset for any point is computed directly from this
-    documented layout, not read from the file itself."""
+    0.02E (0-360 convention). No file header/metadata - the exact byte
+    offset for any point, and the matched cell's own centre coordinate,
+    are both computed directly from this documented layout, not read
+    from the file itself. Returns (value, matched_lat, matched_lon) -
+    matched_lon converted back to the standard -180/180 convention."""
     import numpy as np
 
     decompressed = gzip.decompress(raw_bytes)
@@ -502,7 +594,23 @@ def read_ccs_file(raw_bytes: bytes, lat: float, lon: float) -> float:
     row = min(max(row, 0), CCS_GRID_ROWS - 1)
     col = min(max(col, 0), CCS_GRID_COLS - 1)
 
-    return float(grid[row, col])
+    value = float(grid[row, col])
+    matched_lat = CCS_GRID_TOP_LAT - row * CCS_GRID_RES_DEG
+    matched_lon = _to_signed_lon(CCS_GRID_LEFT_LON + col * CCS_GRID_RES_DEG)
+    return value, matched_lat, matched_lon
+
+
+def read_ccs_file(raw_bytes: bytes, lat: float, lon: float) -> float:
+    """Reads a single value from a PERSIANN-CCS-CDR flat binary file -
+    see _read_ccs_pixel()."""
+    value, _matched_lat, _matched_lon = _read_ccs_pixel(raw_bytes, lat, lon)
+    return value
+
+
+def read_ccs_file_with_center(raw_bytes: bytes, lat: float, lon: float) -> tuple:
+    """Same as read_ccs_file(), but also returns the matched grid
+    cell's own coordinate: (value, matched_lat, matched_lon)."""
+    return _read_ccs_pixel(raw_bytes, lat, lon)
 
 
 MISSING_VALUE_CANDIDATES = (
@@ -531,13 +639,18 @@ def fetch_one_ccs_file(
     resp = getter(url, timeout=timeout)
     resp.raise_for_status()
 
-    value = read_ccs_file(resp.content, lat=lat, lon=lon)
+    value, matched_lat, matched_lon = read_ccs_file_with_center(
+        resp.content, lat=lat, lon=lon
+    )
     if value in MISSING_VALUE_CANDIDATES:
         value = float("nan")
 
-    return pd.DataFrame(
+    out = pd.DataFrame(
         {"Timestamp": [pd.Timestamp(fallback_timestamp)], "PrecipitationMM": [value]}
     )
+    out.attrs["matched_lat"] = matched_lat
+    out.attrs["matched_lon"] = matched_lon
+    return out
 
 
 def fetch_persiann_3hourly(
@@ -565,6 +678,8 @@ def fetch_persiann_3hourly(
     frames = []
     completed = 0
     completed_lock = threading.Lock()
+    matched_lock = threading.Lock()
+    matched = {"lat": None, "lon": None}
 
     if fetch_fn is fetch_one_ccs_file:
         session = _build_session(pool_size=max(max_workers, 1))
@@ -585,11 +700,22 @@ def fetch_persiann_3hourly(
             f"({url}): {last_error}"
         ]
 
+    def _maybe_capture_matched(df):
+        m_lat = df.attrs.get("matched_lat")
+        m_lon = df.attrs.get("matched_lon")
+        if m_lat is None:
+            return
+        with matched_lock:
+            if matched["lat"] is None:
+                matched["lat"] = m_lat
+                matched["lon"] = m_lon
+
     if max_workers <= 1:
         results = [_fetch_one(dt) for dt in periods]
         for df, w in results:
             if df is not None:
                 frames.append(df)
+                _maybe_capture_matched(df)
             warnings.extend(w)
             completed += 1
             if progress_callback:
@@ -601,6 +727,7 @@ def fetch_persiann_3hourly(
                 df, w = future.result()
                 if df is not None:
                     frames.append(df)
+                    _maybe_capture_matched(df)
                 warnings.extend(w)
                 with completed_lock:
                     completed += 1
@@ -636,8 +763,25 @@ def fetch_persiann_3hourly(
             f"- written as an empty cell."
         )
 
+    matched_lat, matched_lon = matched["lat"], matched["lon"]
+    distance_km = None
+    if matched_lat is not None:
+        distance_km = _approx_distance_km(lat, lon, matched_lat, matched_lon)
+        grid_warning = (
+            f"Requested point ({lat}, {lon}) was matched to the nearest grid cell "
+            f"({matched_lat}, {matched_lon}), approximately {distance_km:.2f} km away."
+        )
+        warnings.insert(0, grid_warning)
+
     return FetchResult(
-        dataframe=combined, warnings=warnings, product="persiann_ccs_cdr_3hourly"
+        dataframe=combined,
+        warnings=warnings,
+        product="persiann_ccs_cdr_3hourly",
+        requested_lat=lat,
+        requested_lon=lon,
+        matched_lat=matched_lat,
+        matched_lon=matched_lon,
+        distance_km=distance_km,
     )
 
 

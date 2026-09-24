@@ -205,6 +205,26 @@ def test_read_hour_file_nearest_neighbour():
     print("test_read_hour_file_nearest_neighbour: PASS")
 
 
+def test_read_hour_file_attaches_matched_coordinate_to_attrs():
+    """New: matched-grid-cell reporting, mirroring the treatment already
+    applied to era5_extract/chirps - the coordinate actually used
+    (after nearest-neighbour snapping) is captured via the returned
+    DataFrame's .attrs, so fetch_cmorph_timeseries can report it without
+    a second lookup."""
+    import tempfile
+
+    ds = _make_synthetic_cmorph_dataset(n_time=1)
+    tmp_path = Path(tempfile.mkdtemp()) / "test.nc"
+    ds.to_netcdf(tmp_path)
+
+    df = read_hour_file(
+        tmp_path, lat=0.03, lon=-0.02
+    )  # off-grid, should snap to (0.0, 0.0)
+    assert df.attrs["matched_lat"] == 0.0
+    assert df.attrs["matched_lon"] == 0.0
+    print("test_read_hour_file_attaches_matched_coordinate_to_attrs: PASS")
+
+
 def test_read_hour_file_alternate_coord_names():
     import tempfile
 
@@ -387,6 +407,86 @@ def test_fetch_cmorph_timeseries_concurrent_speedup():
         "test_fetch_cmorph_timeseries_concurrent_speedup: PASS "
         f"({speedup:.1f}x speedup)"
     )
+
+
+def test_fetch_cmorph_timeseries_reports_matched_coordinate():
+    """The fake fetch_fn stands in for fetch_one_hour_file, so it must
+    attach the same .attrs a real read_hour_file() call would - this
+    confirms the orchestration layer picks those up and reports them,
+    not that read_hour_file itself works (covered above)."""
+
+    def fake_fetch(url, lat, lon, dt):
+        df = pd.DataFrame({"Timestamp": [pd.Timestamp(dt)], "PrecipitationMMHR": [0.1]})
+        df.attrs["matched_lat"] = 6.0
+        df.attrs["matched_lon"] = -1.75
+        return df
+
+    result = fetch_cmorph_timeseries(
+        lat=6.0539,
+        lon=-1.7334,
+        start_date="2020-01-01",
+        end_date="2020-01-01",
+        fetch_fn=fake_fetch,
+        max_workers=1,
+    )
+    assert any("matched to the nearest grid cell" in w for w in result.warnings)
+    assert result.requested_lat == 6.0539
+    assert result.requested_lon == -1.7334
+    assert result.matched_lat == 6.0
+    assert result.matched_lon == -1.75
+    assert result.distance_km is not None and result.distance_km > 0
+    print("test_fetch_cmorph_timeseries_reports_matched_coordinate: PASS")
+
+
+def test_fetch_cmorph_timeseries_reports_matched_coordinate_concurrent():
+    """Same as above but through the ThreadPoolExecutor path
+    (max_workers > 1) - the matched-coordinate capture uses a separate
+    lock from the progress counter specifically so this concurrent path
+    is race-free too, matching chirps_extract's equivalent test."""
+
+    def fake_fetch(url, lat, lon, dt):
+        df = pd.DataFrame({"Timestamp": [pd.Timestamp(dt)], "PrecipitationMMHR": [0.1]})
+        df.attrs["matched_lat"] = 6.0
+        df.attrs["matched_lon"] = -1.75
+        return df
+
+    result = fetch_cmorph_timeseries(
+        lat=6.0539,
+        lon=-1.7334,
+        start_date="2020-01-01",
+        end_date="2020-01-02",
+        fetch_fn=fake_fetch,
+        max_workers=8,
+    )
+    assert result.matched_lat == 6.0
+    assert result.matched_lon == -1.75
+    assert any("matched to the nearest grid cell" in w for w in result.warnings)
+    print("test_fetch_cmorph_timeseries_reports_matched_coordinate_concurrent: PASS")
+
+
+def test_fetch_cmorph_timeseries_without_matched_attrs_reports_nothing():
+    """Backward compatibility: a fake fetch_fn that returns a plain
+    DataFrame with no .attrs (every OTHER test in this file) must leave
+    matched_lat/matched_lon as None and add no grid-match warning -
+    this feature must be purely additive."""
+
+    def fake_fetch(url, lat, lon, dt):
+        return pd.DataFrame(
+            {"Timestamp": [pd.Timestamp(dt)], "PrecipitationMMHR": [0.1]}
+        )
+
+    result = fetch_cmorph_timeseries(
+        lat=0,
+        lon=0,
+        start_date="2020-01-01",
+        end_date="2020-01-01",
+        fetch_fn=fake_fetch,
+        max_workers=1,
+    )
+    assert result.matched_lat is None
+    assert result.matched_lon is None
+    assert not any("matched to the nearest grid cell" in w for w in result.warnings)
+    print("test_fetch_cmorph_timeseries_without_matched_attrs_reports_nothing: PASS")
 
 
 def test_fetch_cmorph_timeseries_default_full_record_start():

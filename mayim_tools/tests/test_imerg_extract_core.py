@@ -22,6 +22,7 @@ from mayim_tools.rainfall.imerg_extract.core import (
     fetch_giovanni_timeseries,
     fetch_granule_based_timeseries,
     read_point_from_dataset,
+    read_point_from_dataset_with_center,
     save_earthdata_credentials,
 )
 
@@ -489,6 +490,20 @@ def test_read_point_from_dataset_v06_fallback_name():
     print("test_read_point_from_dataset_v06_fallback_name: PASS")
 
 
+def test_read_point_from_dataset_with_center_returns_matched_coordinate():
+    """New: matched-grid-cell reporting for the granule-based method
+    only - see FetchResult's docstring comment for why the Giovanni
+    method (the default) can never populate this."""
+    ds = _make_synthetic_imerg_dataset()
+    value, matched_lat, matched_lon = read_point_from_dataset_with_center(
+        ds, lat=0.02, lon=-0.03, variable_candidates=("precipitation",)
+    )
+    assert value == 4.0
+    assert matched_lat == 0.0
+    assert matched_lon == 0.0
+    print("test_read_point_from_dataset_with_center_returns_matched_coordinate: PASS")
+
+
 def test_read_point_from_dataset_missing_variable_raises():
     ds = _make_synthetic_imerg_dataset(var_name="somethingElse")
     try:
@@ -665,7 +680,13 @@ def test_fetch_granule_based_timeseries_reads_real_file_without_dask():
     assert (
         result.dataframe["PrecipitationMMHR"].iloc[0] == 4.0
     )  # nearest cell to (0.05, 0.05)
-    assert result.warnings == []
+    # the only warning expected is the new matched-grid-cell notice - no
+    # actual failures for this real, successful read
+    assert len(result.warnings) == 1
+    assert "matched to the nearest grid cell" in result.warnings[0]
+    # the file stores float32 coordinates (0.1 -> 0.10000000149...)
+    assert abs(result.matched_lat - 0.1) < 1e-6
+    assert abs(result.matched_lon - 0.1) < 1e-6
     print("test_fetch_granule_based_timeseries_reads_real_file_without_dask: PASS")
 
 
@@ -790,7 +811,9 @@ def test_fetch_granule_based_timeseries_reads_real_julian_calendar_file():
         len(result.dataframe) == 1
     ), f"expected 1 row, got warnings: {result.warnings}"
     assert result.dataframe["Timestamp"].iloc[0] == pd.Timestamp("2005-03-01 00:30:00")
-    assert result.warnings == []
+    # the only warning expected is the new matched-grid-cell notice
+    assert len(result.warnings) == 1
+    assert "matched to the nearest grid cell" in result.warnings[0]
     print("test_fetch_granule_based_timeseries_reads_real_julian_calendar_file: PASS")
 
 
@@ -913,6 +936,34 @@ def test_fetch_giovanni_timeseries_default_full_record():
     )
     assert result.dataframe["Timestamp"].min().date().isoformat() == "2000-06-01"
     print("test_fetch_giovanni_timeseries_default_full_record: PASS")
+
+
+def test_fetch_giovanni_timeseries_never_reports_matched_coordinate():
+    """The Giovanni method is a server-side point query - it never tells
+    us which grid cell it actually used internally, so matched_lat/
+    matched_lon must stay None (and no grid-match warning added) for
+    this method, unlike the granule-based method's real local lookup."""
+
+    def fake_fetch(lat, lon, start_iso, end_iso, variable, token):
+        idx = pd.date_range(start_iso, end_iso, freq="D")
+        return pd.DataFrame({"Timestamp": idx, "PrecipitationMMHR": 1.0})
+
+    result = fetch_giovanni_timeseries(
+        lat=6.0539,
+        lon=-1.7334,
+        start_date="2020-01-01",
+        end_date="2020-01-05",
+        chunk_months=12,
+        token="fake-token",
+        fetch_chunk_fn=fake_fetch,
+        max_workers=1,
+    )
+    assert result.requested_lat == 6.0539
+    assert result.requested_lon == -1.7334
+    assert result.matched_lat is None
+    assert result.matched_lon is None
+    assert not any("matched to the nearest grid cell" in w for w in result.warnings)
+    print("test_fetch_giovanni_timeseries_never_reports_matched_coordinate: PASS")
 
 
 if __name__ == "__main__":

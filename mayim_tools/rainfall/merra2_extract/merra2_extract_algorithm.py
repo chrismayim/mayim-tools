@@ -13,13 +13,22 @@ from pathlib import Path
 
 import pandas as pd
 from qgis.core import (
+    Qgis,
     QgsCoordinateReferenceSystem,
     QgsCoordinateTransform,
+    QgsFeature,
+    QgsFeatureSink,
+    QgsField,
+    QgsFields,
+    QgsGeometry,
+    QgsPointXY,
     QgsProcessing,
     QgsProcessingAlgorithm,
     QgsProcessingContext,
     QgsProcessingException,
     QgsProcessingFeedback,
+    QgsProcessingLayerPostProcessorInterface,
+    QgsProcessingParameterFeatureSink,
     QgsProcessingParameterFeatureSource,
     QgsProcessingParameterField,
     QgsProcessingParameterFileDestination,
@@ -27,6 +36,7 @@ from qgis.core import (
     QgsProcessingParameterPoint,
     QgsProcessingParameterString,
 )
+from qgis.PyQt.QtCore import QMetaType
 from qgis.PyQt.QtGui import QIcon
 
 from .core import (
@@ -39,6 +49,22 @@ from .core import (
 )
 
 WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
+
+STYLES_DIR = Path(__file__).resolve().parent / "styles"
+
+
+class _StylePostProcessor(QgsProcessingLayerPostProcessorInterface):
+    """Loads a saved QML style (symbology + labeling) onto an output
+    layer once Processing has finished loading it into the project -
+    same pattern as era5_extract_algorithm.py's own post-processor."""
+
+    def __init__(self, style_path: Path):
+        super().__init__()
+        self.style_path = str(style_path)
+
+    def postProcessLayer(self, layer, context, feedback):
+        layer.loadNamedStyle(self.style_path)
+        layer.triggerRepaint()
 
 
 class Merra2ExtractAlgorithm(QgsProcessingAlgorithm):
@@ -54,6 +80,7 @@ class Merra2ExtractAlgorithm(QgsProcessingAlgorithm):
     EARTHDATA_USERNAME = "EARTHDATA_USERNAME"
     EARTHDATA_PASSWORD = "EARTHDATA_PASSWORD"
     OUTPUT_CSV = "OUTPUT_CSV"
+    OUTPUT_QUERY_POINTS = "OUTPUT_QUERY_POINTS"
 
     def icon(self):
         logo = Path(__file__).resolve().parents[2] / "icons" / "mayim_logo.png"
@@ -79,7 +106,7 @@ class Merra2ExtractAlgorithm(QgsProcessingAlgorithm):
 
     def shortHelpString(self):
         return (
-            "MERRA-2 Point Extractor (version 0.1.0)\n"
+            "MERRA-2 Point Extractor (version 0.2.0)\n"
             "\n"
             "PURPOSE:\tExtracts the full available NASA MERRA-2 bias-"
             "corrected hourly precipitation (PRECTOTCORR) record "
@@ -136,7 +163,16 @@ class Merra2ExtractAlgorithm(QgsProcessingAlgorithm):
             "  Concurrent requests: default 8 - higher is faster but "
             "places more load on the shared NASA service.\n"
             "  Earthdata Username/Password: enter these ONCE - saved "
-            "automatically, leave blank after the first successful run."
+            "automatically, leave blank after the first successful run.\n"
+            "  Output: POI (query point(s)): echoes the site(s) actually "
+            "requested (the point clicked/typed, or every feature from "
+            "the input point layer) as its own vector layer, loaded with "
+            "a preset style by default. NOTE: unlike this suite's other "
+            "extraction tools, there is no separate 'matched grid cell' "
+            "output here - MERRA-2 is served entirely through NASA's "
+            "Giovanni API (a server-side point query), which never "
+            "reports which grid cell it actually used internally, so "
+            "there is nothing genuine to show beyond the requested point."
         )
 
     def initAlgorithm(self, config=None):
@@ -227,6 +263,14 @@ class Merra2ExtractAlgorithm(QgsProcessingAlgorithm):
                 fileFilter="CSV files (*.csv)",
             )
         )
+        self.addParameter(
+            QgsProcessingParameterFeatureSink(
+                self.OUTPUT_QUERY_POINTS,
+                "Output: POI (query point(s); optional)",
+                optional=True,
+                type=QgsProcessing.SourceType.TypeVectorPoint,
+            )
+        )
 
     def _collect_sites(self, parameters, context, feedback):
         source = self.parameterAsSource(parameters, self.INPUT_POINTS, context)
@@ -269,6 +313,7 @@ class Merra2ExtractAlgorithm(QgsProcessingAlgorithm):
     def processAlgorithm(
         self, parameters, context: QgsProcessingContext, feedback: QgsProcessingFeedback
     ):
+        self._post_processors = []
         sites = self._collect_sites(parameters, context, feedback)
         feedback.pushInfo(f"{len(sites)} site(s) to process.")
 
@@ -354,4 +399,55 @@ class Merra2ExtractAlgorithm(QgsProcessingAlgorithm):
         combined.to_csv(output_csv, index=False)
         feedback.pushInfo(f"{len(combined)} total rows written to {output_csv}")
 
-        return {self.OUTPUT_CSV: output_csv}
+        outputs = {self.OUTPUT_CSV: output_csv}
+
+        query_points_result = self._write_query_points(parameters, context, sites)
+        if query_points_result:
+            outputs[self.OUTPUT_QUERY_POINTS] = query_points_result
+            self._register_style(context, query_points_result, "poi.qml")
+
+        return outputs
+
+    def _write_query_points(self, parameters, context, sites):
+        """Minimal layer: just the site label + the query point geometry
+        actually requested (the clicked/typed point, or every feature from
+        the input point layer). MERRA-2 has no matched-grid-cell output
+        (unlike this suite's other extraction tools) - it is served
+        entirely through Giovanni, a server-side point query that never
+        reports which grid cell it actually used internally, so there is
+        nothing genuine to show beyond the requested point itself."""
+        if not sites:
+            return None
+        fields = QgsFields()
+        fields.append(QgsField("site", QMetaType.Type.QString))
+        fields.append(QgsField("latitude", QMetaType.Type.Double))
+        fields.append(QgsField("longitude", QMetaType.Type.Double))
+
+        sink, dest_id = self.parameterAsSink(
+            parameters,
+            self.OUTPUT_QUERY_POINTS,
+            context,
+            fields,
+            Qgis.WkbType.Point,
+            WGS84,
+        )
+        if sink is None:
+            return None
+        for label, lat, lon in sites:
+            feat = QgsFeature(fields)
+            feat.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(lon, lat)))
+            feat.setAttributes([label, lat, lon])
+            sink.addFeature(feat, QgsFeatureSink.Flag.FastInsert)
+        return dest_id
+
+    def _register_style(self, context, dest_id, style_filename):
+        """Attaches a saved QML style to an output layer via a
+        post-processor, so it loads already symbolised. The processor
+        instance is kept alive on self._post_processors since Processing
+        only holds a weak reference to it."""
+        if not dest_id:
+            return
+        details = context.layerToLoadOnCompletionDetails(dest_id)
+        processor = _StylePostProcessor(STYLES_DIR / style_filename)
+        details.setPostProcessor(processor)
+        self._post_processors.append(processor)

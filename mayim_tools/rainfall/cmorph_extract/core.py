@@ -98,6 +98,25 @@ class FetchResult:
     dataframe: pd.DataFrame  # columns: Timestamp, PrecipitationMMHR
     warnings: list
     method: str = "direct_file"
+    # matched-grid-cell reporting - see read_hour_file()/fetch_cmorph_timeseries()
+    requested_lat: float | None = None
+    requested_lon: float | None = None
+    matched_lat: float | None = None
+    matched_lon: float | None = None
+    distance_km: float | None = None
+
+
+def _approx_distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """A simple planar approximation - good enough for reporting how far a
+    requested point sits from the grid cell it was snapped to, not a
+    geodesic-precision distance. Duplicated per-tool rather than shared,
+    matching this suite's existing pattern of each plugin being
+    independently self-contained."""
+    import math
+
+    lat_km = (lat2 - lat1) * 111.0
+    lon_km = (lon2 - lon1) * 111.0 * math.cos(math.radians((lat1 + lat2) / 2))
+    return math.hypot(lat_km, lon_km)
 
 
 def build_hour_url(dt: datetime) -> str:
@@ -173,6 +192,8 @@ def read_hour_file(path_or_buffer, lat: float, lon: float) -> pd.DataFrame:
         lon_name = find_coord_name(ds, LON_COORD_CANDIDATES)
 
         da = ds[var_name].sel(**{lat_name: lat, lon_name: lon}, method="nearest")
+        matched_lat = float(da[lat_name].values)
+        matched_lon = float(da[lon_name].values)
 
         time_coord = None
         for candidate in ("time", "Time"):
@@ -199,7 +220,10 @@ def read_hour_file(path_or_buffer, lat: float, lon: float) -> pd.DataFrame:
                 }
             )
 
-    return pd.DataFrame(rows)
+    out = pd.DataFrame(rows)
+    out.attrs["matched_lat"] = matched_lat
+    out.attrs["matched_lon"] = matched_lon
+    return out
 
 
 def _build_session(pool_size: int) -> requests.Session:
@@ -311,6 +335,8 @@ def fetch_cmorph_timeseries(
     frames = []
     completed = 0
     completed_lock = threading.Lock()
+    matched_lock = threading.Lock()
+    matched = {"lat": None, "lon": None}
 
     if fetch_fn is fetch_one_hour_file:
         session = _build_session(pool_size=max(max_workers, 1))
@@ -332,11 +358,28 @@ def fetch_cmorph_timeseries(
             f"({url}): {last_error}"
         ]
 
+    def _maybe_capture_matched(df):
+        # captures the matched grid-cell coordinate exactly once, from
+        # whichever fetch completes first - only real read_hour_file()
+        # results carry these attrs (see that function); a fake fetch_fn
+        # without them (the whole existing test suite) simply never
+        # populates this, leaving matched_lat/matched_lon as None,
+        # unchanged from before this feature existed.
+        m_lat = df.attrs.get("matched_lat")
+        m_lon = df.attrs.get("matched_lon")
+        if m_lat is None:
+            return
+        with matched_lock:
+            if matched["lat"] is None:
+                matched["lat"] = m_lat
+                matched["lon"] = m_lon
+
     if max_workers <= 1:
         results = [_fetch_one(dt) for dt in hours]
         for df, w in results:
             if df is not None:
                 frames.append(df)
+                _maybe_capture_matched(df)
             warnings.extend(w)
             completed += 1
             if progress_callback:
@@ -348,6 +391,7 @@ def fetch_cmorph_timeseries(
                 df, w = future.result()
                 if df is not None:
                     frames.append(df)
+                    _maybe_capture_matched(df)
                 warnings.extend(w)
                 with completed_lock:
                     completed += 1
@@ -364,6 +408,16 @@ def fetch_cmorph_timeseries(
             .sort_values("Timestamp")
             .reset_index(drop=True)
         )
+
+    matched_lat, matched_lon = matched["lat"], matched["lon"]
+    distance_km = None
+    if matched_lat is not None:
+        distance_km = _approx_distance_km(lat, lon, matched_lat, matched_lon)
+        grid_warning = (
+            f"Requested point ({lat}, {lon}) was matched to the nearest grid cell "
+            f"({matched_lat}, {matched_lon}), approximately {distance_km:.2f} km away."
+        )
+        warnings.insert(0, grid_warning)
 
     n_expected_files = len(hours)
     n_failed = sum(1 for w in warnings if "failed after" in w)
@@ -392,7 +446,16 @@ def fetch_cmorph_timeseries(
             f"this as expected."
         )
 
-    return FetchResult(dataframe=combined, warnings=warnings, method="direct_file")
+    return FetchResult(
+        dataframe=combined,
+        warnings=warnings,
+        method="direct_file",
+        requested_lat=lat,
+        requested_lon=lon,
+        matched_lat=matched_lat,
+        matched_lon=matched_lon,
+        distance_km=distance_km,
+    )
 
 
 def _to_date(value) -> date:

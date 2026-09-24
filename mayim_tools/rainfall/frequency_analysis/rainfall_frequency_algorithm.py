@@ -23,12 +23,12 @@ from qgis.core import (
 )
 from qgis.PyQt.QtGui import QIcon
 
-from .rfa.analysis import (
+from mayim_tools.rainfall._common.rfa.analysis import (
     DEFAULT_DISTRIBUTIONS,
     DEFAULT_EXCEEDANCE_PROBABILITIES,
     run_frequency_analysis,
 )
-from .rfa.export import (
+from mayim_tools.rainfall._common.rfa.export import (
     write_ams,
     write_metadata,
     write_parameters,

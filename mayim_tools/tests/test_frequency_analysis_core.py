@@ -10,21 +10,21 @@ import numpy as np
 import pandas as pd
 from scipy.stats import genextreme
 
-from mayim_tools.rainfall.frequency_analysis.rfa.ams import (
+from mayim_tools.rainfall._common.rfa.ams import (
     build_regular_grid,
     compute_year_completeness,
     extract_ams_for_duration,
 )
-from mayim_tools.rainfall.frequency_analysis.rfa.analysis import run_frequency_analysis
-from mayim_tools.rainfall.frequency_analysis.rfa.distributions import (
+from mayim_tools.rainfall._common.rfa.analysis import run_frequency_analysis
+from mayim_tools.rainfall._common.rfa.distributions import (
     fit_gev_lmoments,
     fit_gev_mle,
     fit_gumbel_lmoments,
     gev_cdf,
     gev_quantile,
 )
-from mayim_tools.rainfall.frequency_analysis.rfa.lmoments import sample_l_moments
-from mayim_tools.rainfall.frequency_analysis.rfa.timebase import (
+from mayim_tools.rainfall._common.rfa.lmoments import sample_l_moments
+from mayim_tools.rainfall._common.rfa.timebase import (
     applicable_durations,
     detect_native_interval,
     duration_label,
@@ -334,7 +334,7 @@ def test_glo_lmoments_recovers_known_parameters():
     """Generate from Hosking's own GLO quantile function with a known
     kappa, fit via L-moments, and confirm recovery - the same
     empirical-validation discipline used for GEV."""
-    from mayim_tools.rainfall.frequency_analysis.rfa.distributions import (
+    from mayim_tools.rainfall._common.rfa.distributions import (
         fit_glo_lmoments,
         glo_quantile,
     )
@@ -354,7 +354,7 @@ def test_glo_lmoments_recovers_known_parameters():
 
 
 def test_glo_tau3_tau4_exact_formula():
-    from mayim_tools.rainfall.frequency_analysis.rfa.distributions import (
+    from mayim_tools.rainfall._common.rfa.distributions import (
         glo_tau3_tau4_exact,
     )
 
@@ -375,7 +375,7 @@ def test_lp3_fit_recovers_known_parameters():
     log space, fit via this module's L-moment code, confirm recovery."""
     from scipy.stats import pearson3
 
-    from mayim_tools.rainfall.frequency_analysis.rfa.distributions import (
+    from mayim_tools.rainfall._common.rfa.distributions import (
         fit_pearson3_lmoments,
     )
 
@@ -403,7 +403,7 @@ def test_lp3_near_zero_skewness_no_overflow():
     ordinary 30-year synthetic AMS run, not a contrived input)."""
     import warnings as _warnings
 
-    from mayim_tools.rainfall.frequency_analysis.rfa.distributions import (
+    from mayim_tools.rainfall._common.rfa.distributions import (
         fit_pearson3_lmoments,
     )
 
@@ -420,7 +420,7 @@ def test_lp3_near_zero_skewness_no_overflow():
 
 
 def test_lp3_negative_or_zero_data_raises():
-    from mayim_tools.rainfall.frequency_analysis.rfa.distributions import (
+    from mayim_tools.rainfall._common.rfa.distributions import (
         fit_lp3_lmoments,
     )
 
@@ -436,7 +436,7 @@ def test_lp3_quantile_roundtrip():
     """Fit LP3 to a real (positive) synthetic sample, then confirm the
     quantile function's median (F=0.5) is in a sane location relative
     to the sample."""
-    from mayim_tools.rainfall.frequency_analysis.rfa.distributions import (
+    from mayim_tools.rainfall._common.rfa.distributions import (
         fit_lp3_lmoments,
         lp3_quantile,
     )
@@ -454,7 +454,7 @@ def test_pt3_tau4_montecarlo_matches_known_normal_constant():
     whose exact tau4 is a known closed-form constant - this validates
     the Monte Carlo estimation approach used for the rest of PT3's
     tau3-tau4 curve (which has no closed form at all)."""
-    from mayim_tools.rainfall.frequency_analysis.rfa.distributions import (
+    from mayim_tools.rainfall._common.rfa.distributions import (
         pt3_tau4_from_tau3,
     )
 
@@ -469,7 +469,7 @@ def test_pt3_tau4_montecarlo_matches_known_normal_constant():
 def test_pt3_tau4_symmetric_in_tau3_sign():
     """Pearson III's tau4(tau3) curve depends only on |tau3| - both
     signs at the same magnitude should give the same tau4."""
-    from mayim_tools.rainfall.frequency_analysis.rfa.distributions import (
+    from mayim_tools.rainfall._common.rfa.distributions import (
         pt3_tau4_from_tau3,
     )
 
@@ -488,11 +488,11 @@ def test_ratio_diagram_recovers_known_distribution():
     """Generate a large sample from a KNOWN GLO distribution, and
     confirm the ratio diagram diagnostic correctly recommends GLO over
     the other three candidates."""
-    from mayim_tools.rainfall.frequency_analysis.rfa.distributions import (
+    from mayim_tools.rainfall._common.rfa.distributions import (
         fit_gev_lmoments,
         glo_quantile,
     )
-    from mayim_tools.rainfall.frequency_analysis.rfa.ratio_diagram import (
+    from mayim_tools.rainfall._common.rfa.ratio_diagram import (
         compare_distributions,
     )
 
@@ -511,10 +511,10 @@ def test_ratio_diagram_recovers_known_distribution():
 def test_ratio_diagram_recovers_gev_when_data_is_gev_shaped():
     from scipy.stats import genextreme
 
-    from mayim_tools.rainfall.frequency_analysis.rfa.distributions import (
+    from mayim_tools.rainfall._common.rfa.distributions import (
         fit_gev_lmoments,
     )
-    from mayim_tools.rainfall.frequency_analysis.rfa.ratio_diagram import (
+    from mayim_tools.rainfall._common.rfa.ratio_diagram import (
         compare_distributions,
     )
 
@@ -529,7 +529,7 @@ def test_ratio_diagram_recovers_gev_when_data_is_gev_shaped():
 
 
 def test_ratio_diagram_ranking_is_sorted_by_distance():
-    from mayim_tools.rainfall.frequency_analysis.rfa.ratio_diagram import (
+    from mayim_tools.rainfall._common.rfa.ratio_diagram import (
         compare_distributions,
     )
 
@@ -608,10 +608,10 @@ def test_ratio_diagram_entry_names_match_fit_distribution_normalization():
     case, so GEV often edges out Gumbel narrowly even on genuinely
     Gumbel-shaped data, making 'force Gumbel to win' an unreliable way
     to exercise this specific bug)."""
-    from mayim_tools.rainfall.frequency_analysis.rfa.analysis import (
+    from mayim_tools.rainfall._common.rfa.analysis import (
         DEFAULT_DISTRIBUTIONS,
     )
-    from mayim_tools.rainfall.frequency_analysis.rfa.ratio_diagram import (
+    from mayim_tools.rainfall._common.rfa.ratio_diagram import (
         compare_distributions,
     )
 
@@ -633,7 +633,7 @@ def test_write_recommended_ddf_no_blank_rows_regardless_of_which_distribution_wi
     the ratio diagram happened to recommend for that duration."""
     import io
 
-    from mayim_tools.rainfall.frequency_analysis.rfa.export import write_recommended_ddf
+    from mayim_tools.rainfall._common.rfa.export import write_recommended_ddf
 
     rng = np.random.default_rng(123)
     n_years = 30

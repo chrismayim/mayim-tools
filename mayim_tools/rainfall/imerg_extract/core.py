@@ -96,6 +96,30 @@ class FetchResult:
     dataframe: pd.DataFrame  # columns: Timestamp, PrecipitationMMHR
     warnings: list
     method: str
+    # matched-grid-cell reporting - ONLY ever populated by the
+    # granule-based method (see fetch_granule_based_timeseries()). The
+    # Giovanni method (fetch_giovanni_timeseries(), the default/
+    # recommended one) is a server-side point query - Giovanni never
+    # tells us which grid cell it actually used internally, so these
+    # stay None for that path; there is nothing genuine to report.
+    requested_lat: float | None = None
+    requested_lon: float | None = None
+    matched_lat: float | None = None
+    matched_lon: float | None = None
+    distance_km: float | None = None
+
+
+def _approx_distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """A simple planar approximation - good enough for reporting how far a
+    requested point sits from the grid cell it was snapped to, not a
+    geodesic-precision distance. Duplicated per-tool rather than shared,
+    matching this suite's existing pattern of each plugin being
+    independently self-contained."""
+    import math
+
+    lat_km = (lat2 - lat1) * 111.0
+    lon_km = (lon2 - lon1) * 111.0 * math.cos(math.radians((lat1 + lat2) / 2))
+    return math.hypot(lat_km, lon_km)
 
 
 def _split_date_range(start: str, end: str, chunk_months: int) -> list:
@@ -486,7 +510,16 @@ def fetch_giovanni_timeseries(
         warnings, key=lambda w: w.split(" ")[1] if w.startswith("Chunk") else w
     )
 
-    return FetchResult(dataframe=combined, warnings=warnings_sorted, method="giovanni")
+    return FetchResult(
+        dataframe=combined,
+        warnings=warnings_sorted,
+        method="giovanni",
+        requested_lat=lat,
+        requested_lon=lon,
+        # matched_lat/matched_lon intentionally left None - see
+        # FetchResult's docstring comment: Giovanni is a server-side
+        # point query and never reports which grid cell it used.
+    )
 
 
 # ---------------------------------------------------------------------
@@ -543,10 +576,27 @@ def read_point_from_dataset(
     """Nearest-neighbour point extraction from an opened IMERG xarray
     Dataset, trying each candidate variable name in order (handles the
     V06 precipitationCal -> V07 precipitation rename transparently)."""
+    value, _matched_lat, _matched_lon = read_point_from_dataset_with_center(
+        ds, lat, lon, variable_candidates
+    )
+    return value
+
+
+def read_point_from_dataset_with_center(
+    ds, lat: float, lon: float, variable_candidates=VARIABLE_NAME_CANDIDATES
+) -> tuple:
+    """Same as read_point_from_dataset(), but also returns the matched
+    grid cell's own coordinate: (value, matched_lat, matched_lon). Only
+    meaningful for the granule-based method - this is a real local
+    nearest-neighbour lookup against an opened granule file, unlike the
+    Giovanni method, which never exposes its own internal grid match."""
     for var in variable_candidates:
         if var in ds.data_vars:
-            value = ds[var].sel(lat=lat, lon=lon, method="nearest")
-            return float(value.values.squeeze())
+            da = ds[var].sel(lat=lat, lon=lon, method="nearest")
+            value = float(da.values.squeeze())
+            matched_lat = float(da["lat"].values)
+            matched_lon = float(da["lon"].values)
+            return value, matched_lat, matched_lon
     raise ValueError(
         f"None of the candidate variable names {variable_candidates} found. "
         f"Available: {list(ds.data_vars)}"
@@ -640,6 +690,8 @@ def fetch_granule_based_timeseries(
     warnings = []
     rows = []
     n = len(results)
+    matched_lat = None
+    matched_lon = None
     for i, granule in enumerate(results):
         try:
             files = earthaccess.download([granule], local_path=".")
@@ -654,7 +706,11 @@ def fetch_granule_based_timeseries(
             # open_dataset needs no such dependency and is the correct
             # function for this single-file-per-call usage pattern.
             with xr.open_dataset(files[0], group="Grid") as ds:
-                value = read_point_from_dataset(ds, lat, lon, variable_candidates)
+                value, m_lat, m_lon = read_point_from_dataset_with_center(
+                    ds, lat, lon, variable_candidates
+                )
+                if matched_lat is None:
+                    matched_lat, matched_lon = m_lat, m_lon
                 timestamp = _to_pandas_timestamp(ds["time"].values[0])
                 rows.append({"Timestamp": timestamp, "PrecipitationMMHR": value})
         except Exception as e:
@@ -668,4 +724,22 @@ def fetch_granule_based_timeseries(
         else pd.DataFrame(columns=["Timestamp", "PrecipitationMMHR"])
     )
 
-    return FetchResult(dataframe=df, warnings=warnings, method="granule")
+    distance_km = None
+    if matched_lat is not None:
+        distance_km = _approx_distance_km(lat, lon, matched_lat, matched_lon)
+        grid_warning = (
+            f"Requested point ({lat}, {lon}) was matched to the nearest grid cell "
+            f"({matched_lat}, {matched_lon}), approximately {distance_km:.2f} km away."
+        )
+        warnings.insert(0, grid_warning)
+
+    return FetchResult(
+        dataframe=df,
+        warnings=warnings,
+        method="granule",
+        requested_lat=lat,
+        requested_lon=lon,
+        matched_lat=matched_lat,
+        matched_lon=matched_lon,
+        distance_km=distance_km,
+    )

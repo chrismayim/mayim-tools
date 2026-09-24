@@ -13,15 +13,24 @@ from pathlib import Path
 
 import pandas as pd
 from qgis.core import (
+    Qgis,
     QgsCoordinateReferenceSystem,
     QgsCoordinateTransform,
+    QgsFeature,
+    QgsFeatureSink,
+    QgsField,
+    QgsFields,
+    QgsGeometry,
+    QgsPointXY,
     QgsProcessing,
     QgsProcessingAlgorithm,
     QgsProcessingContext,
     QgsProcessingException,
     QgsProcessingFeedback,
+    QgsProcessingLayerPostProcessorInterface,
     QgsProcessingParameterBoolean,
     QgsProcessingParameterEnum,
+    QgsProcessingParameterFeatureSink,
     QgsProcessingParameterFeatureSource,
     QgsProcessingParameterField,
     QgsProcessingParameterFileDestination,
@@ -29,6 +38,7 @@ from qgis.core import (
     QgsProcessingParameterPoint,
     QgsProcessingParameterString,
 )
+from qgis.PyQt.QtCore import QMetaType
 from qgis.PyQt.QtGui import QIcon
 
 from .core import (
@@ -42,6 +52,22 @@ from .core import (
 )
 
 WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
+
+STYLES_DIR = Path(__file__).resolve().parent / "styles"
+
+
+class _StylePostProcessor(QgsProcessingLayerPostProcessorInterface):
+    """Loads a saved QML style (symbology + labeling) onto an output
+    layer once Processing has finished loading it into the project -
+    same pattern as era5_extract_algorithm.py's own post-processor."""
+
+    def __init__(self, style_path: Path):
+        super().__init__()
+        self.style_path = str(style_path)
+
+    def postProcessLayer(self, layer, context, feedback):
+        layer.loadNamedStyle(self.style_path)
+        layer.triggerRepaint()
 
 
 class ImergExtractAlgorithm(QgsProcessingAlgorithm):
@@ -59,6 +85,8 @@ class ImergExtractAlgorithm(QgsProcessingAlgorithm):
     EARTHDATA_USERNAME = "EARTHDATA_USERNAME"
     EARTHDATA_PASSWORD = "EARTHDATA_PASSWORD"
     OUTPUT_CSV = "OUTPUT_CSV"
+    OUTPUT_MATCHED_POINTS = "OUTPUT_MATCHED_POINTS"
+    OUTPUT_QUERY_POINTS = "OUTPUT_QUERY_POINTS"
 
     _METHOD_OPTIONS = ["giovanni", "granule"]
 
@@ -83,7 +111,7 @@ class ImergExtractAlgorithm(QgsProcessingAlgorithm):
 
     def shortHelpString(self):
         return (
-            "IMERG Point Extractor (version 0.3.7)\n"
+            "IMERG Point Extractor (version 0.4.0)\n"
             "\n"
             "PURPOSE:\tExtracts the full available NASA GPM IMERG Final Run "
             "30-minute precipitation record (2000-06-01 to today, ~455,000 "
@@ -162,7 +190,21 @@ class ImergExtractAlgorithm(QgsProcessingAlgorithm):
             "method's safety threshold if you really want to run it anyway.\n"
             "  Earthdata Username/Password: enter these ONCE - saved to "
             "~/.netrc automatically, leave blank after the first "
-            "successful run."
+            "successful run.\n"
+            "  Output: matched grid cell location: one point per site, at "
+            "the actual nearest-gridpoint coordinate the data was pulled "
+            "from - the same location reported in the 'matched to the "
+            "nearest grid cell' log message, as a vector layer instead of "
+            "just text. IMPORTANT: only ever populated by the granule-"
+            "based method - the Giovanni method (the default/recommended "
+            "one) is a server-side point query and never reports which "
+            "grid cell it actually used internally, so this output is "
+            "left empty when Giovanni is the method used.\n"
+            "  Output: POI (query point(s)): echoes the site(s) actually "
+            "requested (the point clicked/typed, or every feature from the "
+            "input point layer) as its own vector layer - populated "
+            "regardless of extraction method.\n"
+            "Both point outputs load with a preset style by default."
         )
 
     def initAlgorithm(self, config=None):
@@ -271,6 +313,23 @@ class ImergExtractAlgorithm(QgsProcessingAlgorithm):
                 fileFilter="CSV files (*.csv)",
             )
         )
+        self.addParameter(
+            QgsProcessingParameterFeatureSink(
+                self.OUTPUT_MATCHED_POINTS,
+                "Output: matched grid cell location (vector point; optional; "
+                "granule method only - see tool description)",
+                optional=True,
+                type=QgsProcessing.SourceType.TypeVectorPoint,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterFeatureSink(
+                self.OUTPUT_QUERY_POINTS,
+                "Output: POI (query point(s); optional)",
+                optional=True,
+                type=QgsProcessing.SourceType.TypeVectorPoint,
+            )
+        )
 
     def _collect_sites(self, parameters, context, feedback):
         source = self.parameterAsSource(parameters, self.INPUT_POINTS, context)
@@ -313,6 +372,7 @@ class ImergExtractAlgorithm(QgsProcessingAlgorithm):
     def processAlgorithm(
         self, parameters, context: QgsProcessingContext, feedback: QgsProcessingFeedback
     ):
+        self._post_processors = []
         sites = self._collect_sites(parameters, context, feedback)
         feedback.pushInfo(f"{len(sites)} site(s) to process.")
 
@@ -360,6 +420,7 @@ class ImergExtractAlgorithm(QgsProcessingAlgorithm):
             token = None
 
         all_rows = []
+        results_by_site = {}
         for site_idx, (label, lat, lon) in enumerate(sites):
             feedback.pushInfo(f"[{label}] lat={lat:.4f}, lon={lon:.4f}")
 
@@ -404,6 +465,7 @@ class ImergExtractAlgorithm(QgsProcessingAlgorithm):
             df = result.dataframe.copy()
             df.insert(0, "Site", label)
             all_rows.append(df)
+            results_by_site[label] = result
 
         if not all_rows or all(len(df) == 0 for df in all_rows):
             feedback.pushWarning("No data retrieved for any site.")
@@ -416,4 +478,123 @@ class ImergExtractAlgorithm(QgsProcessingAlgorithm):
         combined.to_csv(output_csv, index=False)
         feedback.pushInfo(f"{len(combined)} total rows written to {output_csv}")
 
-        return {self.OUTPUT_CSV: output_csv}
+        outputs = {self.OUTPUT_CSV: output_csv}
+
+        matched_points_result = self._write_matched_points(
+            parameters, context, results_by_site
+        )
+        if matched_points_result:
+            outputs[self.OUTPUT_MATCHED_POINTS] = matched_points_result
+            self._register_style(
+                context, matched_points_result, "snapped_grid_point.qml"
+            )
+        elif method == "giovanni":
+            feedback.pushInfo(
+                "Matched grid cell output left empty - the Giovanni method never "
+                "reports which grid cell it used internally (see tool description)."
+            )
+
+        query_points_result = self._write_query_points(parameters, context, sites)
+        if query_points_result:
+            outputs[self.OUTPUT_QUERY_POINTS] = query_points_result
+            self._register_style(context, query_points_result, "poi.qml")
+
+        return outputs
+
+    def _write_matched_points(self, parameters, context, results_by_site):
+        """One point per site, at the actual nearest-gridpoint coordinate
+        the data was extracted from (result.matched_lat/matched_lon - see
+        core.py's FetchResult) - the same location already reported in the
+        'matched to the nearest grid cell' warning message, now also
+        available as a vector layer. Only ever populated for sites
+        processed via the granule-based method (see FetchResult's
+        docstring comment) - sites with no matched coordinate (Giovanni
+        method, or no granule succeeded) are skipped rather than written
+        with a missing geometry."""
+        sites_with_match = [
+            (label, result)
+            for label, result in results_by_site.items()
+            if result.matched_lat is not None and result.matched_lon is not None
+        ]
+        if not sites_with_match:
+            return None
+
+        fields = QgsFields()
+        fields.append(QgsField("site", QMetaType.Type.QString))
+        fields.append(QgsField("requested_lat", QMetaType.Type.Double))
+        fields.append(QgsField("requested_lon", QMetaType.Type.Double))
+        fields.append(QgsField("matched_lat", QMetaType.Type.Double))
+        fields.append(QgsField("matched_lon", QMetaType.Type.Double))
+        fields.append(QgsField("distance_km", QMetaType.Type.Double))
+
+        sink, dest_id = self.parameterAsSink(
+            parameters,
+            self.OUTPUT_MATCHED_POINTS,
+            context,
+            fields,
+            Qgis.WkbType.Point,
+            WGS84,
+        )
+        if sink is None:
+            return None
+
+        for label, result in sites_with_match:
+            feat = QgsFeature(fields)
+            feat.setGeometry(
+                QgsGeometry.fromPointXY(
+                    QgsPointXY(result.matched_lon, result.matched_lat)
+                )
+            )
+            feat.setAttributes(
+                [
+                    label,
+                    result.requested_lat,
+                    result.requested_lon,
+                    result.matched_lat,
+                    result.matched_lon,
+                    result.distance_km,
+                ]
+            )
+            sink.addFeature(feat, QgsFeatureSink.Flag.FastInsert)
+        return dest_id
+
+    def _write_query_points(self, parameters, context, sites):
+        """Minimal layer: just the site label + the query point geometry
+        actually requested (the clicked/typed point, or every feature from
+        the input point layer) - populated regardless of extraction
+        method, unlike the matched grid cell output above."""
+        if not sites:
+            return None
+        fields = QgsFields()
+        fields.append(QgsField("site", QMetaType.Type.QString))
+        fields.append(QgsField("latitude", QMetaType.Type.Double))
+        fields.append(QgsField("longitude", QMetaType.Type.Double))
+
+        sink, dest_id = self.parameterAsSink(
+            parameters,
+            self.OUTPUT_QUERY_POINTS,
+            context,
+            fields,
+            Qgis.WkbType.Point,
+            WGS84,
+        )
+        if sink is None:
+            return None
+        for label, lat, lon in sites:
+            feat = QgsFeature(fields)
+            feat.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(lon, lat)))
+            feat.setAttributes([label, lat, lon])
+            sink.addFeature(feat, QgsFeatureSink.Flag.FastInsert)
+        return dest_id
+
+    def _register_style(self, context, dest_id, style_filename):
+        """Attaches a saved QML style to an output layer via a
+        post-processor, so it loads already symbolised. The processor
+        instance is kept alive on self._post_processors since Processing
+        only holds a weak reference to it."""
+        if not dest_id:
+            return
+        details = context.layerToLoadOnCompletionDetails(dest_id)
+        processor = _StylePostProcessor(STYLES_DIR / style_filename)
+        details.setPostProcessor(processor)
+        self._post_processors.append(processor)

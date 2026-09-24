@@ -15,14 +15,23 @@ extraction - see core.py's module docstring PERFORMANCE section.
 from pathlib import Path
 
 from qgis.core import (
+    Qgis,
     QgsCoordinateReferenceSystem,
     QgsCoordinateTransform,
+    QgsFeature,
+    QgsFeatureSink,
+    QgsField,
+    QgsFields,
+    QgsGeometry,
+    QgsPointXY,
     QgsProcessing,
     QgsProcessingAlgorithm,
     QgsProcessingContext,
     QgsProcessingException,
     QgsProcessingFeedback,
+    QgsProcessingLayerPostProcessorInterface,
     QgsProcessingParameterEnum,
+    QgsProcessingParameterFeatureSink,
     QgsProcessingParameterFeatureSource,
     QgsProcessingParameterField,
     QgsProcessingParameterFileDestination,
@@ -30,12 +39,30 @@ from qgis.core import (
     QgsProcessingParameterPoint,
     QgsProcessingParameterString,
 )
+from qgis.PyQt.QtCore import QMetaType
 from qgis.PyQt.QtGui import QIcon
 
 from .core import DEFAULT_MAX_WORKERS, PRODUCTS, fetch_chirps_timeseries
 from .export import write_chirps_csv
 
 WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
+
+STYLES_DIR = Path(__file__).resolve().parent / "styles"
+
+
+class _StylePostProcessor(QgsProcessingLayerPostProcessorInterface):
+    """Loads a saved QML style (symbology + labeling) onto an output
+    layer once Processing has finished loading it into the project -
+    same pattern as design_rainfall_algorithm.py's/era5_extract's own
+    post-processor."""
+
+    def __init__(self, style_path: Path):
+        super().__init__()
+        self.style_path = str(style_path)
+
+    def postProcessLayer(self, layer, context, feedback):
+        layer.loadNamedStyle(self.style_path)
+        layer.triggerRepaint()
 
 
 class ChirpsExtractAlgorithm(QgsProcessingAlgorithm):
@@ -48,6 +75,8 @@ class ChirpsExtractAlgorithm(QgsProcessingAlgorithm):
     END_DATE = "END_DATE"
     MAX_WORKERS = "MAX_WORKERS"
     OUTPUT_CSV = "OUTPUT_CSV"
+    OUTPUT_MATCHED_POINTS = "OUTPUT_MATCHED_POINTS"
+    OUTPUT_QUERY_POINTS = "OUTPUT_QUERY_POINTS"
 
     _PRODUCT_OPTIONS = list(PRODUCTS)  # pentad, daily_rnl, daily_sat, monthly
 
@@ -72,7 +101,7 @@ class ChirpsExtractAlgorithm(QgsProcessingAlgorithm):
 
     def shortHelpString(self):
         return (
-            "CHIRPS Point Extractor (version 0.3.0)\n"
+            "CHIRPS Point Extractor (version 0.4.0)\n"
             "\n"
             "PURPOSE:\tExtracts CHIRPS v3 precipitation at a point for a specified "
             "date range or the full available record (1981-01-01 to today for "
@@ -121,7 +150,20 @@ class ChirpsExtractAlgorithm(QgsProcessingAlgorithm):
             "server-side throttling are both plausible above roughly 16-20 - "
             "not independently confirmed against the live server, so treat "
             "anything above that range with caution rather than assuming it "
-            "scales indefinitely."
+            "scales indefinitely.\n"
+            "  Output: matched grid cell location: one point per site, at "
+            "the centre of the actual CHIRPS pixel the data was read from - "
+            "the same location reported in the 'matched to the nearest grid "
+            "cell' log message, as a vector layer instead of just text. "
+            "Attributes include the requested point, the matched grid cell, "
+            "and the distance between them.\n"
+            "  Output: POI (query point(s)): echoes the site(s) actually "
+            "requested (the point clicked/typed, or every feature from the "
+            "input point layer) as its own vector layer, for reference "
+            "alongside the matched grid cell output above.\n"
+            "Both point outputs load with a preset style by default "
+            "(matching the style used by the Design Rainfall tool's "
+            "equivalent outputs)."
         )
 
     def initAlgorithm(self, config=None):
@@ -193,6 +235,22 @@ class ChirpsExtractAlgorithm(QgsProcessingAlgorithm):
                 fileFilter="CSV files (*.csv)",
             )
         )
+        self.addParameter(
+            QgsProcessingParameterFeatureSink(
+                self.OUTPUT_MATCHED_POINTS,
+                "Output: matched grid cell location (vector point; optional)",
+                optional=True,
+                type=QgsProcessing.SourceType.TypeVectorPoint,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterFeatureSink(
+                self.OUTPUT_QUERY_POINTS,
+                "Output: POI (query point(s); optional)",
+                optional=True,
+                type=QgsProcessing.SourceType.TypeVectorPoint,
+            )
+        )
 
     def _collect_sites(self, parameters, context, feedback):
         source = self.parameterAsSource(parameters, self.INPUT_POINTS, context)
@@ -236,6 +294,7 @@ class ChirpsExtractAlgorithm(QgsProcessingAlgorithm):
     def processAlgorithm(
         self, parameters, context: QgsProcessingContext, feedback: QgsProcessingFeedback
     ):
+        self._post_processors = []
         sites = self._collect_sites(parameters, context, feedback)
         feedback.pushInfo(f"{len(sites)} site(s) to process.")
 
@@ -297,4 +356,121 @@ class ChirpsExtractAlgorithm(QgsProcessingAlgorithm):
         n_rows = write_chirps_csv(results_by_site, output_csv)
         feedback.pushInfo(f"{n_rows} total rows written to {output_csv}")
 
-        return {self.OUTPUT_CSV: output_csv}
+        outputs = {self.OUTPUT_CSV: output_csv}
+
+        matched_points_result = self._write_matched_points(
+            parameters, context, results_by_site
+        )
+        if matched_points_result:
+            outputs[self.OUTPUT_MATCHED_POINTS] = matched_points_result
+            self._register_style(
+                context, matched_points_result, "snapped_grid_point.qml"
+            )
+
+        query_points_result = self._write_query_points(parameters, context, sites)
+        if query_points_result:
+            outputs[self.OUTPUT_QUERY_POINTS] = query_points_result
+            self._register_style(context, query_points_result, "poi.qml")
+
+        return outputs
+
+    def _write_matched_points(self, parameters, context, results_by_site):
+        """One point per site, at the centre of the actual CHIRPS pixel
+        the data was read from (result.matched_lat/matched_lon - see
+        core.py's ChirpsResult) - the same location already reported in
+        the 'matched to the nearest grid cell' warning message, now also
+        available as a vector layer. Mirrors era5_extract_algorithm.py's
+        _write_matched_points pattern. Sites where nothing succeeded
+        (matched_lat/matched_lon still None) are skipped rather than
+        written with a missing geometry."""
+        sites_with_match = [
+            (label, result)
+            for label, result in results_by_site.items()
+            if result.matched_lat is not None and result.matched_lon is not None
+        ]
+        if not sites_with_match:
+            return None
+
+        fields = QgsFields()
+        fields.append(QgsField("site", QMetaType.Type.QString))
+        fields.append(QgsField("requested_lat", QMetaType.Type.Double))
+        fields.append(QgsField("requested_lon", QMetaType.Type.Double))
+        fields.append(QgsField("matched_lat", QMetaType.Type.Double))
+        fields.append(QgsField("matched_lon", QMetaType.Type.Double))
+        fields.append(QgsField("distance_km", QMetaType.Type.Double))
+
+        sink, dest_id = self.parameterAsSink(
+            parameters,
+            self.OUTPUT_MATCHED_POINTS,
+            context,
+            fields,
+            Qgis.WkbType.Point,
+            WGS84,
+        )
+        if sink is None:
+            return None
+
+        for label, result in sites_with_match:
+            feat = QgsFeature(fields)
+            feat.setGeometry(
+                QgsGeometry.fromPointXY(
+                    QgsPointXY(result.matched_lon, result.matched_lat)
+                )
+            )
+            feat.setAttributes(
+                [
+                    label,
+                    result.requested_lat,
+                    result.requested_lon,
+                    result.matched_lat,
+                    result.matched_lon,
+                    result.distance_km,
+                ]
+            )
+            sink.addFeature(feat, QgsFeatureSink.Flag.FastInsert)
+        return dest_id
+
+    def _write_query_points(self, parameters, context, sites):
+        """Minimal layer: just the site label + the query point geometry
+        actually requested (the clicked/typed point, or every feature from
+        the input point layer) - useful to see/symbolise the requested
+        location(s) independently of the matched grid cell output above.
+        Mirrors era5_extract_algorithm.py's/design_rainfall_algorithm.py's
+        own _write_query_points."""
+        if not sites:
+            return None
+        fields = QgsFields()
+        fields.append(QgsField("site", QMetaType.Type.QString))
+        fields.append(QgsField("latitude", QMetaType.Type.Double))
+        fields.append(QgsField("longitude", QMetaType.Type.Double))
+
+        sink, dest_id = self.parameterAsSink(
+            parameters,
+            self.OUTPUT_QUERY_POINTS,
+            context,
+            fields,
+            Qgis.WkbType.Point,
+            WGS84,
+        )
+        if sink is None:
+            return None
+        for label, lat, lon in sites:
+            feat = QgsFeature(fields)
+            feat.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(lon, lat)))
+            feat.setAttributes([label, lat, lon])
+            sink.addFeature(feat, QgsFeatureSink.Flag.FastInsert)
+        return dest_id
+
+    def _register_style(self, context, dest_id, style_filename):
+        """Attaches a saved QML style to an output layer via a
+        post-processor, so it loads already symbolised - same pattern as
+        era5_extract_algorithm.py's/design_rainfall_algorithm.py's own
+        _register_style. The processor instance is kept alive on
+        self._post_processors since Processing only holds a weak
+        reference to it."""
+        if not dest_id:
+            return
+        details = context.layerToLoadOnCompletionDetails(dest_id)
+        processor = _StylePostProcessor(STYLES_DIR / style_filename)
+        details.setPostProcessor(processor)
+        self._post_processors.append(processor)

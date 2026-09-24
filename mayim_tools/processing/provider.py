@@ -19,6 +19,9 @@ from mayim_tools.data.netcdf4_to_csv.netcdf4_list_variables_algorithm import (
 from mayim_tools.data.netcdf4_to_csv.netcdf4_to_csv_algorithm import (
     Netcdf4ToCsvAlgorithm,
 )
+from mayim_tools.hydrology.catchment_delineation import (
+    catchment_delineation_algorithm as catchment_delineation_algo,
+)
 from mayim_tools.hydrology.d8_flow_accumulation.d8_flow_accumulation_algorithm import (
     D8FlowAccumulationAlgorithm,
 )
@@ -53,6 +56,9 @@ from mayim_tools.rainfall.merra2_extract.merra2_extract_algorithm import (
 )
 from mayim_tools.rainfall.persiann_extract.persiann_extract_algorithm import (
     PersiannExtractAlgorithm,
+)
+from mayim_tools.rainfall.storm_library.storm_library_algorithm import (
+    StormLibraryAlgorithm,
 )
 
 
@@ -90,3 +96,5 @@ class MayimToolsProvider(QgsProcessingProvider):
         self.addAlgorithm(Netcdf4ListVariablesAlgorithm())
         self.addAlgorithm(design_storm_ensembles_algo.DesignStormEnsembleAlgorithm())
         self.addAlgorithm(Era5ExtractAlgorithm())
+        self.addAlgorithm(catchment_delineation_algo.CatchmentDelineationAlgorithm())
+        self.addAlgorithm(StormLibraryAlgorithm())

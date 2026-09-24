@@ -37,7 +37,7 @@ def test_provider_registers_seven_algorithms() -> None:
     provider = loaded_provider()
 
     algorithms = provider.algorithms()
-    assert len(algorithms) == 16
+    assert len(algorithms) == 18
 
     by_name = {algorithm.name(): algorithm for algorithm in algorithms}
 
@@ -58,6 +58,8 @@ def test_provider_registers_seven_algorithms() -> None:
         "generate_design_storm_ensembles",
         "d8_flow_accumulation",
         "era5_point_extract",
+        "catchment_delineation",
+        "storm_library_ddf_check",
     }
 
     expected = {
@@ -138,6 +140,16 @@ def test_provider_registers_seven_algorithms() -> None:
         ),
         "era5_point_extract": (
             "Extract: ERA5 precipitation",
+            "Rainfall Tools",
+            "rainfall_tools",
+        ),
+        "catchment_delineation": (
+            "Catchment Delineation",
+            "Hydrological Tools",
+            "hydrological_tools",
+        ),
+        "storm_library_ddf_check": (
+            "Storm Library & DDF Consistency Check",
             "Rainfall Tools",
             "rainfall_tools",
         ),

@@ -171,6 +171,13 @@ class ChirpsResult:
     urls_attempted_sample: list = field(
         default_factory=list
     )  # first few URLs, for diagnosing a wrong pattern
+    requested_lat: float | None = None  # the point actually asked for
+    requested_lon: float | None = None
+    matched_lat: float | None = None  # centre of the pixel actually read
+    matched_lon: float | None = None
+    distance_km: float | None = (
+        None  # requested point -> matched pixel centre, see _approx_distance_km
+    )
 
 
 def _pentad_periods(start: date, end: date):
@@ -257,17 +264,28 @@ def _ensure_vsicurl_env():
         _env_applied = True
 
 
-def read_point_value(url: str, lat: float, lon: float) -> float:
-    """Reads a single pixel value from a remote GeoTIFF/COG via GDAL's
-    HTTP range-request support (/vsicurl/) - fetches only the file
-    header and the tile/strip containing the target pixel, not the
-    whole global raster. Applies the VSICURL_ENV_OPTIONS tuning once
-    per process (see module docstring's PERFORMANCE section) rather
-    than per-call.
+def _read_pixel(url: str, lat: float, lon: float) -> tuple[float, float, float]:
+    """Shared implementation behind read_point_value() and
+    read_point_value_with_center() - reads a single pixel value from a
+    remote GeoTIFF/COG via GDAL's HTTP range-request support
+    (/vsicurl/), fetching only the file header and the tile/strip
+    containing the target pixel, not the whole global raster. Applies
+    the VSICURL_ENV_OPTIONS tuning once per process (see module
+    docstring's PERFORMANCE section) rather than per-call.
+
+    Also returns the MATCHED pixel's own centre coordinate
+    (src.xy(row, col)) - the actual grid cell CHIRPS's raster snapped
+    the requested point to, since src.index() just finds whichever
+    pixel the point falls inside. Same purpose as ERA5's
+    matched_lat/matched_lon (see era5_extract/core.py) - computed for
+    free from the row/col already needed for the value read itself, no
+    extra network round-trip.
 
     The out-of-bounds check wraps the actual read in a try/except as a
     safety net, not just a row/col range comparison beforehand - see
     tests/test_core.py for why.
+
+    Returns (value, matched_lat, matched_lon).
     """
     import rasterio
 
@@ -287,10 +305,33 @@ def read_point_value(url: str, lat: float, lon: float) -> float:
             raise ValueError(
                 f"Point ({lat}, {lon}) is outside the raster's extent."
             ) from None
+        matched_lon, matched_lat = src.xy(row, col)
         nodata = src.nodata
         if nodata is not None and value == nodata:
-            return float("nan")
-        return float(value)
+            value = float("nan")
+        else:
+            value = float(value)
+        return value, float(matched_lat), float(matched_lon)
+
+
+def read_point_value(url: str, lat: float, lon: float) -> float:
+    """Reads a single pixel value only - see _read_pixel() for the
+    full implementation. Kept as a simple, stable single-value
+    contract for direct/standalone use; fetch_chirps_timeseries itself
+    defaults to read_point_value_with_center so it can also expose the
+    matched grid cell (see ChirpsResult.matched_lat/matched_lon)."""
+    value, _matched_lat, _matched_lon = _read_pixel(url, lat, lon)
+    return value
+
+
+def read_point_value_with_center(
+    url: str, lat: float, lon: float
+) -> tuple[float, float, float]:
+    """Same read as read_point_value(), but also returns the matched
+    pixel's own centre coordinate. Returns
+    (value, matched_lat, matched_lon). Used as fetch_chirps_timeseries's
+    default read_fn."""
+    return _read_pixel(url, lat, lon)
 
 
 def fetch_chirps_timeseries(
@@ -300,7 +341,7 @@ def fetch_chirps_timeseries(
     end_date: date | str | None = None,
     product: str = "pentad",
     progress_callback: Callable[[int], None] | None = None,
-    read_fn: Callable = read_point_value,
+    read_fn: Callable = read_point_value_with_center,
     max_workers: int = DEFAULT_MAX_WORKERS,
 ) -> ChirpsResult:
     """Orchestrates fetching every period in [start_date, end_date] for
@@ -310,7 +351,13 @@ def fetch_chirps_timeseries(
     parallelizes well. read_fn is injectable so the orchestration
     logic (concurrency, retry/error isolation per-file, progress
     reporting, DataFrame assembly, sort-back-into-date-order) can be
-    fully unit-tested without any real network access.
+    fully unit-tested without any real network access. read_fn must
+    return (value, matched_lat, matched_lon) - see
+    read_point_value_with_center(). The matched grid cell is the same
+    for every date (same fixed raster grid), so it's only captured
+    once, from the first successful read - see ChirpsResult.matched_lat/
+    matched_lon and the 'matched to the nearest grid cell' warning
+    below, same treatment as the ERA5 extractor's.
 
     start_date/end_date: None on either end means the full available
     record for that product. For pentad/monthly/daily_rnl that's
@@ -356,15 +403,20 @@ def fetch_chirps_timeseries(
     n = len(urls_and_dates)
     completed = 0
     completed_lock = threading.Lock()
+    matched_lat = None
+    matched_lon = None
+    matched_lock = threading.Lock()
 
     def _fetch_one(url_and_date):
         url, period_date = url_and_date
         try:
-            value = read_fn(url, lat, lon)
-            return (period_date, value, None)
+            value, m_lat, m_lon = read_fn(url, lat, lon)
+            return (period_date, value, m_lat, m_lon, None)
         except Exception as e:
             return (
                 period_date,
+                None,
+                None,
                 None,
                 f"{period_date}: failed ({type(e).__name__}: {e}) - URL: {url}",
             )
@@ -373,11 +425,13 @@ def fetch_chirps_timeseries(
         # serial fallback (also avoids ThreadPoolExecutor overhead for
         # tiny requests, e.g. short single-month test ranges)
         results = [_fetch_one(ud) for ud in urls_and_dates]
-        for period_date, value, warning in results:
+        for period_date, value, m_lat, m_lon, warning in results:
             if warning:
                 warnings.append(warning)
             else:
                 rows.append({"Date": period_date, "PrecipitationMM": value})
+                if matched_lat is None:
+                    matched_lat, matched_lon = m_lat, m_lon
             completed += 1
             if progress_callback:
                 progress_callback(int(100 * completed / max(n, 1)))
@@ -385,11 +439,14 @@ def fetch_chirps_timeseries(
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {executor.submit(_fetch_one, ud): ud for ud in urls_and_dates}
             for future in as_completed(futures):
-                period_date, value, warning = future.result()
+                period_date, value, m_lat, m_lon, warning = future.result()
                 if warning:
                     warnings.append(warning)
                 else:
                     rows.append({"Date": period_date, "PrecipitationMM": value})
+                    with matched_lock:
+                        if matched_lat is None:
+                            matched_lat, matched_lon = m_lat, m_lon
                 with completed_lock:
                     completed += 1
                     pct = int(100 * completed / max(n, 1))
@@ -414,11 +471,26 @@ def fetch_chirps_timeseries(
     # order under concurrency is nondeterministic
     warnings_sorted = sorted(warnings, key=lambda w: w.split(":")[0])
 
+    distance_km = None
+    if matched_lat is not None and matched_lon is not None:
+        distance_km = _approx_distance_km(lat, lon, matched_lat, matched_lon)
+        grid_warning = (
+            f"Requested point ({lat:.4f}, {lon:.4f}) was matched to the "
+            f"nearest grid cell ({matched_lat:.4f}, {matched_lon:.4f}), "
+            f"approximately {distance_km:.1f} km away."
+        )
+        warnings_sorted.insert(0, grid_warning)
+
     return ChirpsResult(
         dataframe=df,
         warnings=warnings_sorted,
         product=product,
         urls_attempted_sample=[u for u, _ in urls_and_dates[:3]],
+        requested_lat=lat,
+        requested_lon=lon,
+        matched_lat=matched_lat,
+        matched_lon=matched_lon,
+        distance_km=distance_km,
     )
 
 
@@ -426,3 +498,16 @@ def _to_date(value) -> date:
     if isinstance(value, date):
         return value
     return pd.Timestamp(value).date()
+
+
+def _approx_distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """A simple planar approximation, adequate for reporting a small
+    (sub-grid-cell) nearest-neighbour offset - not intended for
+    anything requiring genuine geodesic accuracy. Same implementation
+    as era5_extract/core.py's own _approx_distance_km (each tool's
+    core.py is self-contained, no cross-package imports)."""
+    import math
+
+    lat_km = (lat2 - lat1) * 111.0
+    lon_km = (lon2 - lon1) * 111.0 * math.cos(math.radians((lat1 + lat2) / 2))
+    return math.hypot(lat_km, lon_km)
