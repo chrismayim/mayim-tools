@@ -67,23 +67,53 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-# Direction order: NE, E, SE, S, SW, W, NW, N - identical to this suite's
-# d8_flow_direction / d8_flow_accumulation tools.
-D_ROW = np.array([-1, 0, 1, 1, 1, 0, -1, -1], dtype=np.int64)
-D_COL = np.array([1, 1, 1, 0, -1, -1, -1, 0], dtype=np.int64)
-
-POINTER_VALS_DEFAULT = np.array([1, 2, 4, 8, 16, 32, 64, 128], dtype=np.int64)
-POINTER_VALS_ESRI = np.array([128, 1, 2, 4, 8, 16, 32, 64], dtype=np.int64)
+from mayim_tools.hydrology._common.d8_network import (  # noqa: F401 - re-exported
+    D_COL,
+    D_ROW,
+    MAX_DOUBLING_ITERATIONS,
+    POINTER_VALS_DEFAULT,
+    POINTER_VALS_ESRI,
+    GridError,
+    bifurcation_ratio,
+    build_downstream_index,
+    cell_center,
+    check_geotransform,
+    check_same_grid,
+    flow_accumulation_cells,
+    nodata_mask,
+    pointer_to_direction_index,
+    read_raster,
+    resolve_terminals,
+    segment_starts,
+    snap_to_max_accumulation,
+    step_lengths,
+    strahler_order,
+    stream_links,
+    stream_order_summary,
+    world_to_cell,
+    write_raster,
+)
+from mayim_tools.hydrology._common.grid_polygons import (  # noqa: F401 - re-exported
+    _point_in_ring,
+    _ring_signed_area_idx,
+    _winding_fill,
+    fill_holes,
+    group_polygons,
+    ring_length,
+    ring_to_map,
+    rings_to_multipolygon_wkt,
+    simplify_ring,
+    split_ring,
+    trace_rings,
+)
 
 VALID_MODES = ("total", "incremental")
 DEFAULT_DEM_NODATA = -9999.0
-MAX_DOUBLING_ITERATIONS = 64
-MAX_HOLE_FILL_PASSES = 20
 HYPSOMETRIC_STEPS = 21  # relative heights 0.00, 0.05, ... 1.00
 
-
-class CatchmentError(ValueError):
-    """Raised for invalid inputs (mismatched grids, bad mode, etc.)."""
+# Raised for invalid inputs (mismatched grids, bad mode, etc.). The same
+# class as the shared module's GridError, so either name catches both.
+CatchmentError = GridError
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +156,9 @@ class DelineationResult:
     dem_geotransform: tuple | None = None
     dem_nodata: float = DEFAULT_DEM_NODATA
     warnings: list[str] = field(default_factory=list)
+    # (outlet id, flat cell indices) of every placed outlet - lets the
+    # Stream Network core extract the same network upstream of them
+    outlet_cells: list = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -133,191 +166,14 @@ class DelineationResult:
 # ---------------------------------------------------------------------------
 
 
-def check_geotransform(geotransform) -> tuple[float, float]:
-    """Returns positive (cell_size_x, cell_size_y); rejects rotated grids."""
-    if abs(geotransform[2]) > 0 or abs(geotransform[4]) > 0:
-        raise CatchmentError(
-            "Rotated/sheared rasters are not supported - warp the DEM and "
-            "pointer to a north-up grid first."
-        )
-    sx, sy = abs(float(geotransform[1])), abs(float(geotransform[5]))
-    if sx <= 0 or sy <= 0:
-        raise CatchmentError("Invalid raster cell size in geotransform.")
-    return sx, sy
-
-
-def check_same_grid(shape_a, gt_a, shape_b, gt_b) -> None:
-    """The pointer and DEM must share exactly the same grid."""
-    if tuple(shape_a) != tuple(shape_b):
-        raise CatchmentError(
-            f"D8 pointer ({shape_a[1]} x {shape_a[0]} cells) and DEM "
-            f"({shape_b[1]} x {shape_b[0]} cells) are not on the same grid. "
-            "Build the pointer from this DEM with the D8 Flow Direction tool."
-        )
-    tol = 1e-6 * max(abs(gt_a[1]), abs(gt_a[5]))
-    for i in range(6):
-        if abs(float(gt_a[i]) - float(gt_b[i])) > tol:
-            raise CatchmentError(
-                "D8 pointer and DEM have different extents or cell sizes. "
-                "Build the pointer from this DEM with the D8 Flow Direction tool."
-            )
-
-
-def world_to_cell(x: float, y: float, geotransform) -> tuple[int, int]:
-    col = math.floor((x - geotransform[0]) / geotransform[1])
-    row = math.floor((y - geotransform[3]) / geotransform[5])
-    return int(row), int(col)
-
-
-def cell_center(row, col, geotransform):
-    x = geotransform[0] + (np.asarray(col) + 0.5) * geotransform[1]
-    y = geotransform[3] + (np.asarray(row) + 0.5) * geotransform[5]
-    return x, y
-
-
-def nodata_mask(array: np.ndarray, nodata_value) -> np.ndarray:
-    mask = np.isnan(array) if np.issubdtype(array.dtype, np.floating) else None
-    if mask is None:
-        mask = np.zeros(array.shape, dtype=bool)
-    if nodata_value is not None and not np.isnan(nodata_value):
-        mask |= array == nodata_value
-    return mask
-
-
 # ---------------------------------------------------------------------------
 # Pointer decoding and flow network
 # ---------------------------------------------------------------------------
 
 
-def pointer_to_direction_index(
-    pointer: np.ndarray, pointer_nodata, esri_style: bool = False
-) -> tuple[np.ndarray, int]:
-    """Maps pointer codes to 0-7 (D_ROW/D_COL order), -1 (pit, code 0)
-    or -2 (NoData/invalid). Returns (direction_index, n_invalid)."""
-    pointer = np.asarray(pointer)
-    pointer_vals = POINTER_VALS_ESRI if esri_style else POINTER_VALS_DEFAULT
-    is_nodata = nodata_mask(pointer.astype(np.float64), pointer_nodata)
-
-    direction_index = np.full(pointer.shape, -2, dtype=np.int8)
-    recognised = np.zeros(pointer.shape, dtype=bool)
-    for i, val in enumerate(pointer_vals):
-        hit = (pointer == val) & ~is_nodata
-        direction_index[hit] = i
-        recognised |= hit
-    pit = (pointer == 0) & ~is_nodata
-    direction_index[pit] = -1
-    recognised |= pit
-
-    invalid = ~recognised & ~is_nodata
-    return direction_index, int(invalid.sum())
-
-
-def build_downstream_index(direction_index: np.ndarray) -> np.ndarray:
-    """Flat downstream index per cell. A cell is its own downstream
-    (a terminal) if it is a pit, NoData, or drains off the grid or into
-    NoData."""
-    rows, cols = direction_index.shape
-    n = rows * cols
-    idx = np.arange(n, dtype=np.int64)
-    nxt = idx.copy()
-    flat_dir = direction_index.ravel()
-    src = idx[flat_dir >= 0]
-    d = flat_dir[src].astype(np.int64)
-    rr = src // cols + D_ROW[d]
-    cc = src % cols + D_COL[d]
-    inside = (rr >= 0) & (rr < rows) & (cc >= 0) & (cc < cols)
-    tgt = rr[inside] * cols + cc[inside]
-    ok = flat_dir[tgt] != -2
-    nxt[src[inside][ok]] = tgt[ok]
-    return nxt
-
-
-def step_lengths(direction_index: np.ndarray, sx: float, sy: float) -> np.ndarray:
-    """Flat D8 step length (m) from each cell to its downstream cell."""
-    diag = math.hypot(sx, sy)
-    # NE, E, SE, S, SW, W, NW, N
-    per_dir = np.array([diag, sx, diag, sy, diag, sx, diag, sy])
-    flat_dir = direction_index.ravel()
-    out = np.zeros(flat_dir.shape, dtype=np.float64)
-    valid = flat_dir >= 0
-    out[valid] = per_dir[flat_dir[valid]]
-    return out
-
-
-def resolve_terminals(
-    nxt: np.ndarray, weights: np.ndarray | None = None
-) -> tuple[np.ndarray, np.ndarray | None, np.ndarray]:
-    """Pointer doubling: for every cell, the terminal it drains to and
-    (optionally) the summed weights along the way.
-
-    Terminals must satisfy nxt[t] == t and must carry weight 0 (the
-    caller zeroes them). Returns (terminal, distance, unresolved) where
-    ``unresolved`` flags cells that never reach a terminal - only
-    possible when the pointer contains a flow loop."""
-    jump = nxt.copy()
-    dist = None
-    if weights is not None:
-        dist = np.asarray(weights, dtype=np.float64).copy()
-        dist[jump == np.arange(jump.size)] = 0.0
-    for _ in range(MAX_DOUBLING_ITERATIONS):
-        new_jump = jump[jump]
-        if dist is not None:
-            dist = dist + dist[jump]
-        if np.array_equal(new_jump, jump):
-            break
-        jump = new_jump
-    unresolved = nxt[jump] != jump  # not a genuine terminal: a flow loop
-    return jump, dist, unresolved
-
-
-def flow_accumulation_cells(
-    nxt: np.ndarray, valid: np.ndarray
-) -> tuple[np.ndarray, int]:
-    """Upstream cell count (each cell counts itself, as in WhiteboxTools).
-    ``valid`` is a flat bool array. Returns (accumulation, n_loop_cells)."""
-    n = nxt.size
-    idx = np.arange(n, dtype=np.int64)
-    moves = nxt != idx
-    _, depth, unresolved = resolve_terminals(nxt, moves.astype(np.float64))
-    acc = np.where(valid, 1.0, np.nan)
-
-    cells = np.flatnonzero(valid & moves & ~unresolved)
-    if cells.size:
-        order = cells[np.argsort(-depth[cells], kind="stable")]
-        d_sorted = depth[order]
-        splits = np.flatnonzero(np.diff(d_sorted)) + 1
-        for group in np.split(order, splits):
-            np.add.at(acc, nxt[group], acc[group])
-    return acc, int((unresolved & valid).sum())
-
-
 # ---------------------------------------------------------------------------
 # Outlet placement
 # ---------------------------------------------------------------------------
-
-
-def snap_to_max_accumulation(
-    row: int, col: int, acc: np.ndarray, radius_cells: int
-) -> tuple[int, int] | None:
-    """Cell with the highest accumulation within ``radius_cells`` (circular
-    search) of (row, col). Ties go to the nearest cell. None if no valid
-    cell is in range."""
-    rows, cols = acc.shape
-    radius_cells = max(int(radius_cells), 0)
-    r0, r1 = max(row - radius_cells, 0), min(row + radius_cells + 1, rows)
-    c0, c1 = max(col - radius_cells, 0), min(col + radius_cells + 1, cols)
-    if r0 >= r1 or c0 >= c1:
-        return None
-    window = acc[r0:r1, c0:c1]
-    rr, cc = np.mgrid[r0:r1, c0:c1]
-    d2 = (rr - row) ** 2 + (cc - col) ** 2
-    ok = (d2 <= radius_cells**2) & ~np.isnan(window)
-    if not ok.any():
-        return None
-    best = np.nanmax(np.where(ok, window, -np.inf))
-    cand = ok & (window == best)
-    pick = np.argmin(np.where(cand, d2, np.iinfo(np.int64).max))
-    return int(rr.ravel()[pick]), int(cc.ravel()[pick])
 
 
 def line_cells(
@@ -369,219 +225,10 @@ def line_cells(
 
 
 # ---------------------------------------------------------------------------
-# Boundary tracing, hole filling and polygon output
+# Boundary tracing, hole filling and polygon output - shared implementation
+# lives in hydrology/_common/grid_polygons.py (imported at the top of this
+# module and re-exported, so existing imports of these names keep working).
 # ---------------------------------------------------------------------------
-
-
-def _ring_signed_area_idx(ring: Sequence[tuple[int, int]]) -> float:
-    """Shoelace area in index space (x = col, y = row, y pointing down).
-    Outer rings (anticlockwise on the map) come out NEGATIVE here."""
-    a = np.asarray(ring, dtype=np.float64)
-    x, y = a[:, 0], a[:, 1]
-    return 0.5 * float(np.sum(x[:-1] * y[1:] - x[1:] * y[:-1]))
-
-
-def trace_rings(
-    mask: np.ndarray, join_diagonals: bool = False
-) -> list[list[tuple[int, int]]]:
-    """Traces the cell boundaries of a bool mask into closed rings of
-    corner vertices (x = col, y = row, both integer), with the mask kept
-    on the left when viewed on the map (outer rings anticlockwise, hole
-    rings clockwise).
-
-    Where cells touch only at a corner, the default splits them (left
-    turn), which gives rings that form a valid MultiPolygon.
-    ``join_diagonals=True`` turns right instead, treating the mask as
-    8-connected - used to find every enclosed hole."""
-    m = np.pad(np.asarray(mask, dtype=bool), 1)
-    inner = m[1:-1, 1:-1]
-    starts: list[np.ndarray] = []
-    ends: list[np.ndarray] = []
-    # bottom edge, heading east
-    r, c = np.nonzero(inner & ~m[2:, 1:-1])
-    starts.append(np.stack([c, r + 1], 1))
-    ends.append(np.stack([c + 1, r + 1], 1))
-    # right edge, heading north
-    r, c = np.nonzero(inner & ~m[1:-1, 2:])
-    starts.append(np.stack([c + 1, r + 1], 1))
-    ends.append(np.stack([c + 1, r], 1))
-    # top edge, heading west
-    r, c = np.nonzero(inner & ~m[:-2, 1:-1])
-    starts.append(np.stack([c + 1, r], 1))
-    ends.append(np.stack([c, r], 1))
-    # left edge, heading south
-    r, c = np.nonzero(inner & ~m[1:-1, :-2])
-    starts.append(np.stack([c, r], 1))
-    ends.append(np.stack([c, r + 1], 1))
-
-    s = np.concatenate(starts).tolist()
-    e = np.concatenate(ends).tolist()
-    out_edges: dict[tuple[int, int], list[int]] = {}
-    for i, v in enumerate(s):
-        out_edges.setdefault(tuple(v), []).append(i)
-
-    used = [False] * len(s)
-    rings = []
-    for first in range(len(s)):
-        if used[first]:
-            continue
-        ring = [tuple(s[first])]
-        cur = first
-        while True:
-            used[cur] = True
-            end = tuple(e[cur])
-            ring.append(end)
-            options = out_edges[end]
-            if len(options) == 1:
-                nxt_edge = options[0]
-            else:
-                dx, dy = end[0] - s[cur][0], end[1] - s[cur][1]
-                # left (split) or right (join) turn on the map, in index space
-                turn = (-dy, dx) if join_diagonals else (dy, -dx)
-                nxt_edge = next(
-                    o for o in options if (e[o][0] - s[o][0], e[o][1] - s[o][1]) == turn
-                )
-            if nxt_edge == first:
-                break
-            cur = nxt_edge
-        rings.append(ring)
-    return rings
-
-
-def _winding_fill(rings, shape) -> np.ndarray:
-    """Cells enclosed by any of the rings (non-zero winding)."""
-    rows, cols = shape
-    toggle = np.zeros((rows, cols + 1), dtype=np.int32)
-    for ring in rings:
-        a = np.asarray(ring, dtype=np.int64)
-        x0, y0, y1 = a[:-1, 0], a[:-1, 1], a[1:, 1]
-        vertical = y0 != y1
-        sign = np.where(y1[vertical] > y0[vertical], 1, -1)
-        np.add.at(
-            toggle, (np.minimum(y0, y1)[vertical], x0[vertical]), sign.astype(np.int32)
-        )
-    return np.cumsum(toggle, axis=1)[:, :cols] != 0
-
-
-def fill_holes(
-    mask: np.ndarray, keep_out: np.ndarray | None = None
-) -> tuple[np.ndarray, list[list[tuple[int, int]]]]:
-    """Fills interior holes: background cells that are not 4-connected to
-    the outside, i.e. enclosed by the (8-connected) catchment - including
-    holes closed off only by corner contacts. Cells flagged in
-    ``keep_out`` (e.g. a nested upstream sub-catchment in incremental
-    mode) are never filled and stay as real holes.
-
-    Returns (filled_mask, rings_of_filled_mask): outer rings anticlockwise
-    and any remaining hole rings clockwise on the map, diagonal contacts
-    split - see group_polygons()."""
-    filled = np.asarray(mask, dtype=bool).copy()
-    allowed = None if keep_out is None else ~np.asarray(keep_out, dtype=bool)
-    for _ in range(MAX_HOLE_FILL_PASSES):
-        rings = trace_rings(filled, join_diagonals=True)
-        holes = [r for r in rings if _ring_signed_area_idx(r) > 0]
-        if not holes:
-            break
-        inside = _winding_fill(holes, filled.shape)
-        if allowed is not None:
-            inside &= allowed
-        if not (inside & ~filled).any():
-            break
-        filled |= inside
-    return filled, trace_rings(filled)
-
-
-def _point_in_ring(px: float, py: float, ring) -> bool:
-    """Even-odd ray casting."""
-    a = np.asarray(ring, dtype=np.float64)
-    x0, y0, x1, y1 = a[:-1, 0], a[:-1, 1], a[1:, 0], a[1:, 1]
-    crosses = (y0 > py) != (y1 > py)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        xc = x0 + (py - y0) * (x1 - x0) / (y1 - y0)
-    return bool(np.sum(crosses & (px < xc)) % 2)
-
-
-def split_ring(ring) -> list[list[tuple[int, int]]]:
-    """Splits a closed ring that passes through the same vertex more than
-    once into simple closed loops (they touch only at those vertices)."""
-    loops = []
-    path: list[tuple[int, int]] = []
-    position: dict[tuple[int, int], int] = {}
-    for v in ring[:-1]:
-        if v in position:
-            i = position[v]
-            loop = path[i:] + [v]
-            loops.append(loop)
-            for u in path[i + 1 :]:
-                position.pop(u, None)
-            path = path[: i + 1]
-        else:
-            position[v] = len(path)
-            path.append(v)
-    loops.append(path + [path[0]])
-    return [lp for lp in loops if len(lp) >= 4]
-
-
-def group_polygons(rings) -> list[list[list[tuple[int, int]]]]:
-    """Groups traced rings into polygons: [outer, hole, hole, ...] each.
-    Self-touching rings are first split into simple loops, so every ring
-    is simple (OGC-valid). Every hole goes to the smallest outer ring that
-    contains it."""
-    rings = [loop for r in rings for loop in split_ring(r)]
-    outers = [r for r in rings if _ring_signed_area_idx(r) < 0]
-    holes = [r for r in rings if _ring_signed_area_idx(r) > 0]
-    polygons = [[r] for r in outers]
-    areas = [-_ring_signed_area_idx(r) for r in outers]
-    for hole in holes:
-        (x0, y0), (x1, y1) = hole[0], hole[1]
-        dx, dy = x1 - x0, y1 - y0
-        # a point just inside the hole (to the right of the edge on the map)
-        px, py = 0.5 * (x0 + x1) - 0.25 * dy, 0.5 * (y0 + y1) + 0.25 * dx
-        owners = [i for i, o in enumerate(outers) if _point_in_ring(px, py, o)]
-        if owners:
-            polygons[min(owners, key=lambda i: areas[i])].append(hole)
-    return polygons
-
-
-def simplify_ring(ring: Sequence[tuple[int, int]]) -> list[tuple[int, int]]:
-    """Drops collinear vertices from a closed rectilinear ring."""
-    pts = list(ring[:-1])
-    n = len(pts)
-    keep = []
-    for i in range(n):
-        p0, p1, p2 = pts[i - 1], pts[i], pts[(i + 1) % n]
-        d1 = (p1[0] - p0[0], p1[1] - p0[1])
-        d2 = (p2[0] - p1[0], p2[1] - p1[1])
-        if d1[0] * d2[1] - d1[1] * d2[0] != 0:
-            keep.append(p1)
-    keep.append(keep[0])
-    return keep
-
-
-def ring_to_map(ring, geotransform, row_off: int = 0, col_off: int = 0):
-    return [
-        (
-            geotransform[0] + (col_off + vx) * geotransform[1],
-            geotransform[3] + (row_off + vy) * geotransform[5],
-        )
-        for vx, vy in ring
-    ]
-
-
-def rings_to_multipolygon_wkt(polygons_map) -> str:
-    """WKT for a list of polygons, each a list of rings (outer first)."""
-    parts = []
-    for polygon in polygons_map:
-        rings = []
-        for ring in polygon:
-            rings.append("(" + ", ".join(f"{x!r} {y!r}" for x, y in ring) + ")")
-        parts.append("(" + ", ".join(rings) + ")")
-    return "MULTIPOLYGON (" + ", ".join(parts) + ")"
-
-
-def ring_length(ring_map) -> float:
-    a = np.asarray(ring_map, dtype=np.float64)
-    return float(np.sum(np.hypot(np.diff(a[:, 0]), np.diff(a[:, 1]))))
 
 
 # ---------------------------------------------------------------------------
@@ -657,129 +304,6 @@ def aspect_distribution(aspect: np.ndarray, slope: np.ndarray) -> list[dict]:
     ]
     out.append({"label": "Flat", "pct": 100.0 * float(np.sum(flat)) / n})
     return out
-
-
-def strahler_order(local_next: np.ndarray, stream: np.ndarray) -> np.ndarray:
-    """Strahler (1957) order of every stream cell (0 elsewhere), on a
-    network given by ``local_next`` (flat downstream index, terminals point
-    to themselves). A cell's order is the largest inflowing order, plus one
-    where two or more inflows share that largest order; headwater cells
-    are order 1. Cells are processed deepest-first: all inflows of a cell
-    sit exactly one D8 step further from the terminal, so they are
-    resolved together, before the cell itself."""
-    n = local_next.size
-    idx = np.arange(n, dtype=np.int64)
-    moves = local_next != idx
-    _, depth, _ = resolve_terminals(local_next, moves.astype(np.float64))
-    order = np.zeros(n, dtype=np.int32)
-    max_in = np.zeros(n, dtype=np.int32)
-    n_max = np.zeros(n, dtype=np.int32)
-    cells = np.flatnonzero(stream)
-    if cells.size == 0:
-        return order
-    cells = cells[np.argsort(-depth[cells], kind="stable")]
-    splits = np.flatnonzero(np.diff(depth[cells])) + 1
-    for group in np.split(cells, splits):
-        mi, nm = max_in[group], n_max[group]
-        order[group] = np.where(mi == 0, 1, np.where(nm >= 2, mi + 1, mi))
-        mv = group[moves[group]]
-        down = local_next[mv]
-        ok = stream[down]
-        mv, down = mv[ok], down[ok]
-        np.maximum.at(max_in, down, order[mv])
-        np.add.at(n_max, down, (order[mv] == max_in[down]).astype(np.int32))
-    order[~stream] = 0
-    return order
-
-
-def stream_order_summary(
-    order: np.ndarray, max_in: np.ndarray | None, local_next, step_len
-) -> list[dict]:
-    """Per-order stream count (segments) and length (km)."""
-    idx = np.arange(order.size)
-    moves = local_next != idx
-    rows = []
-    for u in range(1, int(order.max()) + 1 if order.size else 1):
-        cells = order == u
-        starts = cells & (max_in < u) if max_in is not None else cells
-        rows.append(
-            {
-                "order": u,
-                "n_segments": int(np.sum(starts)),
-                "length_km": float(np.sum(step_len[cells & moves])) / 1000.0,
-            }
-        )
-    return rows
-
-
-def segment_starts(local_next: np.ndarray, order: np.ndarray) -> np.ndarray:
-    """Largest inflowing stream order per cell (used to find where a
-    segment of a given order begins)."""
-    n = local_next.size
-    idx = np.arange(n)
-    src = np.flatnonzero((order > 0) & (local_next != idx))
-    max_in = np.zeros(n, dtype=np.int32)
-    down = local_next[src]
-    ok = order[down] > 0
-    np.maximum.at(max_in, down[ok], order[src][ok])
-    return max_in
-
-
-def stream_links(
-    local_next: np.ndarray,
-    stream: np.ndarray,
-    order: np.ndarray,
-    step_len: np.ndarray,
-) -> list[dict]:
-    """Splits the stream cells into links: runs of cells from a headwater
-    or junction down to the next junction (or the outlet). Each link keeps
-    one Strahler order. The junction cell is repeated as the link's last
-    vertex so consecutive links join up. Returns dicts with 1-based
-    ``link_id``, ``ds_link`` (None at the outlet), ``order``,
-    ``cells`` (local flat indices, upstream first), ``last_own`` (the
-    link's most downstream own cell) and ``length_m``."""
-    idx = np.arange(local_next.size)
-    moves = local_next != idx
-    src = np.flatnonzero(stream & moves)
-    down = local_next[src]
-    n_in = np.zeros(local_next.size, dtype=np.int32)
-    np.add.at(n_in, down[stream[down]], 1)
-    starts = np.flatnonzero(stream & (n_in != 1))
-    link_of = {int(s): i + 1 for i, s in enumerate(starts)}
-    links = []
-    for s in starts:
-        cells, length, cur, ds = [int(s)], 0.0, int(s), None
-        while True:
-            nx = int(local_next[cur])
-            if nx == cur or not stream[nx]:
-                break
-            length += float(step_len[cur])
-            cells.append(nx)
-            if n_in[nx] != 1:
-                ds = link_of[nx]
-                break
-            cur = nx
-        links.append(
-            {
-                "link_id": link_of[int(s)],
-                "ds_link": ds,
-                "order": int(order[s]),
-                "cells": cells,
-                "last_own": cells[-2] if ds is not None else cells[-1],
-                "length_m": length,
-            }
-        )
-    return links
-
-
-def bifurcation_ratio(summary: list[dict]) -> float | None:
-    """Mean of N_u / N_(u+1) over consecutive orders (Strahler 1964)."""
-    ratios = [
-        a["n_segments"] / b["n_segments"]
-        for a, b in zip(summary[:-1], summary[1:], strict=True)
-        if a["n_segments"] > 0 and b["n_segments"] > 0
-    ]
-    return float(np.mean(ratios)) if ratios else None
 
 
 def average_slope(x: np.ndarray, z: np.ndarray) -> float | None:
@@ -1023,6 +547,9 @@ def delineate_catchments(
         meta.append(info)
 
     n_out = len(outlets)
+    result.outlet_cells = [
+        (o.outlet_id, flat) for o, flat in zip(outlets, seeds_all, strict=True)
+    ]
     seed_owner = np.zeros(nxt.size, dtype=np.int32)  # 0 = none, k+1 = outlet k
     parents: list[set[int]] = [set() for _ in range(n_out)]
     for k, flat in enumerate(seeds_all):
@@ -1421,43 +948,3 @@ def delineate_catchments(
 # ---------------------------------------------------------------------------
 # File I/O (GDAL - bundled with QGIS)
 # ---------------------------------------------------------------------------
-
-
-def read_raster(path: str):
-    """First band as an array, plus geotransform, projection and NoData."""
-    from osgeo import gdal
-
-    gdal.UseExceptions()
-    ds = gdal.Open(path)
-    if ds is None:
-        raise CatchmentError(f"Could not open raster: {path}")
-    band = ds.GetRasterBand(1)
-    array = band.ReadAsArray()
-    nodata_value = band.GetNoDataValue()
-    if nodata_value is None:
-        nodata_value = np.nan
-    geotransform = ds.GetGeoTransform()
-    projection = ds.GetProjection()
-    ds = None
-    return array, geotransform, projection, nodata_value
-
-
-def write_raster(
-    path: str, array: np.ndarray, geotransform, projection: str, nodata: float
-) -> None:
-    """Writes a float32 GeoTIFF (LZW compressed)."""
-    from osgeo import gdal
-
-    gdal.UseExceptions()
-    rows, cols = array.shape
-    driver = gdal.GetDriverByName("GTiff")
-    out_ds = driver.Create(
-        path, cols, rows, 1, gdal.GDT_Float32, options=["COMPRESS=LZW", "TILED=YES"]
-    )
-    out_ds.SetGeoTransform(tuple(geotransform))
-    out_ds.SetProjection(projection)
-    band = out_ds.GetRasterBand(1)
-    band.WriteArray(array.astype(np.float32))
-    band.SetNoDataValue(float(nodata))
-    band.FlushCache()
-    out_ds = None

@@ -98,7 +98,10 @@ def load_ddf_table(path, duration_col=None):
         if col == duration_col:
             continue
         m = ARI_COL_RE.search(str(col))
-        if m:
+        # central estimates only - '<T>yr Lower/Upper (mm)' bound columns
+        # (Design Rainfall and Precipitation data to DDF layouts) are not
+        # depths and must not be read as extra return-period columns
+        if m and not re.search(r"\b(lower|upper)\b", str(col), re.IGNORECASE):
             ari_cols.append((col, float(m.group(1))))
 
     if not ari_cols:
@@ -271,6 +274,29 @@ def _weiss(n):
     return 1.0 / (1.0 - 1.0 / (8.0 * n))
 
 
+_MAP_RE = re.compile(r"^\s*map\b", re.IGNORECASE)
+
+
+def _find_map(pre_rows, header, table_df):
+    """Mean annual precipitation carried by the DDF file, if any: a
+    'MAP (mm)' column in the table itself (multi-site Design Rainfall
+    layout, first row of the chosen site) or in the location block above
+    the table (single-site layout, value in the next row). None if the
+    file carries no MAP."""
+    col = next((c for c in header if _MAP_RE.search(c)), None)
+    if col is not None and len(table_df):
+        v = pd.to_numeric(table_df[col].iloc[0], errors="coerce")
+        if pd.notna(v):
+            return float(v)
+    for i, r in enumerate(pre_rows[:-1]):
+        for j, c in enumerate(r):
+            if _MAP_RE.search(str(c)) and j < len(pre_rows[i + 1]):
+                v = pd.to_numeric(pre_rows[i + 1][j], errors="coerce")
+                if pd.notna(v):
+                    return float(v)
+    return None
+
+
 def read_ddf_csv(path, site=None, fixed_day_to_continuous=True):
     """Read a DDF table in any of the layouts this suite writes, and
     return (long_df, info).
@@ -296,7 +322,8 @@ def read_ddf_csv(path, site=None, fixed_day_to_continuous=True):
 
     long_df columns: duration_min, duration_label, ari_years,
     aep_percent (= 100/T, annual-maximum convention), depth_mm,
-    lower_mm, upper_mm, fixed_day_factor."""
+    lower_mm, upper_mm, fixed_day_factor. info['map_mm'] is the file's
+    mean annual precipitation (Design Rainfall layouts) or None."""
     with open(path, encoding="utf-8-sig", newline="") as f:
         lines = f.read().splitlines()
 
@@ -409,4 +436,5 @@ def read_ddf_csv(path, site=None, fixed_day_to_continuous=True):
     if long_df.empty:
         raise ValueError("Reference DDF parsed to zero usable rows.")
     info["has_bounds"] = bool(long_df["lower_mm"].notna().any())
+    info["map_mm"] = _find_map(rows[:header_i], header, df)
     return long_df, info

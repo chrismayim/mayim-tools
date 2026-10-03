@@ -646,17 +646,25 @@ def test_write_recommended_ddf_no_blank_rows_regardless_of_which_distribution_wi
     df = pd.DataFrame({"Time": idx, "Depth": depths})
 
     result = run_frequency_analysis(df, "Time", "Depth")
-    recommended_dists = {r.recommended_distribution for r in result.recommendations}
-    assert "GUMBEL" in recommended_dists, (
-        "this test's synthetic data should produce at least one Gumbel-recommended "
-        "duration to actually exercise the bug - if this assertion itself fails, "
-        "the test data needs adjusting, not the pipeline"
-    )
+    # (Gumbel no longer "wins" this sample since the ratio-diagram fix that
+    # measures Gumbel's distance in both tau3 and tau4; the name
+    # normalisation itself is covered by the unit test above, and the
+    # per-duration best-fit writer is checked for blanks below too.)
 
     import tempfile
 
     with tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w") as f:
         path = f.name
+    from mayim_tools.rainfall._common.rfa.export import (
+        write_per_duration_best_fit_ddf,
+    )
+
+    write_per_duration_best_fit_ddf(result, path)
+    with open(path) as f:
+        lines = [l.strip().split(",") for l in f.readlines()]
+    for row in lines[1:]:
+        assert all(v != "" for v in row[2:]), f"blank values in best-fit row {row}"
+
     write_recommended_ddf(result, path)
 
     with open(path) as f:

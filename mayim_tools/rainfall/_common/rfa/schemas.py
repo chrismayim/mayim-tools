@@ -37,6 +37,7 @@ class DurationSeries:
     )
     year_records: list  # list[YearRecord] - every year considered, included or not
     n_native_intervals_per_window: int
+    fixed_interval_factor: float = 1.0  # Weiss factor already applied to values_mm
 
 
 @dataclass
@@ -88,3 +89,7 @@ class FrequencyAnalysisResult:
     diagnostics: dict = field(default_factory=dict)
     warnings: list = field(default_factory=list)
     metadata: dict = field(default_factory=dict)
+    ddf_model: object = None  # rfa.ddf_model.DDFModel (duration-consistent DDF)
+    ddf_rows: list = field(default_factory=list)  # consistent DDF with bounds
+    return_periods: list = field(default_factory=list)
+    model_comparison: list = field(default_factory=list)  # model vs independent GEV

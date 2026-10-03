@@ -20,6 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .distributions import (
+    GUMBEL_TAU3,
     GUMBEL_TAU4,
     gev_tau3_tau4_exact,
     glo_tau3_tau4_exact,
@@ -56,17 +57,19 @@ def compare_distributions(
     """
     entries = []
 
-    # Gumbel: fixed point, no shape parameter - distance uses the FULL
-    # (tau3, tau4) Euclidean-style comparison in the tau4 dimension
-    # only (matching how the other distances are computed, so ranking
-    # stays on a consistent basis), but note Gumbel's tau3 essentially
-    # never matches the sample's tau3 unless the data is very close to
-    # Gumbel-shaped - the tau4 distance alone can understate a Gumbel
-    # mismatch when tau3 disagrees sharply. Flagged in the exported
-    # diagnostic table (both tau3 and tau4 are reported, not just the
-    # distance) so this is visible rather than hidden.
+    # Gumbel is a single fixed point on the diagram (tau3 = 0.170,
+    # tau4 = 0.150), not a curve, so its distance is measured in BOTH
+    # tau3 and tau4 (Euclidean). Measuring it in tau4 only (as the other,
+    # curve-shaped candidates are) lets Gumbel "win" samples whose
+    # L-skewness it cannot reproduce - which made it the recommended
+    # distribution for some durations and produced crossing DDF curves.
     entries.append(
-        RatioDiagramEntry("GUMBEL", GUMBEL_TAU4, tau4, abs(GUMBEL_TAU4 - tau4))
+        RatioDiagramEntry(
+            "GUMBEL",
+            GUMBEL_TAU4,
+            tau4,
+            float(((GUMBEL_TAU3 - tau3) ** 2 + (GUMBEL_TAU4 - tau4) ** 2) ** 0.5),
+        )
     )
 
     if kappa_gev is not None:

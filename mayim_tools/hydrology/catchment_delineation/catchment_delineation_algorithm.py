@@ -37,6 +37,22 @@ from qgis.core import (
 from qgis.PyQt.QtCore import QMetaType
 from qgis.PyQt.QtGui import QIcon
 
+from mayim_tools.hydrology.stream_network.core import (
+    StreamNetworkError,
+    extract_stream_network,
+)
+from mayim_tools.hydrology.stream_network.export import write_sectioned_csv
+from mayim_tools.hydrology.stream_network.report import (
+    write_report_docx as write_network_report_docx,
+)
+from mayim_tools.hydrology.stream_network.stream_network_algorithm import (
+    add_network_parameters,
+    read_network_settings,
+    write_main_stems,
+    write_nodes,
+    write_reaches,
+)
+
 from .core import (
     CatchmentError,
     Outlet,
@@ -49,7 +65,7 @@ from .core import (
 from .export import write_hypsometric_csv, write_parameters_csv
 from .report import write_report_docx
 
-TOOL_VERSION = "0.3.0"
+TOOL_VERSION = "0.4.0"
 
 MODE_OPTIONS = [
     "Total (full catchment per outlet; nested catchments overlap)",
@@ -146,6 +162,10 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
     OUTPUT_FLOWPATHS = "OUTPUT_FLOWPATHS"
     OUTPUT_OUTLETS = "OUTPUT_OUTLETS"
     OUTPUT_STREAMS = "OUTPUT_STREAMS"
+    OUTPUT_STREAM_NODES = "OUTPUT_STREAM_NODES"
+    OUTPUT_MAIN_STEMS = "OUTPUT_MAIN_STEMS"
+    OUTPUT_STREAM_CSV = "OUTPUT_STREAM_CSV"
+    OUTPUT_STREAM_DOCX = "OUTPUT_STREAM_DOCX"
     OUTPUT_CENTROIDS = "OUTPUT_CENTROIDS"
     OUTPUT_REPORT = "OUTPUT_REPORT"
     OUTPUT_HYPSO = "OUTPUT_HYPSO"
@@ -216,13 +236,19 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
             "channel flow. Check that each method suits the catchment "
             "before using the value.\n"
             "\n"
-            "STREAM NETWORK:\tOptional line layer of the stream cells "
-            "(upstream area at least the stream threshold), split into links "
-            "at every junction. Each link carries its Strahler order, length, "
-            "upstream area at its downstream end, start and end elevations, "
-            "slope and the id of the link it flows into (ds_link), so the "
-            "network can be traced. In total mode, nested catchments repeat "
-            "their shared streams (select by outlet_id).\n"
+            "STREAM NETWORK:\tThe same stream outputs as the Stream Network "
+            "tool, for the network upstream of the outlets: reaches split at "
+            "every confluence and at intermediate outlets, each with Strahler, "
+            "Shreve, Horton and Hack orders, geometry, upstream area and "
+            "routing inputs (one layer, styled by Strahler order); nodes "
+            "(channel heads, confluences, outlets); main stems; the sectioned "
+            "stream network CSV (abbreviation key, drop test, networks, Horton "
+            "statistics and ratios, reaches, nodes, profiles, definitions); and "
+            "an optional stream network Word report. The constant-drop test "
+            "and routing settings are under Advanced parameters. Each reach "
+            "appears once; outlet_id is the first outlet downstream. The "
+            "stream network is only computed when one of these outputs is "
+            "requested.\n"
             "\n"
             "CENTROIDS:\tOptional point layer of each catchment's area "
             "centroid, with its elevation, whether it falls inside the "
@@ -294,12 +320,13 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterNumber(
                 self.STREAM_THRESHOLD,
-                "Stream threshold for drainage density (upstream area, km2)",
+                "Stream threshold (upstream area, km²)",
                 type=QgsProcessingParameterNumber.Type.Double,
                 minValue=0.0,
                 defaultValue=0.1,
             )
         )
+        add_network_parameters(self, include_min_network=False)
         self.addParameter(
             QgsProcessingParameterFeatureSink(
                 self.OUTPUT_CATCHMENTS,
@@ -329,9 +356,27 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterFeatureSink(
                 self.OUTPUT_STREAMS,
-                "Stream network",
+                "Stream network (Strahler, Shreve, Horton, Hack)",
                 type=QgsProcessing.SourceType.TypeVectorLine,
                 optional=True,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterFeatureSink(
+                self.OUTPUT_STREAM_NODES,
+                "Stream nodes (channel heads, confluences, outlets)",
+                type=QgsProcessing.SourceType.TypeVectorPoint,
+                optional=True,
+                createByDefault=False,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterFeatureSink(
+                self.OUTPUT_MAIN_STEMS,
+                "Main stems",
+                type=QgsProcessing.SourceType.TypeVectorLine,
+                optional=True,
+                createByDefault=False,
             )
         )
         self.addParameter(
@@ -364,6 +409,24 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
             QgsProcessingParameterFileDestination(
                 self.OUTPUT_DOCX,
                 "Catchment report (Word annexure)",
+                fileFilter="Word documents (*.docx)",
+                optional=True,
+                createByDefault=False,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterFileDestination(
+                self.OUTPUT_STREAM_CSV,
+                "Stream network properties (CSV)",
+                fileFilter="CSV files (*.csv)",
+                optional=True,
+                createByDefault=False,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterFileDestination(
+                self.OUTPUT_STREAM_DOCX,
+                "Stream network report (Word annexure)",
                 fileFilter="Word documents (*.docx)",
                 optional=True,
                 createByDefault=False,
@@ -412,6 +475,7 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
     def processAlgorithm(
         self, parameters, context: QgsProcessingContext, feedback: QgsProcessingFeedback
     ):
+        self._post_processors = []
         pointer_layer = self.parameterAsRasterLayer(parameters, self.POINTER, context)
         dem_layer = self.parameterAsRasterLayer(parameters, self.DEM, context)
         if pointer_layer is None or dem_layer is None:
@@ -443,6 +507,21 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
         )
         hypso_path = self.parameterAsFileOutput(parameters, self.OUTPUT_HYPSO, context)
         docx_path = self.parameterAsFileOutput(parameters, self.OUTPUT_DOCX, context)
+        stream_csv = self.parameterAsFileOutput(
+            parameters, self.OUTPUT_STREAM_CSV, context
+        )
+        stream_docx = self.parameterAsFileOutput(
+            parameters, self.OUTPUT_STREAM_DOCX, context
+        )
+        drop_range, routing = read_network_settings(self, parameters, context)
+        want_streams = bool(stream_csv or stream_docx) or any(
+            parameters.get(key) is not None
+            for key in (
+                self.OUTPUT_STREAMS,
+                self.OUTPUT_STREAM_NODES,
+                self.OUTPUT_MAIN_STEMS,
+            )
+        )
 
         outlets = self._read_outlets(source, id_field, crs, context, feedback)
         if not outlets:
@@ -507,9 +586,72 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
         outlet_id = self._write_outlets(parameters, context, result, crs)
         if outlet_id is not None:
             outputs[self.OUTPUT_OUTLETS] = outlet_id
-        streams_id = self._write_streams(parameters, context, result, crs)
-        if streams_id is not None:
-            outputs[self.OUTPUT_STREAMS] = streams_id
+        network = None
+        if want_streams:
+            feedback.setProgressText("Extracting the stream network")
+            try:
+                network = extract_stream_network(
+                    pointer,
+                    p_nodata,
+                    dem,
+                    d_nodata,
+                    d_gt,
+                    esri_style=esri_style,
+                    threshold_km2=threshold,
+                    drop_test_range=drop_range,
+                    routing=routing,
+                    is_canceled=feedback.isCanceled,
+                    outlet_cells=result.outlet_cells,
+                )
+            except StreamNetworkError as e:
+                feedback.pushWarning(f"Stream network not written: {e}")
+            if network is not None:
+                for message in network.warnings:
+                    feedback.pushWarning(f"Stream network: {message}")
+                for key, writer in (
+                    (self.OUTPUT_STREAMS, write_reaches),
+                    (self.OUTPUT_STREAM_NODES, write_nodes),
+                    (self.OUTPUT_MAIN_STEMS, write_main_stems),
+                ):
+                    extra = (self._post_processors,) if writer is write_reaches else ()
+                    dest = writer(self, parameters, key, context, network, crs, *extra)
+                    if dest is not None:
+                        outputs[key] = dest
+                net_context = {
+                    "tool": f"{self.displayName()} - stream network",
+                    "version": TOOL_VERSION,
+                    "run_time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    "dem_path": dem_layer.source(),
+                    "pointer_path": pointer_layer.source(),
+                    "encoding": "ESRI" if esri_style else "WhiteboxTools",
+                    "crs": f"{crs.authid()} - {crs.description()}",
+                }
+                if stream_csv:
+                    write_sectioned_csv(stream_csv, network, net_context)
+                    outputs[self.OUTPUT_STREAM_CSV] = stream_csv
+                if stream_docx:
+                    net_context["outputs"] = [
+                        (label, _describe_destination(outputs.get(key)))
+                        for key, label in (
+                            (self.OUTPUT_STREAMS, "Stream network"),
+                            (self.OUTPUT_STREAM_NODES, "Stream nodes"),
+                            (self.OUTPUT_MAIN_STEMS, "Main stems"),
+                            (self.OUTPUT_STREAM_CSV, "Stream network properties (CSV)"),
+                        )
+                        if outputs.get(key)
+                    ] + [("This report", stream_docx)]
+                    try:
+                        write_network_report_docx(stream_docx, network, net_context)
+                        outputs[self.OUTPUT_STREAM_DOCX] = stream_docx
+                    except ImportError:
+                        feedback.pushWarning(
+                            "The stream network Word report needs python-docx in "
+                            "QGIS's Python; all other outputs were written."
+                        )
+                    except Exception as e:  # must not lose the other results
+                        feedback.pushWarning(
+                            f"The stream network Word report could not be written: {e}"
+                        )
         centroids_id = self._write_centroids(parameters, context, result, crs)
         if centroids_id is not None:
             outputs[self.OUTPUT_CENTROIDS] = centroids_id
@@ -554,6 +696,10 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
                         (self.OUTPUT_FLOWPATHS, "Longest flow paths"),
                         (self.OUTPUT_OUTLETS, "Snapped outlets"),
                         (self.OUTPUT_STREAMS, "Stream network"),
+                        (self.OUTPUT_STREAM_NODES, "Stream nodes"),
+                        (self.OUTPUT_MAIN_STEMS, "Main stems"),
+                        (self.OUTPUT_STREAM_CSV, "Stream network properties (CSV)"),
+                        (self.OUTPUT_STREAM_DOCX, "Stream network report"),
                         (self.OUTPUT_CENTROIDS, "Catchment centroids"),
                         (self.OUTPUT_REPORT, "Catchment parameters (CSV)"),
                         (self.OUTPUT_HYPSO, "Hypsometric curves (CSV)"),
@@ -685,44 +831,6 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
             for name, _, _ in specs:
                 feat[name] = c.attributes.get(name)
             sink.addFeature(feat, QgsFeatureSink.Flag.FastInsert)
-        return dest_id
-
-    def _write_streams(self, parameters, context, result, crs):
-        specs = [
-            ("outlet_id", _S, ""),
-            ("link_id", _I, ""),
-            ("ds_link", _I, ""),
-            ("strahler", _I, ""),
-            ("length_m", _D, ""),
-            ("us_km2", _D, ""),
-            ("z_start", _D, ""),
-            ("z_end", _D, ""),
-            ("slope", _D, ""),
-        ]
-        sink, dest_id = self.parameterAsSink(
-            parameters,
-            self.OUTPUT_STREAMS,
-            context,
-            _fields(specs),
-            Qgis.WkbType.LineString,
-            crs,
-        )
-        if sink is None:
-            return None
-        for c in result.catchments:
-            for link in c.detail.get("stream_links", []):
-                if len(link["coords"]) < 2:
-                    continue
-                feat = QgsFeature(_fields(specs))
-                feat.setGeometry(
-                    QgsGeometry.fromPolylineXY(
-                        [QgsPointXY(x, y) for x, y in link["coords"]]
-                    )
-                )
-                feat["outlet_id"] = c.outlet_id
-                for name, _, _ in specs[1:]:
-                    feat[name] = link.get(name)
-                sink.addFeature(feat, QgsFeatureSink.Flag.FastInsert)
         return dest_id
 
     def _write_centroids(self, parameters, context, result, crs):

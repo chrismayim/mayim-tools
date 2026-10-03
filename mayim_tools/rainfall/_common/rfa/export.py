@@ -5,6 +5,8 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
+import numpy as np
+
 from .schemas import FrequencyAnalysisResult
 
 
@@ -125,7 +127,59 @@ def write_recommendations(result: FrequencyAnalysisResult, path: str | Path) -> 
 
 
 def write_recommended_ddf(result: FrequencyAnalysisResult, path: str | Path) -> None:
-    """Final recommended DDF table: one row per duration, using ONLY
+    """Recommended (design) DDF table from the duration-consistent DDF
+    model: one row per duration, depths that always increase with both
+    duration and return period, plus 5-95% bootstrap bounds when the
+    bootstrap was run.
+
+    Column naming ('{RT}yr Depth (mm)', '{RT}yr Lower (mm)', '{RT}yr
+    Upper (mm)') matches the Design Rainfall (South Africa) CSV layout,
+    so the table feeds straight into DDF to Hyetographs, Design Storm
+    Ensembles and Adjust Sub-daily Rainfall to DDF. Falls back to the
+    per-duration best-fit table (with a note) if the model could not be
+    fitted."""
+    if not result.ddf_rows:
+        write_per_duration_best_fit_ddf(result, path)
+        return
+    rps = list(result.return_periods)
+    durs = sorted({r["duration_min"] for r in result.ddf_rows})
+    look = {(r["duration_min"], r["return_period_yr"]): r for r in result.ddf_rows}
+    has_bounds = any(np.isfinite(r["lower_mm"]) for r in result.ddf_rows)
+    model = result.ddf_model
+    label = f"{model.distribution} (duration-consistent)" if model else ""
+
+    def fmt(v):
+        return round(float(v), 3) if np.isfinite(v) else ""
+
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        header = ["Duration", "Distribution"]
+        for t in rps:
+            header.append(f"{round(t, 3):g}yr Depth (mm)")
+            if has_bounds:
+                header += [
+                    f"{round(t, 3):g}yr Lower (mm)",
+                    f"{round(t, 3):g}yr Upper (mm)",
+                ]
+        w.writerow(header)
+        for d in durs:
+            row = [look[(d, rps[0])]["duration"], label]
+            for t in rps:
+                r = look[(d, t)]
+                row.append(fmt(r["depth_mm"]))
+                if has_bounds:
+                    row += [fmt(r["lower_mm"]), fmt(r["upper_mm"])]
+            w.writerow(row)
+
+
+def write_per_duration_best_fit_ddf(
+    result: FrequencyAnalysisResult, path: str | Path
+) -> None:
+    """DIAGNOSTIC (not the design table): one row per duration using only
+    that duration's own ratio-diagram-recommended distribution. Because
+    each duration is fitted and chosen independently, curves from this
+    table can cross between durations - use write_recommended_ddf()
+    for design. Originally: one row per duration, using ONLY
     that duration's ratio-diagram-recommended distribution's quantiles
     - the single clean design table most downstream use actually
     wants, rather than all 4 distributions x all durations.

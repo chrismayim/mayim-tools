@@ -106,7 +106,7 @@ def classify(value, classes):
 def _fmt(value, digits=2, unit=""):
     if value is None:
         return "n/a"
-    return f"{value:,.{digits}f}{unit}"
+    return f"{value:.{digits}f}{unit}"
 
 
 def _pct(value, digits=1):

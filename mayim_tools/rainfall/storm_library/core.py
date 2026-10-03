@@ -1,5 +1,6 @@
 """
-Storm Library & DDF Consistency Check - calculation engine.
+Adjust Sub-daily Rainfall to DDF - calculation engine
+(pass 1, diagnostics and storm library; pass 2 lives in adjust.py).
 
 Zero QGIS/Qt dependency (pure numpy/pandas), same convention as every
 core.py in this suite, so the whole method is unit-testable outside
@@ -75,6 +76,8 @@ from mayim_tools.rainfall._common.rfa.timebase import (
 )
 from mayim_tools.rainfall._common.rfa.validation import parse_and_validate
 
+from . import adjust as _adj
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -142,6 +145,16 @@ class StormLibraryConfig:
     reference_is_areal: bool = False
     timezone_offset_h: float = 0.0
     build_library: bool = True
+    # --- series adjustment (pass 2) ---
+    adjust: bool = True
+    rarity_dependent_sharpening: bool = True
+    calibration_durations_min: tuple | None = None  # None -> automatic split
+    n_realisations: int = 0  # stochastic ensemble size (0 = off)
+    ensemble_sigma: float = 0.35
+    # --- MAP constraint ---
+    map_constraint: bool = True
+    target_map_mm: float | None = None  # None -> retain the input series' MAP
+    map_source: str = "input series"
 
 
 @dataclass
@@ -155,6 +168,23 @@ class StormLibraryResult:
     overall_verdict: str = ""
     self_check_passed: bool = False
     status_stamp: str = VALIDATED_STAMP
+    # --- series adjustment ---
+    index: object = None  # DatetimeIndex of the (time-zone shifted) grid
+    input_values: object = None
+    pass1_values: object = None
+    adjusted_values: object = None
+    ensemble: list = field(default_factory=list)
+    step_event_id: object = None
+    step_scale: object = None
+    step_exponent: object = None
+    adjust_params: dict = field(default_factory=dict)
+    after_rows: list = field(default_factory=list)
+    ensemble_rows: list = field(default_factory=list)
+    calibration_durations: list = field(default_factory=list)
+    validation_durations: list = field(default_factory=list)
+    verdict_after: str = ""
+    map_info: dict = field(default_factory=dict)
+    monthly_rows: list = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -324,41 +354,123 @@ class FittedCurve:
 # ---------------------------------------------------------------------------
 
 
-class AnchorMapping:
-    """Maps a product's anchor-duration depth to the reference DDF
-    depth at the same annual return period:
-        T_e = G^-1(x_e),  target = DDF(anchor, T_e),  s_e = target / x_e.
-    Below the reference table's most frequent return period T_min the
-    scale factor is held at its T_min value (so the mapping stays
-    continuous and never extrapolates the DDF towards the frequent
-    end); above its rarest T_max the DDF is extrapolated linearly in
-    ln(T) (DDFTable behaviour) and flagged."""
+DEFAULT_T0 = 1.1  # return period (yr) where the bulk segment of the transfer starts
+GAMMA_BOUNDS = (0.05, 25.0)
 
-    def __init__(self, grid_curve: FittedCurve, ref: DDFTable, anchor_min: float):
+
+def _fit_reference_gev(ref: DDFTable, duration_min: float):
+    """GEV (Hosking parameterisation) fitted by least squares to the
+    reference table's depths at one duration, used only to extend the
+    reference below its most frequent tabulated return period. Falls
+    back to Gumbel (kappa = 0) with fewer than three return periods."""
+    from scipy.optimize import least_squares
+
+    from mayim_tools.rainfall._common.rfa.distributions import gev_quantile
+
+    t = np.array([float(x) for x in ref.aris])
+    d = np.array([ref.depth_at_ari(duration_min, x)[0] for x in t])
+    y = -np.log(-np.log(1.0 - 1.0 / t))
+    alpha0, xi0 = np.polyfit(y, d, 1)
+    alpha0 = max(alpha0, 1e-6)
+    if len(t) < 3:
+        return float(xi0), float(alpha0), 0.0
+
+    def resid(p):
+        return np.array([gev_quantile(1.0 - 1.0 / x, p[0], p[1], p[2]) for x in t]) - d
+
+    fit = least_squares(
+        resid,
+        [xi0, alpha0, 0.0],
+        bounds=([-np.inf, 1e-9, -0.5], [np.inf, np.inf, 0.5]),
+    )
+    return float(fit.x[0]), float(fit.x[1]), float(fit.x[2])
+
+
+class AnchorTransfer:
+    """Pass 1 - maps a storm's anchor-duration depth x (fixed-interval
+    corrected) to a target depth f(x), and scales the whole storm by
+    f(x)/x. Two segments, continuous at x0 = G^-1(T0):
+
+    * annual-maximum range (x >= x0): f(x) = Q_ref(T_G(x)) - the
+      reference DDF depth at the storm's return period in the product's
+      own anchor AMS curve G. Q_ref is the reference table (ln T
+      interpolation, linear-in-ln T extrapolation above the rarest T,
+      flagged) and, between T0 and the table's most frequent T, a GEV
+      fitted to the table (shifted to be continuous with it);
+    * bulk (x < x0): f(x) = f(x0) * (x / x0) ** gamma. gamma is solved
+      so the adjusted series reproduces the target mean annual
+      precipitation (MAP). gamma > 1 reduces light rain relative to
+      heavy rain - it concentrates the same annual total into fewer,
+      heavier storms, which corrects the "drizzle" bias of reanalysis
+      products at the storm scale. gamma = 1 is a constant ratio.
+
+    Rain outside any storm (below the minimum storm depth) is scaled by
+    the factor of the smallest storm, f(x_b)/x_b, so the transfer is
+    continuous down to zero."""
+
+    def __init__(
+        self,
+        grid_curve: FittedCurve,
+        ref: DDFTable,
+        anchor_min: float,
+        gamma: float = 1.0,
+        t0: float = DEFAULT_T0,
+        x_background: float = DEFAULT_MIN_EVENT_DEPTH_MM,
+    ):
         self.curve = grid_curve
         self.T_min = float(min(ref.aris))
         self.T_max = float(max(ref.aris))
-        self._lnT = np.linspace(np.log(self.T_min), np.log(1e6), 600)
-        self._ref = np.array(
-            [ref.depth_at_ari(anchor_min, float(np.exp(v)))[0] for v in self._lnT]
+        self.t0 = float(min(t0, self.T_min))
+        from mayim_tools.rainfall._common.rfa.distributions import gev_quantile
+
+        xi, al, ka = _fit_reference_gev(ref, anchor_min)
+        shift = ref.depth_at_ari(anchor_min, self.T_min)[0] - gev_quantile(
+            1.0 - 1.0 / self.T_min, xi, al, ka
         )
-        self.s_floor = ref.depth_at_ari(anchor_min, self.T_min)[
-            0
-        ] / grid_curve.depth_at_return_period(self.T_min)
+        self._lnT = np.linspace(np.log(self.t0), np.log(1e6), 800)
+        vals = []
+        for v in self._lnT:
+            t = float(np.exp(v))
+            if t >= self.T_min:
+                vals.append(ref.depth_at_ari(anchor_min, t)[0])
+            else:
+                vals.append(gev_quantile(1.0 - 1.0 / t, xi, al, ka) + shift)
+        self._ref = np.maximum.accumulate(np.maximum(np.array(vals), 0.0))
+        self.reference_gev = (xi, al, ka)
+        self.x0 = float(grid_curve.depth_at_return_period(self.t0))
+        self.f0 = float(self._ref[0])
+        self.gamma = float(gamma)
+        self.x_background = float(max(x_background, 0.1))
+
+    @property
+    def s_floor(self):
+        """Scale factor for rain outside any storm (continuous with the
+        smallest storms)."""
+        xb = self.x_background
+        return float(self.f(np.array([xb]))[0] / xb)
+
+    def f(self, x):
+        x = np.asarray(x, float)
+        T = self.curve.return_period(x)
+        tail = np.interp(np.log(np.maximum(T, self.t0)), self._lnT, self._ref)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            bulk = self.f0 * np.power(np.maximum(x, 0.0) / self.x0, self.gamma)
+        return np.where(x >= self.x0, tail, bulk)
 
     def scale(self, x_corr):
         """Vectorised: returns (scale_factors, T_grid, flags)."""
         x = np.asarray(x_corr, float)
         T = self.curve.return_period(x)
-        target = np.interp(np.log(np.maximum(T, self.T_min)), self._lnT, self._ref)
         with np.errstate(divide="ignore", invalid="ignore"):
-            s = np.where(x > 0, target / x, self.s_floor)
-        below = T < self.T_min
-        s = np.where(below, self.s_floor, s)
+            s = np.where(x > 0, self.f(x) / x, self.s_floor)
         flags = np.where(
-            below, "below_range", np.where(T > self.T_max, "extrap_aep", "in_range")
+            x < self.x0, "bulk", np.where(T > self.T_max, "extrap_aep", "in_range")
         )
         return s, T, flags
+
+
+# Backward-compatible name (the pre-MAP version of the transfer)
+AnchorMapping = AnchorTransfer
 
 
 def embedded_burst_check(vals, native, duration, burst_t, ref, sub_durations, w_fn):
@@ -524,7 +636,9 @@ class StormLibraryEngine:
         yrs_a, ams_a = ams_by_year(values, years, valid_years, a_steps)
         ams_a = ams_a * self._w(a_steps)
         g_curve = self._fit(ams_a)
-        mapping = AnchorMapping(g_curve, ref, anchor)
+        mapping = AnchorTransfer(
+            g_curve, ref, anchor, x_background=cfg.min_event_depth_mm
+        )
 
         # 4. events + their anchor window depth (on the NaN-filled grid;
         #    events touching missing data are flagged)
@@ -543,12 +657,16 @@ class StormLibraryEngine:
         )
         x_raw = np.empty(len(events))
         ev_missing = np.zeros(len(events), bool)
+        anchor_start = ev_start.astype(np.int64).copy()
+        anchor_full = np.zeros(len(events), bool)
         for i, ev in enumerate(events):
             w = extract_duration_window(filled, native, ev, anchor)
             x_raw[i] = w["depth_mm"] if w is not None else ev["depth_mm"]
             if w is not None:
                 s0 = idx.get_loc(w["start"])
                 e0 = idx.get_loc(w["end"])
+                anchor_start[i] = s0
+                anchor_full[i] = (e0 - s0 + 1) == a_steps
                 ev_missing[i] = bool(nan_mask[s0 : e0 + 1].any())
             ev_missing[i] |= bool(nan_mask[ev_start[i] : ev_end[i] + 1].any())
         x_corr = x_raw * self._w(a_steps)
@@ -558,13 +676,41 @@ class StormLibraryEngine:
         for i in range(len(events)):
             step_event[ev_start[i] : ev_end[i] + 1] = i
 
-        def rescaled_values(mp: AnchorMapping):
+        def rescaled_values(mp: AnchorTransfer):
             s, T, flags = mp.scale(x_corr)
             scale = np.where(step_event >= 0, s[np.maximum(step_event, 0)], mp.s_floor)
             return values * scale, s, T, flags
 
+        # 4b. MAP constraint: solve the bulk exponent gamma so that the
+        #     pass-1 series (and hence the adjusted series - pass 2 is
+        #     mass-preserving) has the target mean annual precipitation
+        in_valid = np.isin(years, valid_years)
+
+        def map_of(vals):
+            return float(np.nansum(np.where(in_valid, vals, 0.0))) / len(valid_years)
+
+        map_input = map_of(values)
+        map_target = float(cfg.target_map_mm) if cfg.target_map_mm else map_input
+        gamma = 1.0
+        if cfg.map_constraint:
+            gamma = self._solve_gamma(mapping, rescaled_values, map_of, map_target)
+        mapping.gamma = gamma
+        res.map_info = {
+            "map_input_mm": map_input,
+            "map_target_mm": map_target,
+            "map_target_source": cfg.map_source,
+            "map_constraint": cfg.map_constraint,
+            "transfer_gamma": gamma,
+            "transfer_t0_yr": mapping.t0,
+            "transfer_x0_mm": mapping.x0,
+            "reference_gev_below_table": ",".join(
+                f"{v:.4g}" for v in mapping.reference_gev
+            ),
+        }
+
         # 5/6. point estimate
         resc, s_e, T_e, f_e = rescaled_values(mapping)
+        res.map_info["map_pass1_mm"] = map_of(resc)
         ref_aris = [float(t) for t in ref.aris]
 
         def implied_for(resc_vals, year_subset_idx=None):
@@ -599,7 +745,9 @@ class StormLibraryEngine:
             sample = rng.choice(a_years, size=len(a_years), replace=True)
             try:
                 gb = self._fit(np.array([ams_a_by_year[y] for y in sample]))
-                mb = AnchorMapping(gb, ref, anchor)
+                mb = AnchorTransfer(
+                    gb, ref, anchor, gamma=gamma, x_background=cfg.min_event_depth_mm
+                )
                 rb, _, _, _ = rescaled_values(mb)
                 ib = implied_for(rb, year_subset_idx=sample)
             except (ValueError, FloatingPointError, ZeroDivisionError):
@@ -698,13 +846,54 @@ class StormLibraryEngine:
                 "distribution, or check the reference table at the anchor duration."
             )
         res.overall_verdict = (
-            "sharpening indicated (step 3 needed)"
+            "flatter than reference at short durations (shape correction needed)"
             if worst == DECISION_FLATTER
             else {
                 DECISION_CONSISTENT: "consistent - no sharpening needed",
                 DECISION_INCONCLUSIVE: "inconclusive - record too short to decide",
                 DECISION_PEAKIER: "product peakier than reference - review",
             }[worst]
+        )
+
+        # 7b. SERIES ADJUSTMENT (pass 2: within-storm shape)
+        ln_t = np.log(np.clip(T_e, 1.0, np.exp(_adj.LN_T_MAX)))
+        ev_ok = (~ev_missing) & anchor_full
+        n_ev = len(events)
+        b_e = np.ones(n_ev)
+        adjusted = resc
+        if cfg.adjust:
+            adjusted, b_e = self._adjust(
+                res,
+                resc,
+                anchor_start,
+                a_steps,
+                native,
+                ev_ok,
+                ln_t,
+                tests,
+                test_steps,
+                anchor,
+                years,
+                valid_years,
+                ref_aris,
+                ref_depth,
+                implied,
+                progress,
+            )
+        res.index = grid.index
+        res.input_values = values
+        res.pass1_values = resc
+        res.adjusted_values = adjusted
+        res.step_event_id = np.where(
+            step_event >= 0,
+            np.array([e["event_id"] for e in events])[np.maximum(step_event, 0)],
+            -1,
+        )
+        res.step_scale = np.where(
+            step_event >= 0, s_e[np.maximum(step_event, 0)], mapping.s_floor
+        )
+        res.step_exponent = np.where(
+            step_event >= 0, b_e[np.maximum(step_event, 0)], 1.0
         )
 
         # event audit rows
@@ -720,6 +909,7 @@ class StormLibraryEngine:
                     "return_period_in_product_yr": T_e[i],
                     "scale_factor": s_e[i],
                     "rescaled_anchor_depth_mm": x_corr[i] * s_e[i],
+                    "peak_concentration_factor": b_e[i],
                     "range_flag": f_e[i],
                     "touches_missing": bool(ev_missing[i]),
                     "status": tier_stamp,
@@ -731,7 +921,7 @@ class StormLibraryEngine:
             self._build_library(
                 res,
                 grid,
-                resc,
+                adjusted,
                 native,
                 ref,
                 events,
@@ -743,7 +933,7 @@ class StormLibraryEngine:
             )
 
         res.metadata = {
-            "tool": "Storm Library & DDF Consistency Check",
+            "tool": "Adjust Sub-daily Rainfall to DDF",
             "reference_tier": tier_label,
             "status": tier_stamp,
             "reference_is_areal": cfg.reference_is_areal,
@@ -767,7 +957,7 @@ class StormLibraryEngine:
             "years_excluded": ",".join(str(r.year) for r in excluded),
             "n_events": len(events),
             "n_events_touching_missing": int(ev_missing.sum()),
-            "n_events_below_reference_range": int((f_e == "below_range").sum()),
+            "n_events_bulk_segment": int((f_e == "bulk").sum()),
             "n_events_beyond_reference_range": int((f_e == "extrap_aep").sum()),
             "scale_factor_floor": mapping.s_floor,
             "n_bootstrap": cfg.n_bootstrap,
@@ -781,7 +971,43 @@ class StormLibraryEngine:
             "product_anchor_fit_alpha": g_curve.fit["alpha"],
             "product_anchor_fit_kappa": g_curve.fit["kappa"],
             "n_library_patterns": len(res.library_rows),
+            "library_built_from": "adjusted series" if cfg.adjust else "pass-1 series",
         }
+        res.metadata.update(res.adjust_params)
+
+        # MAP / seasonal / wet-hour diagnostics
+        res.map_info["map_output_mm"] = map_of(adjusted)
+        months = grid.index.month.values
+        ny = len(valid_years)
+        for mth in range(1, 13):
+            sel = in_valid & (months == mth)
+            vin = float(np.nansum(values[sel])) / ny
+            vout = float(np.nansum(adjusted[sel])) / ny
+            res.monthly_rows.append(
+                {
+                    "month": mth,
+                    "input_mean_mm": vin,
+                    "adjusted_mean_mm": vout,
+                    "ratio": vout / vin if vin > 0 else np.nan,
+                }
+            )
+        thr = 0.1 * native / 60.0  # 0.1 mm/h wet-step threshold
+        res.map_info["wet_step_threshold_mm"] = thr
+        res.map_info["wet_steps_per_year_input"] = (
+            float(np.sum(in_valid & (np.nan_to_num(values) > thr))) / ny
+        )
+        res.map_info["wet_steps_per_year_adjusted"] = (
+            float(np.sum(in_valid & (np.nan_to_num(adjusted) > thr))) / ny
+        )
+        res.metadata.update(res.map_info)
+        if (
+            cfg.map_constraint
+            and abs(res.map_info["map_output_mm"] - map_target) > 0.005 * map_target
+        ):
+            res.warnings.append(
+                f"Adjusted MAP {res.map_info['map_output_mm']:.1f} mm differs from the "
+                f"target {map_target:.1f} mm by more than 0.5%."
+            )
         for row in res.duration_summary:
             res.metadata[f"decision_{row['duration']}"] = row["decision"]
         if ref_info:
@@ -794,6 +1020,258 @@ class StormLibraryEngine:
             )
             res.metadata["reference_has_bounds"] = ref_info.get("has_bounds", False)
         return res
+
+    # -- MAP constraint ----------------------------------------------------
+    @staticmethod
+    def _solve_gamma(mapping, rescaled_values, map_of, target):
+        lo, hi = GAMMA_BOUNDS
+
+        def m(g):
+            mapping.gamma = g
+            return map_of(rescaled_values(mapping)[0])
+
+        m_lo, m_hi = m(lo), m(hi)
+        if target < m_hi:
+            raise ValueError(
+                f"Target MAP {target:.0f} mm/yr cannot be reached: storms matched to "
+                f"the reference DDF alone already give about {m_hi:.0f} mm/yr in this "
+                "series. The reference DDF, the target MAP and the rainfall series "
+                "are not mutually consistent (check the site, the analysis period "
+                "and the MAP source)."
+            )
+        if target > m_lo:
+            raise ValueError(
+                f"Target MAP {target:.0f} mm/yr cannot be reached: even with maximum "
+                f"weight on light rain the series gives only {m_lo:.0f} mm/yr. Check "
+                "the MAP value and that the series is complete and in mm."
+            )
+        a, b = np.log(lo), np.log(hi)
+        for _ in range(80):
+            mid = 0.5 * (a + b)
+            if m(float(np.exp(mid))) > target:
+                a = mid
+            else:
+                b = mid
+            if b - a < 1e-7:
+                break
+        g = float(np.exp(0.5 * (a + b)))
+        mapping.gamma = g
+        return g
+
+    # -- series adjustment (pass 2) --------------------------------------
+    def _implied_subset(self, series, durations, test_steps, years, valid_years, aris):
+        out = {}
+        for d in durations:
+            n = test_steps[d]
+            _, mx = ams_by_year(series, years, valid_years, n)
+            if len(mx) < 3:
+                out[d] = None
+                continue
+            c = self._fit(mx * self._w(n))
+            out[d] = np.array([c.depth_at_return_period(t) for t in aris])
+        return out
+
+    def _fit_boot(self, series, d, n, years, valid_years, aris, rng):
+        _, mx = ams_by_year(series, years, valid_years, n)
+        mx = mx * self._w(n)
+        reps = []
+        for _ in range(self.cfg.n_bootstrap):
+            sample = rng.choice(mx, size=len(mx), replace=True)
+            try:
+                c = self._fit(sample)
+            except (ValueError, FloatingPointError, ZeroDivisionError):
+                continue
+            reps.append([c.depth_at_return_period(t) for t in aris])
+        return np.array(reps) if reps else None
+
+    def _adjust(
+        self,
+        res,
+        resc,
+        anchor_start,
+        a_steps,
+        native,
+        ev_ok,
+        ln_t,
+        tests,
+        test_steps,
+        anchor,
+        years,
+        valid_years,
+        aris,
+        ref_depth,
+        implied_before,
+        progress,
+    ):
+        cfg = self.cfg
+        rd = cfg.rarity_dependent_sharpening
+        shorts = [d for d in tests if d < anchor]
+        if cfg.calibration_durations_min:
+            calib = sorted(
+                {float(d) for d in cfg.calibration_durations_min} & set(shorts)
+            )
+        else:
+            calib, _ = _adj.split_durations(shorts, anchor)
+        valid = [d for d in tests if d not in calib and d != anchor]
+        res.calibration_durations = calib
+        res.validation_durations = valid
+
+        def implied_at(series, d):
+            return self._implied_subset(
+                series, [d], test_steps, years, valid_years, aris
+            )[d]
+
+        adjusted = resc
+        concentration = np.ones(len(anchor_start))
+        rung_params = []
+        if calib:
+            out, rung_params, concentration = _adj.nested_adjust(
+                resc,
+                anchor_start,
+                a_steps,
+                ev_ok,
+                ln_t,
+                calib,
+                native,
+                implied_at,
+                ref_depth,
+                rarity_dependent=rd,
+            )
+            adjusted = out[0]
+        res.adjust_params = {
+            "adjust_method": "nested peak-window scaling (mass-preserving)",
+            "rarity_dependent": rd,
+            "calibration_durations_min": ",".join(f"{d:g}" for d in calib),
+            "validation_durations_min": ",".join(f"{d:g}" for d in valid),
+            "n_storms_adjusted": int(ev_ok.sum()),
+            "n_storms_not_adjusted": int((~ev_ok).sum()),
+        }
+        for rp in rung_params:
+            key = duration_label(rp["duration_min"]).replace(" ", "")
+            res.adjust_params[f"rung_{key}_a"] = rp["a"]
+            res.adjust_params[f"rung_{key}_c"] = rp["c"]
+            res.adjust_params[f"rung_{key}_rmse_log"] = rp["rmse_log"]
+            if rp["a"] >= _adj.A_BOUNDS[1] - 1e-3:
+                res.warnings.append(
+                    f"Rung {duration_label(rp['duration_min'])}: concentration hit "
+                    "its upper bound - the reference DDF may not be reachable at this "
+                    "duration; check the inputs."
+                )
+        if progress is not None:
+            progress(90.0)
+
+        # after-diagnostics (fit bootstrap on the adjusted series)
+        rng = np.random.default_rng(cfg.random_seed + 1)
+        tol = cfg.tolerance_pct / 100.0
+        implied_after = self._implied_subset(
+            adjusted, tests, test_steps, years, valid_years, aris
+        )
+        worst = DECISION_CONSISTENT
+        worst_valid = DECISION_CONSISTENT
+        for d in tests:
+            reps = self._fit_boot(
+                adjusted, d, test_steps[d], years, valid_years, aris, rng
+            )
+            role = (
+                "anchor"
+                if d == anchor
+                else ("calibration" if d in calib else "validation")
+            )
+            for k, t in enumerate(aris):
+                ref_v = ref_depth[d][k]
+                ia = implied_after[d][k] if implied_after[d] is not None else np.nan
+                ib = implied_before[d][k] if implied_before[d] is not None else np.nan
+                if reps is not None and len(reps) >= 10:
+                    q05, q50, q95 = np.nanpercentile(reps[:, k] / ref_v, [5, 50, 95])
+                else:
+                    q05 = q50 = q95 = np.nan
+                dec = _decide(q05, q50, q95, tol) if d != anchor else "anchor"
+                if d != anchor and _DECISION_SEVERITY[dec] > _DECISION_SEVERITY[worst]:
+                    worst = dec
+                if role == "validation" and (
+                    _DECISION_SEVERITY[dec] > _DECISION_SEVERITY[worst_valid]
+                ):
+                    worst_valid = dec
+                res.after_rows.append(
+                    {
+                        "duration_min": d,
+                        "duration": duration_label(d),
+                        "role": role,
+                        "return_period_yr": t,
+                        "aep_pct": 100.0 / t,
+                        "reference_depth_mm": ref_v,
+                        "input_implied_depth_mm": ib,
+                        "adjusted_implied_depth_mm": ia,
+                        "F_before": ib / ref_v if ref_v > 0 else np.nan,
+                        "F_after": ia / ref_v if ref_v > 0 else np.nan,
+                        "F_after_p05": q05,
+                        "F_after_p50": q50,
+                        "F_after_p95": q95,
+                        "decision_after": dec,
+                        "status": res.status_stamp,
+                    }
+                )
+        res.verdict_after = (
+            "adjusted series consistent with the reference DDF at all durations"
+            if worst == DECISION_CONSISTENT
+            else f"adjusted series: {worst} at one or more durations"
+        )
+        res.adjust_params["verdict_after"] = res.verdict_after
+        res.adjust_params["verdict_after_validation_durations"] = worst_valid
+
+        # optional stochastic ensemble
+        n_real = int(cfg.n_realisations)
+        if n_real > 0 and calib:
+            erng = np.random.default_rng(cfg.random_seed + 2)
+            ens, eparams, _ = _adj.nested_adjust(
+                resc,
+                anchor_start,
+                a_steps,
+                ev_ok,
+                ln_t,
+                calib,
+                native,
+                implied_at,
+                ref_depth,
+                rarity_dependent=rd,
+                n_realisations=n_real,
+                sigma=cfg.ensemble_sigma,
+                rng=erng,
+            )
+            res.ensemble = ens
+            per = [
+                self._implied_subset(r, tests, test_steps, years, valid_years, aris)
+                for r in ens
+            ]
+            for d in tests:
+                arr = np.vstack([q[d] for q in per if q.get(d) is not None])
+                for k, t in enumerate(aris):
+                    f = arr[:, k] / ref_depth[d][k]
+                    res.ensemble_rows.append(
+                        {
+                            "duration_min": d,
+                            "duration": duration_label(d),
+                            "return_period_yr": t,
+                            "F_ensemble_p05": float(np.percentile(f, 5)),
+                            "F_ensemble_p50": float(np.percentile(f, 50)),
+                            "F_ensemble_p95": float(np.percentile(f, 95)),
+                            "n_realisations": arr.shape[0],
+                        }
+                    )
+            res.adjust_params.update(
+                {
+                    "ensemble_n_realisations": n_real,
+                    "ensemble_sigma": cfg.ensemble_sigma,
+                    "ensemble_random_seed": cfg.random_seed + 2,
+                }
+            )
+            for rp in eparams:
+                key = duration_label(rp["duration_min"]).replace(" ", "")
+                res.adjust_params[f"ensemble_rung_{key}_a"] = rp["a"]
+                res.adjust_params[f"ensemble_rung_{key}_c"] = rp["c"]
+        if progress is not None:
+            progress(100.0)
+        return adjusted, concentration
 
     # -- storm library -----------------------------------------------------
     def _build_library(

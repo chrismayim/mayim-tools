@@ -23,7 +23,7 @@ from mayim_tools.rainfall._common.rfa.ams import (
     compute_year_completeness,
     extract_ams_for_duration,
 )
-from mayim_tools.rainfall.storm_library import export
+from mayim_tools.rainfall.storm_library import adjust, export
 from mayim_tools.rainfall.storm_library.core import (
     DECISION_CONSISTENT,
     DECISION_FLATTER,
@@ -159,13 +159,23 @@ def test_anchor_mapping_range_handling():
             ]
         )
     )
-    m = AnchorMapping(curve, ref, 1440)
+    m = AnchorMapping(curve, ref, 1440, gamma=1.6, x_background=2.0)
     small, mid, huge = 5.0, curve.depth_at_return_period(10), 10 * data.max()
     s, t, flags = m.scale([small, mid, huge])
-    assert flags[0] == "below_range" and s[0] == pytest.approx(m.s_floor)
+    assert flags[0] == "bulk"
     assert flags[1] == "in_range"
     assert mid * s[1] == pytest.approx(ref.depth_at_ari(1440, 10)[0], rel=1e-3)
     assert flags[2] == "extrap_aep"
+    # bulk segment: power curve through (x0, f(x0)), continuous at x0
+    assert small * s[0] == pytest.approx(m.f0 * (small / m.x0) ** 1.6, rel=1e-6)
+    eps = 1e-6 * m.x0
+    below, above = m.f(np.array([m.x0 - eps, m.x0 + eps]))
+    assert below == pytest.approx(above, rel=1e-3)
+    # background (non-storm) factor equals the smallest storm's factor
+    assert m.s_floor == pytest.approx(m.f(np.array([2.0]))[0] / 2.0)
+    # transfer is monotone increasing
+    xs = np.linspace(0.5, 3 * data.max(), 400)
+    assert np.all(np.diff(m.f(xs)) >= -1e-9)
 
 
 def test_embedded_burst_check_flags_spiky_pattern():
@@ -218,7 +228,7 @@ def test_smoothing_is_detected_as_flatter(smoothed_result):
     assert all(r["decision"] == DECISION_FLATTER for r in one_hour)
     for r in _rows(smoothed_result, 1440):  # anchor still ~1
         assert r["F"] == pytest.approx(1.0, abs=0.03)
-    assert smoothed_result.overall_verdict.startswith("sharpening indicated")
+    assert smoothed_result.overall_verdict.startswith("flatter than reference")
     summary = {
         r["duration_min"]: r["decision"] for r in smoothed_result.duration_summary
     }
@@ -413,7 +423,14 @@ def test_exports_write_blank_for_missing(tmp_path, identity_result):
     export.write_events_csv(identity_result, tmp_path / "e.csv")
     export.write_metadata_csv(identity_result, tmp_path / "m.csv")
     c = pd.read_csv(tmp_path / "c.csv")
-    assert {"F", "F_p05", "F_p50", "F_p95", "decision", "status"} <= set(c.columns)
+    assert {
+        "before_F",
+        "before_F_p50",
+        "after_F",
+        "after_F_p50",
+        "after_decision",
+        "status",
+    } <= set(c.columns)
     lib = pd.read_csv(tmp_path / "l.csv")
     assert len(lib) == len(identity_result.library_rows)
     m = pd.read_csv(tmp_path / "m.csv")
@@ -423,3 +440,191 @@ def test_exports_write_blank_for_missing(tmp_path, identity_result):
     pytest.importorskip("matplotlib")
     assert export.write_flatness_png(identity_result, tmp_path / "f.png")
     assert (tmp_path / "f.png").stat().st_size > 1000
+
+
+# ----------------------------------------------------------------------
+# Series adjustment (pass 2) and outputs
+# ----------------------------------------------------------------------
+
+
+def test_rung_apply_preserves_parent_mass_and_zeros():
+    v = np.array([0.0, 1.0, 2.0, 3.0, 2.0, 1.0, 0.0, 5.0])
+    rg = adjust.Rung(
+        v,
+        parent_start=np.array([0]),
+        parent_len=7,
+        child_start=np.array([2]),
+        child_len=3,
+        ok=np.array([True]),
+    )
+    out = rg.apply(v, np.array([1.2]))
+    assert out[:7].sum() == pytest.approx(v[:7].sum())
+    assert out[0] == 0 and out[6] == 0  # zeros stay zero
+    assert out[7] == 5.0  # outside the parent: untouched
+    assert out[2:5].sum() == pytest.approx(1.2 * 7.0)
+    # alpha is capped so the rest of the parent never goes negative
+    out = rg.apply(v, np.array([50.0]))
+    assert out[:7].min() >= 0 and out[:7].sum() == pytest.approx(v[:7].sum())
+
+
+def test_split_durations_default():
+    calib, valid = adjust.split_durations([60, 120, 180, 360, 720, 2880], 1440)
+    assert calib == [60, 180, 720] and valid == [120, 360]
+
+
+@pytest.fixture(scope="module")
+def adjusted_result(series, reference):
+    smoothed = series.rolling(3, center=True, min_periods=1).mean()
+    cfg = StormLibraryConfig(n_bootstrap=40, random_seed=3, n_realisations=4)
+    return smoothed, StormLibraryEngine(cfg).run(smoothed, 60.0, reference)
+
+
+def test_adjustment_restores_short_durations(adjusted_result):
+    _, res = adjusted_result
+    for r in res.after_rows:
+        if r["role"] == "calibration":
+            assert r["F_after"] == pytest.approx(1.0, abs=0.06), r
+        elif r["role"] == "validation":
+            assert r["F_after"] == pytest.approx(1.0, abs=0.12), r
+    one_h = [r for r in res.after_rows if r["duration_min"] == 60]
+    assert all(r["F_before"] < 0.7 for r in one_h)
+    assert res.verdict_after.startswith("adjusted series consistent")
+    assert res.calibration_durations == [60, 180, 720]
+    assert 120 in res.validation_durations and 2880 in res.validation_durations
+
+
+def test_adjustment_conserves_mass_and_keeps_dry_steps(adjusted_result):
+    smoothed, res = adjusted_result
+    assert np.nansum(res.adjusted_values) == pytest.approx(
+        np.nansum(res.pass1_values), rel=1e-9
+    )
+    dry = res.pass1_values == 0
+    assert np.all(res.adjusted_values[dry] == 0)
+    assert np.all(res.adjusted_values >= 0)
+
+
+def test_adjustment_keeps_missing_as_missing(reference):
+    s = synthetic_series(years=12, seed=9)
+    s.iloc[1000:1010] = np.nan
+    res = StormLibraryEngine(StormLibraryConfig(n_bootstrap=5)).run(s, 60.0, reference)
+    assert np.isnan(res.adjusted_values[1000:1010]).all()
+    assert np.isfinite(res.adjusted_values[:1000]).all()
+
+
+def test_ensemble_realisations_and_spread(adjusted_result):
+    _, res = adjusted_result
+    assert len(res.ensemble) == 4
+    assert not np.allclose(res.ensemble[0], res.ensemble[1])
+    for r in res.ensemble_rows:
+        assert r["F_ensemble_p05"] <= r["F_ensemble_p50"] <= r["F_ensemble_p95"]
+    for real in res.ensemble:
+        assert np.nansum(real) == pytest.approx(np.nansum(res.pass1_values), rel=1e-9)
+
+
+def test_adjusted_series_csv_round_trip(tmp_path, reference):
+    t = pd.date_range("1990-01-01", "2002-01-01", freq="h", inclusive="left")
+    raw = synthetic_series(years=12, seed=4)
+    df = pd.DataFrame({"Site": "S1", "ValidTime": t, "PrecipitationMM": raw.values})
+    grid, native, site, _ = prepare_series(df, timezone_offset_h=2)
+    cfg = StormLibraryConfig(n_bootstrap=5, timezone_offset_h=2)
+    res = StormLibraryEngine(cfg).run(grid, native, reference)
+    p = tmp_path / "adj.csv"
+    export.write_adjusted_series_csv(res, p, site=site)
+    back = pd.read_csv(p)
+    assert list(back.columns[:3]) == ["Site", "ValidTime", "PrecipitationMM"]
+    assert back["ValidTime"].iloc[0] == "1990-01-01 00:00:00"  # input time base
+    assert np.allclose(back["PrecipitationMM_input"], raw.values, atol=1e-4)
+    # the adjusted CSV is itself a valid input for the suite's tools
+    g2, n2, _, _ = prepare_series(back)
+    assert n2 == 60.0 and len(g2) == len(grid)
+
+
+def test_report_docx_written(tmp_path, adjusted_result):
+    pytest.importorskip("docx")
+    pytest.importorskip("matplotlib")
+    from mayim_tools.rainfall.storm_library import report
+
+    _, res = adjusted_result
+    png = tmp_path / "c.png"
+    assert export.write_flatness_png(res, png)
+    out = tmp_path / "r.docx"
+    report.write_docx(res, out, chart_path=png, inputs={"series": "x.csv"})
+    import docx
+
+    text = "\n".join(p.text for p in docx.Document(str(out)).paragraphs)
+    assert "Pass 1 - magnitude" in text and "References" in text
+    export.write_ensemble_csv(res, tmp_path / "e.csv")
+    ens = pd.read_csv(tmp_path / "e.csv")
+    assert list(ens.columns) == ["ValidTime", "R001", "R002", "R003", "R004"]
+
+
+# ----------------------------------------------------------------------
+# MAP constraint
+# ----------------------------------------------------------------------
+
+
+def drizzly_product(true, seed=5, keep=0.55, window=5):
+    """Mimic a reanalysis: peaks smoothed and weakened, the missing mass
+    spread as frequent light rain - the same annual total as `true`."""
+    rng = np.random.default_rng(seed)
+    sm = true.rolling(window, center=True, min_periods=1).mean() * keep
+    mask = rng.random(len(true)) < 0.25
+    dr = np.where(mask, rng.exponential(1.0, len(true)), 0.0)
+    dr *= ((1 - keep) * true.sum()) / dr.sum()
+    return sm + dr
+
+
+@pytest.fixture(scope="module")
+def drizzle_case():
+    true = synthetic_series(years=30, seed=2)
+    return true, drizzly_product(true), ddf_from_series(true)
+
+
+def test_map_retained_and_ddf_matched(drizzle_case):
+    true, prod, ref = drizzle_case
+    res = StormLibraryEngine(StormLibraryConfig(n_bootstrap=30)).run(prod, 60.0, ref)
+    mi = res.map_info
+    assert mi["map_output_mm"] == pytest.approx(mi["map_input_mm"], rel=1e-6)
+    assert mi["transfer_gamma"] > 1.0  # rain moved out of light rain
+    for r in res.after_rows:
+        assert r["F_after"] == pytest.approx(1.0, abs=0.12), r
+    # drizzle hours reduced, towards the 'true' frequency
+    assert mi["wet_steps_per_year_adjusted"] < mi["wet_steps_per_year_input"]
+    assert len(res.monthly_rows) == 12
+
+
+def test_map_target_value_is_met(drizzle_case):
+    _, prod, ref = drizzle_case
+    cfg = StormLibraryConfig(n_bootstrap=5, target_map_mm=450.0)
+    res = StormLibraryEngine(cfg).run(prod, 60.0, ref)
+    assert res.map_info["map_output_mm"] == pytest.approx(450.0, rel=1e-4)
+    assert res.map_info["map_target_mm"] == 450.0
+
+
+def test_without_map_constraint_the_total_inflates(drizzle_case):
+    _, prod, ref = drizzle_case
+    cfg = StormLibraryConfig(n_bootstrap=5, map_constraint=False)
+    res = StormLibraryEngine(cfg).run(prod, 60.0, ref)
+    assert res.map_info["map_output_mm"] > 1.3 * res.map_info["map_input_mm"]
+
+
+def test_infeasible_map_target_raises(drizzle_case):
+    _, prod, ref = drizzle_case
+    cfg = StormLibraryConfig(n_bootstrap=5, target_map_mm=20.0)
+    with pytest.raises(ValueError, match="cannot be reached"):
+        StormLibraryEngine(cfg).run(prod, 60.0, ref)
+
+
+def test_read_ddf_csv_picks_up_map(tmp_path):
+    p = tmp_path / "single.csv"
+    p.write_text(DRESA_SINGLE)
+    _, info = read_ddf_csv(p)
+    assert info["map_mm"] == 850.0
+    q = tmp_path / "multi.csv"
+    q.write_text(DRESA_MULTI)
+    _, info = read_ddf_csv(q, site="P2")
+    assert info["map_mm"] == 900.0
+    r = tmp_path / "rec.csv"
+    r.write_text(RECOMMENDED)
+    _, info = read_ddf_csv(r)
+    assert info["map_mm"] is None

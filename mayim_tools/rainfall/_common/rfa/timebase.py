@@ -26,6 +26,50 @@ STANDARD_DURATIONS_MIN = (
 )
 
 
+# Extended default list (minutes): 5 min to 7 days. Only durations that are
+# whole multiples of the data's native interval are used.
+EXTENDED_DURATIONS_MIN = (
+    5,
+    10,
+    15,
+    20,
+    30,
+    45,
+    60,
+    90,
+    120,
+    180,
+    240,
+    360,
+    480,
+    600,
+    720,
+    960,
+    1200,
+    1440,
+    2880,
+    4320,
+    5760,
+    7200,
+    8640,
+    10080,
+)
+
+
+def whole_multiple_durations(native_interval_min, requested_min):
+    """(usable, skipped): durations >= the native interval that are whole
+    multiples of it. A duration that is not a whole multiple would be
+    silently rounded to a different window length, so it is skipped."""
+    usable, skipped = [], []
+    for d in requested_min:
+        r = d / native_interval_min
+        if d >= native_interval_min and abs(r - round(r)) < 1e-6:
+            usable.append(d)
+        else:
+            skipped.append(d)
+    return usable, skipped
+
+
 def detect_native_interval(timestamps: pd.Series) -> float:
     """Mode of positive timestamp differences, in minutes - robust to
     a handful of gaps/duplicates, same approach used in the Design
