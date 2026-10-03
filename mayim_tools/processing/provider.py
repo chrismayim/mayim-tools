@@ -19,6 +19,9 @@ from mayim_tools.data.netcdf4_to_csv.netcdf4_list_variables_algorithm import (
 from mayim_tools.data.netcdf4_to_csv.netcdf4_to_csv_algorithm import (
     Netcdf4ToCsvAlgorithm,
 )
+from mayim_tools.hec_ras.import_ras_2d_data import (
+    import_ras_2d_data_algorithm as import_ras_2d_data_algo,
+)
 from mayim_tools.hydrology.catchment_delineation import (
     catchment_delineation_algorithm as catchment_delineation_algo,
 )
@@ -27,6 +30,12 @@ from mayim_tools.hydrology.d8_flow_accumulation.d8_flow_accumulation_algorithm i
 )
 from mayim_tools.hydrology.d8_flow_direction.d8_flow_direction_algorithm import (
     D8FlowDirectionAlgorithm,
+)
+from mayim_tools.hydrology.stream_network import (
+    stream_network_algorithm as stream_network_algo,
+)
+from mayim_tools.hydrology.terrain_storage.terrain_storage_algorithm import (
+    DemDepressionStageStorageAlgorithm,
 )
 from mayim_tools.rainfall.chirps.chirps_extract_algorithm import ChirpsExtractAlgorithm
 from mayim_tools.rainfall.cmorph_extract.cmorph_extract_algorithm import (
@@ -58,7 +67,10 @@ from mayim_tools.rainfall.persiann_extract.persiann_extract_algorithm import (
     PersiannExtractAlgorithm,
 )
 from mayim_tools.rainfall.storm_library.storm_library_algorithm import (
-    StormLibraryAlgorithm,
+    AdjustToDdfAlgorithm,
+)
+from mayim_tools.soil.soilgrids_extract.soilgrids_extract_algorithm import (
+    SoilGridsExtractAlgorithm,
 )
 
 
@@ -97,4 +109,8 @@ class MayimToolsProvider(QgsProcessingProvider):
         self.addAlgorithm(design_storm_ensembles_algo.DesignStormEnsembleAlgorithm())
         self.addAlgorithm(Era5ExtractAlgorithm())
         self.addAlgorithm(catchment_delineation_algo.CatchmentDelineationAlgorithm())
-        self.addAlgorithm(StormLibraryAlgorithm())
+        self.addAlgorithm(AdjustToDdfAlgorithm())
+        self.addAlgorithm(import_ras_2d_data_algo.ImportRas2dDataAlgorithm())
+        self.addAlgorithm(DemDepressionStageStorageAlgorithm())
+        self.addAlgorithm(stream_network_algo.StreamNetworkAlgorithm())
+        self.addAlgorithm(SoilGridsExtractAlgorithm())

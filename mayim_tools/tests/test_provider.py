@@ -37,7 +37,7 @@ def test_provider_registers_seven_algorithms() -> None:
     provider = loaded_provider()
 
     algorithms = provider.algorithms()
-    assert len(algorithms) == 18
+    assert len(algorithms) == 22
 
     by_name = {algorithm.name(): algorithm for algorithm in algorithms}
 
@@ -59,7 +59,11 @@ def test_provider_registers_seven_algorithms() -> None:
         "d8_flow_accumulation",
         "era5_point_extract",
         "catchment_delineation",
-        "storm_library_ddf_check",
+        "adjust_subdaily_to_ddf",
+        "import_ras_2d_data",
+        "dem_depression_stage_storage",
+        "stream_network",
+        "soilgrids_extract",
     }
 
     expected = {
@@ -148,10 +152,30 @@ def test_provider_registers_seven_algorithms() -> None:
             "Hydrological Tools",
             "hydrological_tools",
         ),
-        "storm_library_ddf_check": (
-            "Storm Library & DDF Consistency Check",
+        "adjust_subdaily_to_ddf": (
+            "Adjust Sub-daily Rainfall to DDF",
             "Rainfall Tools",
             "rainfall_tools",
+        ),
+        "import_ras_2d_data": (
+            "Import RAS 2D data",
+            "HEC-RAS Tools",
+            "hec_ras_tools",
+        ),
+        "dem_depression_stage_storage": (
+            "DEM depression stage-storage",
+            "Hydrological Tools",
+            "hydrological_tools",
+        ),
+        "stream_network": (
+            "Stream Network",
+            "Hydrological Tools",
+            "hydrological_tools",
+        ),
+        "soilgrids_extract": (
+            "Extract: SoilGrids 2.0",
+            "Soil Tools",
+            "soil_tools",
         ),
     }
 
