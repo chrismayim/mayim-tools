@@ -19,9 +19,11 @@ catalogue scale is applied. A disagreement between the two is warned.
 
 UNCERTAINTY
 P16 and P84 bound the 68 % prediction interval (about +/- one standard
-deviation), published at 120 m only. RU68 = (P84 - P16) / mean, all at
-120 m, is derived by this tool. Like any marginal quantiles, P16 sand with
-P16 clay is not a real soil: sample and renormalise to propagate.
+deviation), published at 120 m only. This tool only acquires data: any
+derived measure (relative interval widths, available water capacity,
+depth harmonisation) is computed by Regional soil parameterisation. Like
+any marginal quantiles, P16 sand with P16 clay is not a real soil: sample
+and renormalise to propagate.
 """
 
 from __future__ import annotations
@@ -53,17 +55,15 @@ from mayim_tools.soil._common.jobs import (
 )
 from mayim_tools.soil._common.stats import (
     _r,
-    relative_width,
     summarise,
     texture_sum_check,
 )
 
 from .catalogue import (
-    AWC_CODE,
-    AWC_LABEL,
     DEPTH_BY_LABEL,
     DEPTHS,
     LATEST_PERIOD,
+    LEGACY_BY_CODE,
     LEGACY_CITATION,
     LEGACY_DOI,
     LEGACY_LICENCE,
@@ -71,12 +71,8 @@ from .catalogue import (
     LEGACY_VARIABLES,
     PERIODS,
     PRODUCT,
-    RU68,
-    RU68_LABEL,
-    RU68_TAG,
     STAT_BY_CODE,
     STATISTICS,
-    STATS_FOR_RU,
     SUBGROUP_PERIOD,
     TEXTURE_CODES,
     VARIABLE_BY_CODE,
@@ -95,7 +91,7 @@ from .catalogue import (
 )
 from .soil_types import SUBGROUP_NAMES
 
-TOOL_VERSION = "0.3.0"
+TOOL_VERSION = "0.4.0"
 DEFAULT_WORKERS = 8
 DEFAULT_MAX_AREA_KM2 = 5000.0  # 30 m data: 5000 km2 is ~5.6 million cells
 TEXTURE_SUM_TOLERANCE = 2.0
@@ -130,9 +126,8 @@ class Selection:
     variables: list[str]
     depths: list[str]
     periods: list[str]
-    statistics: list[str]  # fetched (RU68 inputs auto-added)
+    statistics: list[str]
     written_statistics: list[str]
-    ru68: bool
     subgroups: bool = False
     water: bool = False
     warnings: list[str] = field(default_factory=list)
@@ -143,7 +138,6 @@ def plan_selection(
     depths: Sequence[str],
     periods: Sequence[str],
     statistics: Sequence[str],
-    ru68: bool = False,
     subgroups: bool = False,
     water: bool = False,
 ) -> Selection:
@@ -170,27 +164,18 @@ def plan_selection(
         raise SoilDataError("Select at least one depth interval.")
     if variables and not periods:
         raise SoilDataError("Select at least one period.")
-    if variables and not statistics and not ru68:
+    if variables and not statistics:
         raise SoilDataError("Select at least one statistic.")
 
     written = [s.code for s in STATISTICS if s.code in statistics]
     fetched = list(written)
     warnings: list[str] = []
-    if ru68:
-        missing = [s for s in STATS_FOR_RU if s not in fetched]
-        if missing:
-            warnings.append(
-                "RU68 needs P16, P84 and the 120 m mean; also fetching "
-                f"{', '.join(missing)} (used for RU68 only, not written)."
-            )
-            fetched = [s.code for s in STATISTICS if s.code in fetched + missing]
     return Selection(
         variables=[v.code for v in VARIABLES if v.code in variables],
         depths=[d[0] for d in DEPTHS if d[0] in depths],
         periods=[p for p in PERIODS if p in periods],
         statistics=fetched,
         written_statistics=written,
-        ru68=ru68,
         subgroups=subgroups,
         water=water,
         warnings=warnings,
@@ -307,7 +292,6 @@ class RunResult:
     mode: str
     files: list[str] = field(default_factory=list)
     layers: list[LayerRecord] = field(default_factory=list)
-    uncertainty: list[dict] = field(default_factory=list)
     texture: list[dict] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
@@ -327,18 +311,6 @@ def _options(options_ctx, default_used: bool):
 def _log(result: RunResult, log_fn: Callable, msg: str) -> None:
     result.warnings.append(msg)
     log_fn(msg)
-
-
-def _ru_summary(ru: np.ndarray) -> dict:
-    valid = np.asarray(ru, dtype=np.float64)
-    valid = valid[np.isfinite(valid)]
-    if not valid.size:
-        return {"cells": 0, "median_ru68": math.nan, "p90_ru68": math.nan}
-    return {
-        "cells": int(valid.size),
-        "median_ru68": float(np.median(valid)),
-        "p90_ru68": float(np.percentile(valid, 90)),
-    }
 
 
 def _read_layers(jobs, reader, arg, workers, cancel_fn, progress, verb):
@@ -390,7 +362,7 @@ def extract_area(
     cancel_fn: Callable = _never_cancelled,
 ) -> RunResult:
     """One multi-band GeoTIFF per variable x statistic x period (one band
-    per depth), plus RU68 files. ``write_fn(path, grid, bands, units)``."""
+    per depth). ``write_fn(path, grid, bands, units)``."""
     if write_fn is None:
         raise SoilDataError("No raster writer supplied.")
     read = read_grid_fn or gdal_read_grid
@@ -478,10 +450,6 @@ def extract_area(
                         newest = latest if latest in periods_read else periods_read[-1]
                         if stat == main and period == newest:
                             result.load_files.append(path)
-                if selection.ru68:
-                    _write_ru68(
-                        var, period, selection, arrays, grid, out_dir, write_fn, result
-                    )
             del got
 
     if selection.water:
@@ -489,7 +457,7 @@ def extract_area(
             water = _read_water(
                 read, grid, selection, workers, cancel_fn, progress, result, log_fn
             )
-        _write_water(water, selection, grid, out_dir, write_fn, result, log_fn)
+        _write_water(water, grid, out_dir, write_fn, result, log_fn)
 
     if selection.subgroups:
         with _options(options_ctx, read_grid_fn is None):
@@ -509,6 +477,9 @@ def extract_area(
         result.load_files.append(path)
         result.subgroup = _subgroup_summary(top, path)
         _subgroup_records(result, top, os.path.basename(path))
+        warning = subgroup_warning(result.subgroup)
+        if warning:
+            _log(result, log_fn, warning)
 
     for (period, depth), means in sorted(texture.items()):
         if all(c in means for c in TEXTURE_CODES):
@@ -529,47 +500,6 @@ def extract_area(
     return result
 
 
-def _write_ru68(var, period, selection, arrays, grid, out_dir, write_fn, result):
-    have = [
-        d
-        for d in selection.depths
-        if all((s, period, d) in arrays for s in STATS_FOR_RU)
-    ]
-    if not have:
-        return
-    path = os.path.join(out_dir, output_file_name(var, RU68_TAG, period))
-    bands = []
-    for depth in have:
-        ru = relative_width(
-            arrays[("p16", period, depth)],
-            arrays[("mean120", period, depth)],
-            arrays[("p84", period, depth)],
-        )
-        bands.append((band_description(var, depth, RU68_TAG, period, "ratio"), ru))
-        result.uncertainty.append(
-            {"variable": var, "period": period, "depth": depth, **_ru_summary(ru)}
-        )
-        result.layers.append(
-            LayerRecord(
-                file=os.path.basename(path),
-                band=len(bands),
-                layer=layer_label(var, depth, RU68_TAG, period),
-                variable=var,
-                depth=depth,
-                period=period,
-                statistic=RU68,
-                resolution_m=120,
-                units="ratio",
-                scale=1.0,
-                scale_source="derived",
-                route="derived",
-                stats=summarise(ru),
-            )
-        )
-    write_fn(path, grid, bands, "ratio")
-    result.files.append(path)
-
-
 def _check_empty(records, result, log_fn):
     for rec in records:
         if rec.stats.get("valid") == 0:
@@ -582,7 +512,7 @@ def _check_empty(records, result, log_fn):
 
 
 # ----------------------------------------------------------------------
-# Legacy 250 m water content (33 / 1500 kPa) and derived AWC
+# Legacy 250 m water content (33 / 1500 kPa), at native depth points
 # ----------------------------------------------------------------------
 
 
@@ -600,23 +530,17 @@ def water_sources(code: str, depth_cm: int) -> list[Source]:
     ]
 
 
-def interval_mean(points: dict[int, np.ndarray], depth: str) -> np.ndarray:
-    """Interval value from the two bounding depth points (trapezoidal rule)."""
-    _, top, bottom = DEPTH_BY_LABEL[depth]
-    return (np.asarray(points[top], float) + np.asarray(points[bottom], float)) / 2
+def water_file_name(code: str) -> str:
+    return f"olm_{LEGACY_BY_CODE[code].out_name}_250m_{LEGACY_PERIOD}.tif"
 
 
-def awc_mm(fc, wp, depth: str) -> np.ndarray:
-    """(FC - WP) x layer thickness with FC/WP in vol %: mm of water held in
-    the layer. Negative differences (map noise) are set to 0."""
-    _, top, bottom = DEPTH_BY_LABEL[depth]
-    diff = np.asarray(fc, float) - np.asarray(wp, float)
-    out = np.clip(diff, 0, None) / 100.0 * (bottom - top) * 10.0
-    out[~np.isfinite(diff)] = np.nan
-    return out
+def water_layer_name(code: str, depth_cm: int) -> str:
+    return f"{LEGACY_BY_CODE[code].out_name}_{depth_cm}cm_250m_{LEGACY_PERIOD}"
 
 
 def _read_water(reader, arg, selection, workers, cancel_fn, progress, result, log_fn):
+    """{code: {depth_cm: (values, route)}} at the native depth POINTS that
+    bound the selected intervals - stored as published, no averaging."""
     points = legacy_points_needed(selection.depths)
     keys = [(v.code, d) for v in LEGACY_VARIABLES for d in points]
 
@@ -627,73 +551,53 @@ def _read_water(reader, arg, selection, workers, cancel_fn, progress, result, lo
         return raw, f_scale, f_offset, route, errors
 
     def done(key):
-        progress.step(f"Read {key[0]} at {key[1]} cm (250 m, {LEGACY_PERIOD})")
+        progress.step(f"Read {water_layer_name(*key)}")
 
     got = run_jobs(keys, job, workers, cancel_fn, done)
     data: dict = {v.code: {} for v in LEGACY_VARIABLES}
-    routes: dict[str, int] = {}
     for code, depth_cm in keys:
         raw, f_scale, f_offset, route, errors = got[(code, depth_cm)]
         for err in errors:
             _log(
                 result,
                 log_fn,
-                f"{code} {depth_cm} cm: primary route failed, used {route} ({err})",
+                f"{water_layer_name(code, depth_cm)}: primary route failed, used "
+                f"{route} ({err})",
             )
         scale, offset, _ = resolve_scale(f_scale, f_offset, 1.0)
-        data[code][depth_cm] = apply_scale(raw, scale, offset)
-        routes[route] = routes.get(route, 0) + 1
-    data["route"] = max(routes, key=routes.get)
-    data["routes"] = routes
+        data[code][depth_cm] = (apply_scale(raw, scale, offset), route)
     return data
 
 
-def _water_products(water, selection):
-    """[(code, label, units, {depth: values})] for wc33, wc1500 and AWC."""
-    out = []
-    by = {}
+def _write_water(water, grid, out_dir, write_fn, result, log_fn):
     for v in LEGACY_VARIABLES:
-        by[v.code] = {d: interval_mean(water[v.code], d) for d in selection.depths}
-        out.append((v.code, v.label, "vol %", by[v.code]))
-    awc = {d: awc_mm(by["wc33"][d], by["wc1500"][d], d) for d in selection.depths}
-    out.append((AWC_CODE, AWC_LABEL, "mm", awc))
-    return out
-
-
-def water_file_name(code: str) -> str:
-    return f"olm_{code}_250m_{LEGACY_PERIOD}.tif"
-
-
-def _write_water(water, selection, grid, out_dir, write_fn, result, log_fn):
-    for code, _label, units, by_depth in _water_products(water, selection):
-        path = os.path.join(out_dir, water_file_name(code))
-        derived = code == AWC_CODE
+        path = os.path.join(out_dir, water_file_name(v.code))
         bands, records = [], []
-        for depth, values in by_depth.items():
-            name = f"{code}_{depth}_mean_250m_{LEGACY_PERIOD}"
-            bands.append((f"{name} ({units})", values))
+        for depth_cm, (values, route) in sorted(water[v.code].items()):
+            name = water_layer_name(v.code, depth_cm)
+            bands.append((f"{name} (vol %)", values))
             records.append(
                 LayerRecord(
                     file=os.path.basename(path),
                     band=len(bands),
                     layer=name,
-                    variable=code,
-                    depth=depth,
+                    variable=v.out_name,
+                    depth=f"{depth_cm}cm",
                     period=LEGACY_PERIOD,
-                    statistic="derived" if derived else "mean",
+                    statistic="mean",
                     resolution_m=250,
-                    units=units,
+                    units="vol %",
                     scale=1.0,
-                    scale_source="derived" if derived else "file metadata or none",
-                    route="derived" if derived else water["route"],
+                    scale_source="file metadata or none",
+                    route=route,
                     stats=summarise(values),
                 )
             )
-        write_fn(path, grid, bands, units)
+        write_fn(path, grid, bands, "vol %")
         result.files.append(path)
+        result.load_files.append(path)
         result.layers.extend(records)
         _check_empty(records, result, log_fn)
-    result.water = {"routes": water["routes"]}
 
 
 # ----------------------------------------------------------------------
@@ -790,6 +694,25 @@ def _subgroup_bands(top: dict) -> list[tuple[str, np.ndarray]]:
         (f"usda_subgroup_probability_rank2_{period} (%)", top["p2"]),
         (f"usda_subgroup_probability_sum_{period} (%)", top["psum"]),
     ]
+
+
+SUBGROUP_LOW_PROBABILITY = 20.0  # % - below this the map is indicative only
+
+
+def subgroup_warning(summary: dict) -> str | None:
+    """Warning text when the most probable subgroup is itself improbable."""
+    med = summary.get("median_probability", math.nan)
+    if not summary.get("mapped") or not math.isfinite(med):
+        return None
+    if med < SUBGROUP_LOW_PROBABILITY:
+        return (
+            f"USDA subgroups: the most probable subgroup has a median probability "
+            f"of only {med:.0f}% (probabilities spread over {len(SUBGROUP_NAMES)} "
+            "subgroups). The subgroup map is indicative only here - the top class "
+            "barely beats the alternatives. Compare rank 1 and rank 2 "
+            "probabilities before relying on it."
+        )
+    return None
 
 
 def _subgroup_summary(top: dict, path: str) -> dict:
@@ -911,6 +834,8 @@ def extract_points(
         top, bottom = ("", "")
         if depth in DEPTH_BY_LABEL:
             _, top, bottom = DEPTH_BY_LABEL[depth]
+        elif depth.endswith("cm") and depth[:-2].isdigit():  # a depth point
+            top = bottom = int(depth[:-2])
         for site, value in zip(sites, values, strict=True):
             result.rows.append(
                 {
@@ -973,36 +898,6 @@ def extract_points(
                             stats=summarise(values),
                         )
                     )
-            if selection.ru68:
-                for period in sorted(
-                    {j.period for j in var_jobs}, key=list(PERIODS).index
-                ):
-                    for depth in selection.depths:
-                        keys = [(var, s, period, depth) for s in STATS_FOR_RU]
-                        if not all(k in store for k in keys):
-                            continue
-                        ru = relative_width(
-                            store[keys[0]], store[keys[1]], store[keys[2]]
-                        )
-                        add_rows(
-                            var,
-                            RU68_LABEL,
-                            depth,
-                            period,
-                            RU68,
-                            120,
-                            ru,
-                            "ratio",
-                            "derived",
-                        )
-                        result.uncertainty.append(
-                            {
-                                "variable": var,
-                                "period": period,
-                                "depth": depth,
-                                **_ru_summary(ru),
-                            }
-                        )
     if selection.water:
         with _options(options_ctx, sample_fn is None):
             water = _read_water(
@@ -1015,33 +910,33 @@ def extract_points(
                 result,
                 log_fn,
             )
-        for code, label, units, by_depth in _water_products(water, selection):
-            for depth, values in by_depth.items():
+        for v in LEGACY_VARIABLES:
+            for depth_cm, (values, route) in sorted(water[v.code].items()):
                 add_rows(
-                    code,
-                    label,
-                    depth,
+                    v.out_name,
+                    v.label,
+                    f"{depth_cm}cm",
                     LEGACY_PERIOD,
-                    "mean" if code != AWC_CODE else "derived",
+                    "mean",
                     250,
                     values,
-                    units,
-                    water["route"] if code != AWC_CODE else "derived",
+                    "vol %",
+                    route,
                 )
                 result.layers.append(
                     LayerRecord(
                         file="",
                         band=0,
-                        layer=f"{code}_{depth}_mean_250m_{LEGACY_PERIOD}",
-                        variable=code,
-                        depth=depth,
+                        layer=water_layer_name(v.code, depth_cm),
+                        variable=v.out_name,
+                        depth=f"{depth_cm}cm",
                         period=LEGACY_PERIOD,
-                        statistic="mean" if code != AWC_CODE else "derived",
+                        statistic="mean",
                         resolution_m=250,
-                        units=units,
+                        units="vol %",
                         scale=1.0,
                         scale_source="file metadata or none",
-                        route=water["route"] if code != AWC_CODE else "derived",
+                        route=route,
                         stats=summarise(values),
                     )
                 )
@@ -1089,6 +984,9 @@ def extract_points(
                     }
                 )
         result.subgroup = _subgroup_summary(top, "")
+        warning = subgroup_warning(result.subgroup)
+        if warning:
+            _log(result, log_fn, warning)
 
     for period in selection.periods + [LATEST_PERIOD]:
         for depth in selection.depths:
@@ -1147,7 +1045,6 @@ def build_metadata(
             ", ".join(STAT_BY_CODE[s].label for s in selection.written_statistics)
             or "(none)",
         ],
-        ["RU68 (derived)", "yes" if selection.ru68 else "no"],
         ["Output nodata", NODATA_OUT],
         [
             "Note - texture limits",
@@ -1159,8 +1056,8 @@ def build_metadata(
             "Note - statistics",
             "The 30 m values are means (not medians). P16/P84 bound the 68 % "
             "prediction interval and exist at 120 m only; on a finer output "
-            "grid they repeat in 120 m blocks. RU68 = (P84-P16)/mean uses the "
-            "120 m mean so all three share the same support.",
+            "grid they repeat in 120 m blocks. The 120 m mean is published so "
+            "that P16, mean and P84 can be compared on the same support.",
         ],
         [
             "Note - quantiles",
@@ -1220,24 +1117,13 @@ def build_metadata(
         ]
         for rec in result.layers
     ]
-    ru_rows = [
-        [
-            u["variable"],
-            u["period"],
-            u["depth"],
-            u["cells"],
-            _r(u["median_ru68"]),
-            _r(u["p90_ru68"]),
-        ]
-        for u in result.uncertainty
-    ]
     tex_rows = [
         [t["period"], t["depth"], t["checked"], t["flagged"], _r(t["max_abs_dev"])]
         for t in result.texture
     ]
     if selection.water:
         run_rows += [
-            ["Water content (250 m)", "33 kPa and 1500 kPa, 1950-2017; AWC derived"],
+            ["Water content (250 m)", "33 kPa and 1500 kPa, 1950-2017"],
             ["Citation (water content)", LEGACY_CITATION],
             ["Data DOI (water content)", LEGACY_DOI],
             ["Licence (water content)", LEGACY_LICENCE + " (share-alike)"],
@@ -1246,12 +1132,13 @@ def build_metadata(
                 "Older OpenLandMap layers (v0.1, 250 m) mapped from measured "
                 "volumetric water contents - no pedotransfer functions except to "
                 "fill missing bulk densities - so they are an independent check "
-                "on PTF field capacity and wilting point. Published at depth "
-                "points (0, 30, 60, 100 cm); each interval is the average of its "
-                "two bounding points. AWC = (FC - WP) x layer thickness (mm), the "
-                "authors' own definition, negative differences set to 0. Read "
-                "from the cloud-optimised copy on s3.openlandmap.org (Zenodo as "
-                "fallback).",
+                "on PTF field capacity and wilting point. Stored as published at "
+                "depth POINTS (0, 30, 60, 100 cm; those bounding the selected "
+                "intervals), one band per point. Conversion to intervals and "
+                "available water capacity are computed by Regional soil "
+                "parameterisation, not here. Read from the cloud-optimised copy "
+                "on s3.openlandmap.org where available, otherwise Zenodo (route "
+                "per layer in the Layers section).",
             ],
         ]
     if selection.subgroups:
@@ -1342,11 +1229,6 @@ def build_metadata(
                 "Max",
             ],
             layer_rows,
-        ),
-        (
-            "Uncertainty (RU68 = (P84-P16)/mean, 120 m)",
-            ["Variable", "Period", "Depth", "Cells/points", "Median RU68", "P90 RU68"],
-            ru_rows,
         ),
         (
             f"Texture check (30 m mean sand+silt+clay, flag if off 100 by > "

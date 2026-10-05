@@ -5,7 +5,7 @@ the band-1 display style. Imported only by *_algorithm.py modules, so the
 core modules stay free of QGIS.
 """
 
-from pathlib import Path
+from dataclasses import dataclass, field
 
 from qgis.core import (
     Qgis,
@@ -45,39 +45,116 @@ def resolution_in_crs_units(res_m: float, crs) -> float:
     return res_m * factor
 
 
-class BandOnePostProcessor(QgsProcessingLayerPostProcessorInterface):
-    """Multi-band rasters would otherwise load as an RGB composite of the
-    first three depths, which is meaningless. Show band 1 as a stretched
-    single-band grey layer instead."""
+# ----------------------------------------------------------------------
+# Styling (in memory - no style files are written)
+# ----------------------------------------------------------------------
+
+LOAD_OPTIONS = ["All outputs", "Main layers only", "None"]
+LOAD_ALL, LOAD_MAIN, LOAD_NONE = 0, 1, 2
+
+
+@dataclass
+class OutputLayer:
+    """A raster to load and/or list in the run's .qlr layer file.
+    ``classes`` (value, label) gives a categorised (paletted) style on band 1;
+    otherwise band 1 is shown as stretched single-band grey."""
+
+    path: str
+    name: str
+    main: bool = False
+    classes: list = field(default_factory=list)
+
+
+def apply_style(layer, out: OutputLayer) -> None:
+    """Single-band grey (band 1, min-max stretch) or a paletted style.
+    Multi-band rasters would otherwise show the first three depths as RGB."""
+    from qgis.core import (
+        QgsContrastEnhancement,
+        QgsPalettedRasterRenderer,
+        QgsSingleBandGrayRenderer,
+    )
+    from qgis.PyQt.QtGui import QColor
+
+    if out.classes:
+        from mayim_tools.soil._common.export import class_colour
+
+        classes = [
+            QgsPalettedRasterRenderer.Class(value, QColor(class_colour(value)), label)
+            for value, label in out.classes
+        ]
+        layer.setRenderer(QgsPalettedRasterRenderer(layer.dataProvider(), 1, classes))
+    else:
+        layer.setRenderer(QgsSingleBandGrayRenderer(layer.dataProvider(), 1))
+        layer.setContrastEnhancement(
+            QgsContrastEnhancement.ContrastEnhancementAlgorithm.StretchToMinimumMaximum
+        )
+    layer.triggerRepaint()
+
+
+class StylePostProcessor(QgsProcessingLayerPostProcessorInterface):
+    def __init__(self, out: OutputLayer):
+        super().__init__()
+        self.out = out
 
     def postProcessLayer(self, layer, context, feedback):
         try:
-            from qgis.core import QgsContrastEnhancement, QgsSingleBandGrayRenderer
-
-            layer.setRenderer(QgsSingleBandGrayRenderer(layer.dataProvider(), 1))
-            layer.setContrastEnhancement(
-                QgsContrastEnhancement.ContrastEnhancementAlgorithm.StretchToMinimumMaximum
-            )
-            layer.triggerRepaint()
+            apply_style(layer, self.out)
         except Exception as exc:  # noqa: BLE001 - styling must never fail a run
-            feedback.pushWarning(f"Could not set the display style: {exc}")
+            feedback.pushWarning(f"Could not style {self.out.name}: {exc}")
 
 
-def load_rasters(context, paths, keep_alive: list, name_fn=None, restyle=True) -> None:
-    """Queue rasters to load on completion. With ``restyle`` the band-1 grey
-    style is applied by a post-processor (kept alive in ``keep_alive`` - QGIS
-    needs a live Python reference until it runs); without it the layer keeps
-    the style QGIS loads from the .qml beside the file."""
-    for path in paths:
-        name = Path(path).stem
-        if name_fn is not None:
-            name = name_fn(name)
-        details = QgsProcessingContext.LayerDetails(name, context.project(), name)
-        if restyle:
-            processor = BandOnePostProcessor()
-            keep_alive.append(processor)
-            details.setPostProcessor(processor)
-        context.addLayerToLoadOnCompletion(path, details)
+def load_outputs(context, outputs, choice: int, keep_alive: list) -> int:
+    """Queue outputs to load on completion, styled in memory. ``choice`` is
+    LOAD_ALL / LOAD_MAIN / LOAD_NONE. Post-processors are kept alive in
+    ``keep_alive`` (QGIS needs a live Python reference until they run).
+    Returns the number of layers queued."""
+    if choice == LOAD_NONE:
+        return 0
+    n = 0
+    for out in outputs:
+        if choice == LOAD_MAIN and not out.main:
+            continue
+        details = QgsProcessingContext.LayerDetails(
+            out.name, context.project(), out.name
+        )
+        processor = StylePostProcessor(out)
+        keep_alive.append(processor)
+        details.setPostProcessor(processor)
+        context.addLayerToLoadOnCompletion(out.path, details)
+        n += 1
+    return n
+
+
+def write_layer_file(outputs, qlr_path: str, feedback) -> bool:
+    """One QGIS layer-definition file (.qlr) for the whole run: dragging it
+    into any project reloads every output with its style. Paths are stored
+    relative to the .qlr, so the folder can be moved. Never fails a run."""
+    try:
+        from qgis.core import (
+            QgsLayerDefinition,
+            QgsPathResolver,
+            QgsRasterLayer,
+            QgsReadWriteContext,
+        )
+
+        layers = []
+        for out in outputs:
+            layer = QgsRasterLayer(out.path, out.name, "gdal")
+            if not layer.isValid():
+                continue
+            apply_style(layer, out)
+            layers.append(layer)
+        if not layers:
+            return False
+        rw = QgsReadWriteContext()
+        rw.setPathResolver(QgsPathResolver(qlr_path))
+        doc = QgsLayerDefinition.exportLayerDefinitionLayers(layers, rw)
+        with open(qlr_path, "w", encoding="utf-8") as f:
+            f.write(doc.toString())
+        return True
+    except Exception as exc:  # noqa: BLE001 - optional convenience file
+        feedback.pushWarning(f"Could not write the layer file {qlr_path}: {exc}")
+        return False
 
 
 def area_bounds(alg, parameters, context, out_crs, feedback, layer_param, extent_param):

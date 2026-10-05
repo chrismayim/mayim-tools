@@ -26,8 +26,8 @@ DATA SOURCE
   depth to bedrock (Shangguan et al. 2017) and mean predictions of the
   same properties, which - unlike 2.0 - also cover urban and bare
   areas. Its depths are points (0, 5, 15, 30, 60, 100, 200 cm); the
-  tool averages the two bounding points (trapezoidal rule) to give
-  the same six intervals as 2.0, so both line up band for band.
+  tool stores them as published (one band per depth point); conversion
+  to intervals is done by Regional soil parameterisation.
 
 UNITS
 SoilGrids stores integers. Every value written by this tool has
@@ -38,11 +38,11 @@ OM factor is a method choice made by the hydraulic-property tools.
 
 UNCERTAINTY
 Each variable can be extracted as the mean and the 5 %, 50 % and 95 %
-prediction quantiles (SoilGrids' own 90 % prediction interval). The
-derived relative 90 % interval width RU90 = (Q0.95 - Q0.05) / Q0.50 is
-computed by this tool from those quantiles (ISRIC's own "uncertainty"
-layer is not downloaded, which avoids its separate scaling rules).
-Texture quantiles are MARGINAL: Q0.05 sand + Q0.05 clay is not a real
+prediction quantiles (SoilGrids' own 90 % prediction interval). This tool
+only acquires data: derived measures (e.g. relative interval widths) are
+computed by Regional soil parameterisation, not here. ISRIC's own
+"uncertainty" layer is not downloaded (it can be recomputed from the
+quantiles). Texture quantiles are MARGINAL: Q0.05 sand + Q0.05 clay is not a real
 soil. Uncertainty propagation must sample and renormalise the
 fractions, not combine quantiles directly.
 """
@@ -104,7 +104,7 @@ from mayim_tools.soil._common.stats import (  # noqa: F401
     texture_sum_check,
 )
 
-TOOL_VERSION = "0.3.0"
+TOOL_VERSION = "0.4.0"
 
 BASE_URL = "https://files.isric.org/soilgrids/latest/data/"
 SG2017_URL = "https://files.isric.org/soilgrids/former/2017-03-10/data/"
@@ -267,9 +267,6 @@ DEPTHS: tuple[tuple[str, int, int], ...] = (
 DEPTH_BY_LABEL = {d[0]: d for d in DEPTHS}
 
 STATISTICS: tuple[str, ...] = ("mean", "Q0.05", "Q0.5", "Q0.95")
-RU90 = "RU90"
-RU90_LABEL = "Relative 90% interval width (Q0.95-Q0.05)/Q0.5"
-QUANTILES_FOR_RU = ("Q0.05", "Q0.5", "Q0.95")
 TEXTURE_CODES = ("sand", "silt", "clay")
 
 PRODUCT_SG2 = "SoilGrids 2.0"
@@ -320,9 +317,8 @@ def band_description(var: str, depth: str, stat: str, units: str) -> str:
 class Selection:
     variables: list[str]
     depths: list[str]
-    statistics: list[str]  # what is fetched (quantiles auto-added for RU90)
-    written_statistics: list[str]  # what is written (user's choice)
-    ru90: bool
+    statistics: list[str]
+    written_statistics: list[str]
     bedrock: bool
     sg2017: bool = False
     warnings: list[str] = field(default_factory=list)
@@ -332,14 +328,10 @@ def plan_selection(
     variables: Sequence[str],
     depths: Sequence[str],
     statistics: Sequence[str],
-    ru90: bool = False,
     bedrock: bool = False,
     sg2017: bool = False,
 ) -> Selection:
-    """Validate and order the user's selection.
-
-    RU90 needs Q0.05, Q0.5 and Q0.95; missing ones are fetched (so RU90
-    can be computed) but only written if the user selected them."""
+    """Validate and order the user's selection."""
     unknown = [v for v in variables if v not in VARIABLE_BY_CODE]
     if unknown:
         raise SoilGridsError(f"Unknown SoilGrids variable(s): {', '.join(unknown)}")
@@ -358,19 +350,10 @@ def plan_selection(
 
     if variables_ordered and not depths_ordered:
         raise SoilGridsError("Select at least one depth interval.")
-    if variables_ordered and not written and not ru90:
+    if variables_ordered and not written:
         raise SoilGridsError("Select at least one statistic.")
     if not variables_ordered and not bedrock:
         raise SoilGridsError("Select at least one variable.")
-
-    if ru90:
-        missing = [q for q in QUANTILES_FOR_RU if q not in fetched]
-        if missing:
-            warnings.append(
-                "RU90 needs Q0.05, Q0.5 and Q0.95; also fetching "
-                f"{', '.join(missing)} (used for RU90 only, not written)."
-            )
-            fetched = [s for s in STATISTICS if s in fetched or s in missing]
 
     if sg2017 and not any(v in VARS_2017 for v in variables_ordered):
         warnings.append(
@@ -383,7 +366,6 @@ def plan_selection(
         depths=depths_ordered,
         statistics=fetched,
         written_statistics=written,
-        ru90=ru90,
         bedrock=bedrock,
         sg2017=sg2017,
         warnings=warnings,
@@ -409,6 +391,11 @@ def sg2017_path(var: str, point_index: int, base: str = SG2017_DIR) -> str:
     return f"{base}{VARS_2017[var].code}_M_sl{point_index + 1}_250m_ll.tif"
 
 
+def point_label_2017(point_index: int) -> str:
+    """'15cm' for sl3 - SoilGrids 2017 values are at depth POINTS."""
+    return f"{DEPTH_POINTS_2017[point_index]}cm"
+
+
 def sg2017_points_needed(depths: Sequence[str]) -> list[int]:
     """Depth-point indices (0..6) needed to average the selected intervals."""
     needed = set()
@@ -417,15 +404,6 @@ def sg2017_points_needed(depths: Sequence[str]) -> list[int]:
         needed.add(DEPTH_POINTS_2017.index(top))
         needed.add(DEPTH_POINTS_2017.index(bottom))
     return sorted(needed)
-
-
-def sg2017_interval(points: dict[int, np.ndarray], depth: str) -> np.ndarray:
-    """Interval mean from the two bounding depth points (trapezoidal rule:
-    for a straight line between two points this is exact)."""
-    _, top, bottom = DEPTH_BY_LABEL[depth]
-    a = np.asarray(points[DEPTH_POINTS_2017.index(top)], dtype=np.float64)
-    b = np.asarray(points[DEPTH_POINTS_2017.index(bottom)], dtype=np.float64)
-    return (a + b) / 2.0
 
 
 # ----------------------------------------------------------------------
@@ -526,7 +504,6 @@ class RunResult:
     mode: str
     files: list[str] = field(default_factory=list)
     layers: list[LayerRecord] = field(default_factory=list)
-    uncertainty: list[dict] = field(default_factory=list)
     texture: list[dict] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     rows: list[dict] = field(default_factory=list)  # point mode
@@ -630,7 +607,7 @@ def extract_area(
     cancel_fn: Callable = _never_cancelled,
 ) -> RunResult:
     """Fetch every selected layer onto ``grid`` and write one multi-band
-    GeoTIFF per variable x statistic (one band per depth), plus RU90 files,
+    GeoTIFF per variable x statistic (one band per depth),
     optional SoilGrids 2017 mean files and the optional depth-to-bedrock
     file. ``write_fn(path, grid, bands, units)``; bands = [(description,
     array)] - see export.write_multiband_geotiff."""
@@ -675,7 +652,6 @@ def extract_area(
                 progress.step(f"Read {layer_name(var, key[0], key[1])}")
 
             got = run_jobs(keys, job, workers, cancel_fn, done)
-            quantiles: dict[str, dict[str, np.ndarray]] = {}
             for stat in selection.statistics:
                 bands: list[tuple[str, np.ndarray]] = []
                 records: list[LayerRecord] = []
@@ -703,8 +679,6 @@ def extract_area(
                             stats=summarise(arr),
                         )
                     )
-                    if stat in QUANTILES_FOR_RU and selection.ru90:
-                        quantiles.setdefault(depth, {})[stat] = arr
                     if stat == "mean" and var in TEXTURE_CODES:
                         texture_means.setdefault(depth, {})[var] = arr
                 if stat in selection.written_statistics:
@@ -717,9 +691,6 @@ def extract_area(
                     ):
                         result.load_files.append(path)
             del got
-
-            if selection.ru90:
-                _write_ru90(var, selection, quantiles, grid, out_dir, write_fn, result)
 
         for depth in selection.depths:
             means = texture_means.get(depth, {})
@@ -769,32 +740,6 @@ def extract_area(
     return result
 
 
-def _write_ru90(var, selection, quantiles, grid, out_dir, write_fn, result):
-    ru_bands = []
-    path = os.path.join(out_dir, output_file_name(var, RU90))
-    for depth in selection.depths:
-        q = quantiles[depth]
-        ru = relative_width(q["Q0.05"], q["Q0.5"], q["Q0.95"])
-        ru_bands.append((band_description(var, depth, RU90, "ratio"), ru))
-        result.uncertainty.append({"variable": var, "depth": depth, **_ru_summary(ru)})
-        result.layers.append(
-            LayerRecord(
-                file=os.path.basename(path),
-                band=len(ru_bands),
-                layer=f"{var}_{depth}_{RU90}",
-                variable=var,
-                depth=depth,
-                statistic=RU90,
-                units="ratio",
-                factor=1.0,
-                route="derived",
-                stats=summarise(ru),
-            )
-        )
-    write_fn(path, grid, ru_bands, "ratio")
-    result.files.append(path)
-
-
 def _area_2017(
     selection,
     grid,
@@ -831,16 +776,17 @@ def _area_2017(
         points = {k: convert(raw, v17.divide_by) for k, raw in raw_points.items()}
         path = os.path.join(out_dir, output_file_name_2017(var))
         bands = []
-        for depth in selection.depths:
-            arr = sg2017_interval(points, depth)
-            bands.append((f"{var}_{depth}_mean [SG2017] ({meta.units})", arr))
+        for k in point_idx:
+            arr = points[k]
+            point = point_label_2017(k)
+            bands.append((f"{var}_{point}_mean [SG2017] ({meta.units})", arr))
             result.layers.append(
                 LayerRecord(
                     file=os.path.basename(path),
                     band=len(bands),
-                    layer=f"{v17.code}_M (trapezoid {depth})",
+                    layer=f"{v17.code}_M_sl{k + 1} ({point})",
                     variable=var,
-                    depth=depth,
+                    depth=point,
                     statistic="mean",
                     units=meta.units,
                     factor=v17.divide_by,
@@ -901,17 +847,6 @@ def _area_bedrock(
     result.load_files.append(path)
 
 
-def _ru_summary(ru: np.ndarray) -> dict:
-    valid = ru[np.isfinite(ru)]
-    if not valid.size:
-        return {"cells": 0, "median_ru90": math.nan, "p90_ru90": math.nan}
-    return {
-        "cells": int(valid.size),
-        "median_ru90": float(np.median(valid)),
-        "p90_ru90": float(np.percentile(valid, 90)),
-    }
-
-
 # ----------------------------------------------------------------------
 # Point mode
 # ----------------------------------------------------------------------
@@ -956,6 +891,8 @@ def extract_points(
         top, bottom = ("", "")
         if depth in DEPTH_BY_LABEL:
             _, top, bottom = DEPTH_BY_LABEL[depth]
+        elif depth.endswith("cm") and depth[:-2].isdigit():  # a depth point
+            top = bottom = int(depth[:-2])
         for site, value in zip(sites, values, strict=True):
             result.rows.append(
                 {
@@ -1043,26 +980,6 @@ def extract_points(
                                 stats=summarise(values),
                             )
                         )
-            if selection.ru90:
-                for depth in selection.depths:
-                    ru = relative_width(
-                        store[(var, depth, "Q0.05")],
-                        store[(var, depth, "Q0.5")],
-                        store[(var, depth, "Q0.95")],
-                    )
-                    add_rows(
-                        PRODUCT_SG2,
-                        var,
-                        RU90_LABEL,
-                        depth,
-                        RU90,
-                        ru,
-                        "ratio",
-                        "derived",
-                    )
-                    result.uncertainty.append(
-                        {"variable": var, "depth": depth, **_ru_summary(ru)}
-                    )
 
         for depth in selection.depths:
             if all((code, depth, "mean") in store for code in TEXTURE_CODES):
@@ -1105,13 +1022,14 @@ def extract_points(
                     k: convert(np.asarray(raw, dtype=np.float64), v17.divide_by)
                     for k, raw in raw_points.items()
                 }
-                for depth in selection.depths:
-                    values = sg2017_interval(points, depth)
+                for k in point_idx:
+                    values = points[k]
+                    point = point_label_2017(k)
                     add_rows(
                         PRODUCT_SG2017,
                         var,
                         meta.label,
-                        depth,
+                        point,
                         "mean",
                         values,
                         meta.units,
@@ -1121,9 +1039,9 @@ def extract_points(
                         LayerRecord(
                             file="",
                             band=0,
-                            layer=f"{v17.code}_M (trapezoid {depth})",
+                            layer=f"{v17.code}_M_sl{k + 1} ({point})",
                             variable=var,
-                            depth=depth,
+                            depth=point,
                             statistic="mean",
                             units=meta.units,
                             factor=v17.divide_by,
@@ -1224,7 +1142,6 @@ def build_metadata(
         ["Variables", ", ".join(selection.variables) or "(none)"],
         ["Depths", ", ".join(selection.depths)],
         ["Statistics written", ", ".join(selection.written_statistics)],
-        ["RU90 (derived)", "yes" if selection.ru90 else "no"],
         ["SoilGrids 2017 means", "yes" if selection.sg2017 else "no"],
         ["Depth to bedrock (2017)", "yes" if selection.bedrock else "no"],
         ["Output nodata", NODATA_OUT],
@@ -1261,11 +1178,12 @@ def build_metadata(
         run_rows.append(
             [
                 "Note - SoilGrids 2017",
-                "Older product: mean predictions only (no quantiles). Its depths "
-                "are points (0, 5, 15, 30, 60, 100, 200 cm); each interval is the "
-                "average of its two bounding points (trapezoidal rule). Bands "
-                "are tagged [SG2017]. Use to fill cells masked in 2.0, with a "
-                "wider uncertainty than 2.0.",
+                "Older product: mean predictions only (no quantiles). Stored at "
+                "its native depth POINTS (0, 5, 15, 30, 60, 100, 200 cm; only "
+                "the points bounding the selected intervals are read), one band "
+                "per point, tagged [SG2017]. Conversion to intervals is done by "
+                "Regional soil parameterisation, not here. Use to fill cells "
+                "masked in 2.0, with a wider uncertainty than 2.0.",
             ]
         )
     if selection.bedrock:
@@ -1340,10 +1258,6 @@ def build_metadata(
         ]
         for rec in result.layers
     ]
-    ru_rows = [
-        [u["variable"], u["depth"], u["cells"], _r(u["median_ru90"]), _r(u["p90_ru90"])]
-        for u in result.uncertainty
-    ]
     tex_rows = [
         [t["depth"], t["checked"], t["flagged"], _r(t["max_abs_dev"])]
         for t in result.texture
@@ -1384,11 +1298,6 @@ def build_metadata(
                 "Max",
             ],
             layer_rows,
-        ),
-        (
-            "Uncertainty (RU90 = (Q0.95-Q0.05)/Q0.5)",
-            ["Variable", "Depth", "Cells/points", "Median RU90", "P90 RU90"],
-            ru_rows,
         ),
         (
             f"Texture check (mean sand+silt+clay, flag if off 100 by > "

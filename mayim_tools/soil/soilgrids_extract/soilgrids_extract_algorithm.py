@@ -45,7 +45,6 @@ STAT_OPTIONS = [
     ("Q0.05", "Q0.05 (5% quantile)"),
     ("Q0.5", "Q0.50 (median)"),
     ("Q0.95", "Q0.95 (95% quantile)"),
-    (core.RU90, "RU90 - relative 90% interval width (derived)"),
 ]
 
 
@@ -130,20 +129,22 @@ class SoilGridsExtractAlgorithm(QgsProcessingAlgorithm):
             "statistic, e.g. soilgrids_clay_Q0.50.tif, with one band per depth. "
             "Each band carries a description such as 'clay_30-60cm_Q0.5 (%)'; "
             "later tools select bands by that description, never by band number. "
-            "The median (Q0.50, or the mean if no median is selected) files are "
-            "loaded into the project showing band 1 (the shallowest depth); pick "
-            "another depth under Layer Properties > Symbology > Band. Every "
-            "GeoTIFF has a .qml style file beside it, so files opened by hand "
-            "also display as a single band. Point mode: one long-format CSV (Site, "
+            "Loaded layers show band 1 (the shallowest depth) as a single grey "
+            "band; pick another depth under Layer Properties > Symbology > Band. "
+            "One layer file, soilgrids_layers.qlr, is written per run: drag it "
+            "into any QGIS project to reload every output with its style (no "
+            "style file per raster). Point mode: one long-format CSV (Site, "
             "Longitude, Latitude, Product, Variable, Description, depth, "
             "Statistic, Value, Units, Route). Both modes write a metadata CSV "
             "(soilgrids_metadata.csv "
             "in the folder, or <name>_metadata.csv next to the CSV) with sources, "
-            "access date, routes, units, per-layer statistics, uncertainty (RU90) "
-            "summaries, a sand+silt+clay check and all warnings.\n"
+            "access date, routes, units, per-layer statistics, a sand+silt+clay "
+            "check and all warnings.\n"
             "\n"
             "UNCERTAINTY:\tQ0.05 and Q0.95 bound SoilGrids' 90% prediction "
-            "interval. RU90 = (Q0.95 - Q0.05) / Q0.50 is computed by this tool. "
+            "interval. This tool only acquires data; uncertainty measures and "
+            "all derived quantities are computed by Regional soil "
+            "parameterisation. "
             "Texture quantiles are marginal: Q0.05 sand together with Q0.05 clay "
             "is not a real soil, so uncertainty must be propagated by sampling, "
             "not by combining quantiles.\n"
@@ -164,14 +165,14 @@ class SoilGridsExtractAlgorithm(QgsProcessingAlgorithm):
             "area is buffered by two cells so edge values are complete.\n"
             "  Points: a single point, OR a point layer (every feature), with an "
             "optional name field.\n"
-            "  Variables / Depths / Statistics: checklists. RU90 needs all three "
-            "quantiles; missing ones are fetched for the calculation only.\n"
+            "  Variables / Depths / Statistics: checklists.\n"
             "  SoilGrids 2017 means (optional): SoilGrids 2.0 has no predictions "
             "for urban, water, glacier and bare-surface areas. The 2017 product "
             "(Hengl et al. 2017, ODbL licence) does cover urban and bare areas; "
-            "its mean values are averaged to the same six depth intervals and "
-            "written as soilgrids2017_<variable>_mean.tif, for filling those "
-            "gaps in later tools. Mean only, no quantiles. Each 2017 layer is a "
+            "its mean values are stored at their native depth points (0, 5, 15, "
+            "30, 60, 100, 200 cm - those bounding the selected intervals), one "
+            "band per point, in soilgrids2017_<variable>_mean.tif, for filling "
+            "those gaps in later tools. Mean only, no quantiles. Each 2017 layer is a "
             "single global file and reads more slowly (several seconds each).\n"
             "  Output CRS and resolution (area mode): default project CRS and "
             "250 m (converted to degrees for a geographic CRS).\n"
@@ -303,10 +304,11 @@ class SoilGridsExtractAlgorithm(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
-            QgsProcessingParameterBoolean(
+            QgsProcessingParameterEnum(
                 self.LOAD_LAYERS,
-                "Load median (or mean) rasters into the project (area mode)",
-                defaultValue=True,
+                "Load outputs into the project (area mode)",
+                options=qgis_ui.LOAD_OPTIONS,
+                defaultValue=qgis_ui.LOAD_ALL,
             )
         )
         self.addParameter(
@@ -340,13 +342,10 @@ class SoilGridsExtractAlgorithm(QgsProcessingAlgorithm):
             STAT_OPTIONS[i][0]
             for i in self.parameterAsEnums(parameters, self.STATISTICS, context)
         ]
-        ru90 = core.RU90 in stat_codes
-        stats = [s for s in stat_codes if s != core.RU90]
+        stats = stat_codes
         try:
             sg2017 = self.parameterAsBoolean(parameters, self.SG2017, context)
-            return core.plan_selection(
-                variables, depths, stats, ru90, bedrock, sg2017=sg2017
-            )
+            return core.plan_selection(variables, depths, stats, bedrock, sg2017=sg2017)
         except core.SoilGridsError as exc:
             raise QgsProcessingException(str(exc)) from exc
 
@@ -459,13 +458,20 @@ class SoilGridsExtractAlgorithm(QgsProcessingAlgorithm):
         feedback.pushInfo(f"{len(result.files)} raster(s) written to {folder}")
         feedback.pushInfo(f"Metadata: {meta_path}")
 
-        if self.parameterAsBoolean(parameters, self.LOAD_LAYERS, context):
-            qgis_ui.load_rasters(
-                context,
-                result.load_files,
-                self._post_processors,
-                lambda n: n + " (median)" if n.endswith("_Q0.50") else n,
+        outputs = [
+            qgis_ui.OutputLayer(
+                path=path,
+                name=Path(path).stem
+                + (" (median)" if Path(path).stem.endswith("_Q0.50") else ""),
+                main=path in result.load_files,
             )
+            for path in result.files
+        ]
+        qlr = str(Path(folder) / "soilgrids_layers.qlr")
+        if qgis_ui.write_layer_file(outputs, qlr, feedback):
+            feedback.pushInfo(f"Layer file (reloads all outputs, styled): {qlr}")
+        choice = self.parameterAsEnum(parameters, self.LOAD_LAYERS, context)
+        qgis_ui.load_outputs(context, outputs, choice, self._post_processors)
         return {self.OUTPUT_FOLDER: folder}
 
     def _run_points(self, parameters, context, feedback, selection, common, gdal_ver):
@@ -509,8 +515,3 @@ class SoilGridsExtractAlgorithm(QgsProcessingAlgorithm):
                     f"{tex['checked']} cells/points have mean sand+silt+clay more "
                     f"than {core.TEXTURE_SUM_TOLERANCE:g}% from 100%."
                 )
-        for unc in result.uncertainty:
-            feedback.pushInfo(
-                f"RU90 {unc['variable']} {unc['depth']}: median "
-                f"{unc['median_ru90']:.2f}"
-            )

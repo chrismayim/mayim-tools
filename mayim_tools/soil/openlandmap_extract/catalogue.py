@@ -60,10 +60,6 @@ STATISTICS: tuple[OlmStatistic, ...] = (
     OlmStatistic("p84", "p84", 120, "p84_120m", "P84, upper 68 % limit (120 m)"),
 )
 STAT_BY_CODE = {s.code: s for s in STATISTICS}
-RU68 = "RU68"
-RU68_TAG = "RU68_120m"
-RU68_LABEL = "Relative 68% interval width (P84-P16)/mean, 120 m"
-STATS_FOR_RU = ("p16", "mean120", "p84")
 
 
 @dataclass(frozen=True)
@@ -301,6 +297,7 @@ class LegacyVariable:
     label: str
     arco_name: str
     zenodo_name: str
+    out_name: str  # used in output file and band names
 
 
 LEGACY_VARIABLES: tuple[LegacyVariable, ...] = (
@@ -309,17 +306,17 @@ LEGACY_VARIABLES: tuple[LegacyVariable, ...] = (
         "Volumetric water content at 33 kPa (field capacity)",
         "watercontent.33kPa_usda.4b1c",
         "sol_watercontent.33kPa_usda.4b1c",
+        "field_capacity_33kPa",
     ),
     LegacyVariable(
         "wc1500",
         "Volumetric water content at 1500 kPa (wilting point)",
         "watercontent.1500kPa_usda.3c2a1a",
         "sol_watercontent.1500kPa_usda.3c2a1a",
+        "wilting_point_1500kPa",
     ),
 )
 LEGACY_BY_CODE = {v.code: v for v in LEGACY_VARIABLES}
-AWC_CODE = "awc"
-AWC_LABEL = "Available water capacity, (FC - WP) x layer thickness"
 
 
 def legacy_urls(code: str, depth_cm: int) -> tuple[str, str]:

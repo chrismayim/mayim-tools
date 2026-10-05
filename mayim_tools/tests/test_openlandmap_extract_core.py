@@ -125,13 +125,6 @@ def test_plan_selection_orders_and_validates():
     assert sel.statistics == ["mean30", "p84"]
 
 
-def test_plan_selection_ru68_adds_inputs():
-    sel = core.plan_selection(["clay"], ["0-30cm"], ["2020-2022"], ["mean30"], True)
-    assert sel.statistics == ["mean30", "mean120", "p16", "p84"]
-    assert sel.written_statistics == ["mean30"]
-    assert sel.warnings
-
-
 @pytest.mark.parametrize(
     "args, message",
     [
@@ -329,19 +322,6 @@ def test_area_multi_period_soc_and_static_texture(grid, tmp_path):
     ]
 
 
-def test_area_ru68(grid, tmp_path):
-    sel = core.plan_selection(["soc"], ["0-30cm"], ["2020-2022"], ["mean30"], True)
-    result, writer = run_area(grid, tmp_path, sel)
-    assert set(writer.files) == {
-        "olm_soc_mean_30m_2020-2022.tif",
-        "olm_soc_RU68_120m_2020-2022.tif",
-    }
-    bands, units = writer.files["olm_soc_RU68_120m_2020-2022.tif"]
-    assert units == "ratio"
-    assert bands[0][1][1, 1] == pytest.approx((50.0 - 20.0) / 31.0)
-    assert result.uncertainty[0]["median_ru68"] == pytest.approx(30.0 / 31.0)
-
-
 def test_area_texture_check(grid, tmp_path):
     sel = core.plan_selection(
         ["sand", "silt", "clay"], ["0-30cm"], ["2020-2022"], ["mean30"]
@@ -406,7 +386,6 @@ def test_area_parallel_equals_sequential(grid, tmp_path):
         [d[0] for d in cat.DEPTHS],
         list(cat.PERIODS),
         [s.code for s in cat.STATISTICS],
-        True,
     )
     _, w1 = run_area(grid, tmp_path, sel, workers=1)
     _, w8 = run_area(grid, tmp_path, sel, workers=8)
@@ -465,13 +444,16 @@ def test_points_rows(tmp_path):
     assert header == core.POINT_COLUMNS
 
 
-def test_points_missing_and_ru68():
-    sel = core.plan_selection(["soc"], ["0-30cm"], ["2020-2022"], [], True)
+def test_points_missing_value_stays_nan():
+    sel = core.plan_selection(["soc"], ["0-30cm"], ["2020-2022"], ["mean30"])
     result = run_points(sel, sampler=make_sampler(missing_second=True))
-    ru = [r for r in result.rows if r["Statistic"] == cat.RU68]
-    assert len(ru) == 2
-    assert ru[0]["Value"] == pytest.approx(30.0 / 31.0)
-    assert math.isnan(ru[1]["Value"])
+    assert result.rows[0]["Value"] == pytest.approx(30.0)
+    assert math.isnan(result.rows[1]["Value"])
+
+
+def test_no_derived_statistics_offered():
+    assert [s.code for s in cat.STATISTICS] == ["mean30", "mean120", "p16", "p84"]
+    assert not hasattr(cat, "RU68") and not hasattr(core, "awc_mm")
 
 
 def test_points_texture_check():
@@ -496,7 +478,7 @@ def test_points_requires_sites():
 
 def test_metadata(grid, tmp_path):
     sel = core.plan_selection(
-        ["sand", "silt", "clay", "bdod"], ["0-30cm"], ["2015-2020"], ["mean30"], True
+        ["sand", "silt", "clay", "bdod"], ["0-30cm"], ["2015-2020"], ["mean30"]
     )
     result, _ = run_area(grid, tmp_path, sel)
     sections = core.build_metadata(result, sel, {"Output CRS": "EPSG:2049"}, "3.13")
@@ -625,7 +607,7 @@ def test_real_gdal_end_to_end_area(tmp_path):
     assert np.allclose(ds.GetRasterBand(1).ReadAsArray(), 20.0)
     assert np.allclose(ds.GetRasterBand(2).ReadAsArray(), 25.0)
     ds = None
-    assert (out / "olm_clay_mean_30m_2020-2022.qml").exists()
+    assert not list(out.glob("*.qml"))  # no style files any more
 
 
 def _ll(osr):
@@ -811,22 +793,6 @@ def test_metadata_subgroup_section(grid, tmp_path):
     assert "818" in run["USDA subgroups"]
 
 
-def test_paletted_style(tmp_path):
-    import xml.etree.ElementTree as ET
-
-    from mayim_tools.soil._common.export import class_colour, write_paletted_style
-
-    qml = write_paletted_style(
-        tmp_path / "s.tif", [(5, 'Typic "A" & B'), (812, "Lithic C")]
-    )
-    root = ET.parse(qml).getroot()
-    renderer = root.find("pipe/rasterrenderer")
-    assert renderer.get("type") == "paletted" and renderer.get("band") == "1"
-    entries = [(e.get("value"), e.get("label")) for e in root.iter("paletteEntry")]
-    assert entries == [("5", 'Typic "A" & B'), ("812", "Lithic C")]
-    assert class_colour(5) == class_colour(5) != class_colour(6)
-
-
 # ----------------------------------------------------------------------
 # Legacy 250 m water content (33 / 1500 kPa) and AWC
 # ----------------------------------------------------------------------
@@ -853,21 +819,6 @@ def test_legacy_urls_as_confirmed_live():
     assert cat.legacy_points_needed([d[0] for d in cat.DEPTHS]) == [0, 30, 60, 100]
 
 
-def test_interval_mean_and_awc():
-    pts = {0: np.array([20.0, np.nan]), 30: np.array([30.0, 10.0])}
-    assert core.interval_mean(pts, "0-30cm")[0] == 25.0
-    assert math.isnan(core.interval_mean(pts, "0-30cm")[1])
-    # FC 30 %, WP 12 % over 0-30 cm (300 mm): 0.18 x 300 = 54 mm
-    out = core.awc_mm(
-        np.array([30.0, 10.0, np.nan]), np.array([12.0, 15.0, 5.0]), "0-30cm"
-    )
-    assert out[0] == pytest.approx(54.0)
-    assert out[1] == 0.0  # negative difference clipped
-    assert math.isnan(out[2])
-    # 60-100 cm is 400 mm thick
-    assert core.awc_mm(np.array([25.0]), np.array([10.0]), "60-100cm")[0] == 60.0
-
-
 WATER = {("wc33", 0): 20, ("wc33", 30): 24, ("wc1500", 0): 8, ("wc1500", 30): 10}
 
 
@@ -888,49 +839,48 @@ def water_reader(fail_arco=False, calls=None):
     return reader
 
 
-def test_area_water_content_and_awc(grid, tmp_path):
+def test_area_water_content_native_points(grid, tmp_path):
     sel = core.plan_selection([], ["0-30cm"], [], [], water=True)
     result, writer = run_area(grid, tmp_path, sel, reader=water_reader())
     assert set(writer.files) == {
-        "olm_wc33_250m_1950-2017.tif",
-        "olm_wc1500_250m_1950-2017.tif",
-        "olm_awc_250m_1950-2017.tif",
+        "olm_field_capacity_33kPa_250m_1950-2017.tif",
+        "olm_wilting_point_1500kPa_250m_1950-2017.tif",
     }
-    fc, units = writer.files["olm_wc33_250m_1950-2017.tif"]
+    fc, units = writer.files["olm_field_capacity_33kPa_250m_1950-2017.tif"]
     assert units == "vol %"
-    assert fc[0][0] == "wc33_0-30cm_mean_250m_1950-2017 (vol %)"
-    assert fc[0][1][1, 1] == 22.0  # (20 + 24) / 2
-    wp, _ = writer.files["olm_wc1500_250m_1950-2017.tif"]
-    assert wp[0][1][1, 1] == 9.0
-    awc, awc_units = writer.files["olm_awc_250m_1950-2017.tif"]
-    assert awc_units == "mm" and awc[0][1][1, 1] == pytest.approx(39.0)  # 13 % x 300
-    assert math.isnan(awc[0][1][0, 0])
-    routes = {r.variable: r.route for r in result.layers}
-    assert routes == {
-        "wc33": "COG (s3.openlandmap.org)",
-        "wc1500": "COG (s3.openlandmap.org)",
-        "awc": "derived",
-    }
+    # Stored as published at the depth points - no averaging, no AWC
+    assert [b[0] for b in fc] == [
+        "field_capacity_33kPa_0cm_250m_1950-2017 (vol %)",
+        "field_capacity_33kPa_30cm_250m_1950-2017 (vol %)",
+    ]
+    assert [b[1][1, 1] for b in fc] == [20.0, 24.0]
+    wp, _ = writer.files["olm_wilting_point_1500kPa_250m_1950-2017.tif"]
+    assert [b[1][1, 1] for b in wp] == [8.0, 10.0]
+    assert math.isnan(wp[0][1][0, 0])
+    assert {r.route for r in result.layers} == {"COG (s3.openlandmap.org)"}
+    assert {r.depth for r in result.layers} == {"0cm", "30cm"}
+    assert len(result.load_files) == 2
 
 
-def test_area_water_falls_back_to_zenodo(grid, tmp_path):
-    calls, logs = [], []
+def test_area_water_routes_recorded_per_layer(grid, tmp_path):
+    """Live run 2026-10-05: 33 kPa came from the COG, 1500 kPa from Zenodo,
+    but the metadata showed one route for both. Routes are now per layer."""
+
+    def reader(source, grid, with_scale=False):
+        if "1500kPa" in source and "s3.openlandmap.org" in source:
+            raise RuntimeError("HTTP 404")
+        return water_reader()(source, grid, with_scale)
+
+    logs = []
     sel = core.plan_selection([], ["0-30cm"], [], [], water=True)
-    result, _ = run_area(
-        grid,
-        tmp_path,
-        sel,
-        reader=water_reader(fail_arco=True, calls=calls),
-        log_fn=logs.append,
-    )
-    assert any("zenodo.org" in c for c in calls)
-    assert {r.route for r in result.layers if r.variable == "wc33"} == {
-        "Zenodo (slower)"
-    }
-    assert logs and "HTTP 404" in logs[0]
+    result, _ = run_area(grid, tmp_path, sel, reader=reader, log_fn=logs.append)
+    routes = {(r.variable, r.depth): r.route for r in result.layers}
+    assert routes[("field_capacity_33kPa", "0cm")] == "COG (s3.openlandmap.org)"
+    assert routes[("wilting_point_1500kPa", "0cm")] == "Zenodo (slower)"
+    assert len(logs) == 2 and all("HTTP 404" in m for m in logs)
 
 
-def test_points_water(tmp_path):
+def test_points_water_native_points():
     def sampler(source, lonlats, with_scale=False):
         if "watercontent" in source:
             code = "wc33" if "33kPa" in source else "wc1500"
@@ -940,12 +890,12 @@ def test_points_water(tmp_path):
 
     sel = core.plan_selection([], ["0-30cm"], [], [], water=True)
     result = run_points(sel, sampler=sampler)
-    by = {(r["Site"], r["Variable"]): r for r in result.rows}
-    assert by[("A", "wc33")]["Value"] == 22.0
-    assert by[("A", "awc")]["Value"] == pytest.approx(39.0)
-    assert by[("A", "awc")]["Units"] == "mm"
-    assert by[("A", "wc1500")]["Period"] == "1950-2017"
-    assert by[("A", "wc33")]["Resolution_m"] == 250
+    by = {(r["Site"], r["Variable"], r["DepthTop_cm"]): r for r in result.rows}
+    assert by[("A", "field_capacity_33kPa", 0)]["Value"] == 20.0
+    assert by[("A", "field_capacity_33kPa", 30)]["Value"] == 24.0
+    assert by[("A", "wilting_point_1500kPa", 30)]["DepthBottom_cm"] == 30
+    assert by[("A", "field_capacity_33kPa", 0)]["Period"] == "1950-2017"
+    assert not any(r["Variable"] == "awc" for r in result.rows)
 
 
 def test_metadata_water(grid, tmp_path):
@@ -954,4 +904,13 @@ def test_metadata_water(grid, tmp_path):
     run = dict(core.build_metadata(result, sel, {}, "3.13")[0][2])
     assert "CC BY-SA 4.0" in run["Licence (water content)"]
     assert "2784001" in run["Data DOI (water content)"]
-    assert "measured" in run["Note - water content"]
+    assert "depth POINTS" in run["Note - water content"]
+
+
+def test_subgroup_low_probability_warning():
+    assert core.subgroup_warning({"mapped": 10, "median_probability": 4.0})
+    assert "indicative" in core.subgroup_warning(
+        {"mapped": 10, "median_probability": 4.0}
+    )
+    assert core.subgroup_warning({"mapped": 10, "median_probability": 55.0}) is None
+    assert core.subgroup_warning({"mapped": 0, "median_probability": math.nan}) is None

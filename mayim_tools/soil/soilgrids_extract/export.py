@@ -11,7 +11,6 @@ from mayim_tools.soil._common import export as _export
 from mayim_tools.soil._common.export import (  # noqa: F401 - re-exported
     NODATA_OUT,
     write_metadata_csv,
-    write_style_sidecar,
 )
 
 from .core import TOOL_VERSION, TargetGrid

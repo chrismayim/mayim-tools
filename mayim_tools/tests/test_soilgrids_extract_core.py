@@ -82,7 +82,6 @@ def test_bedrock_paths():
 def test_stat_tag_and_file_name():
     assert core.output_file_name("clay", "Q0.5") == "soilgrids_clay_Q0.50.tif"
     assert core.output_file_name("clay", "mean") == "soilgrids_clay_mean.tif"
-    assert core.output_file_name("clay", core.RU90) == "soilgrids_clay_RU90.tif"
 
 
 def test_band_description():
@@ -102,13 +101,6 @@ def test_plan_selection_orders_by_catalogue():
     assert sel.depths == ["0-5cm", "30-60cm"]
     assert sel.statistics == ["mean", "Q0.95"]
     assert sel.written_statistics == ["mean", "Q0.95"]
-
-
-def test_plan_selection_ru90_fetches_missing_quantiles():
-    sel = core.plan_selection(["clay"], ["0-5cm"], ["mean"], ru90=True)
-    assert sel.statistics == ["mean", "Q0.05", "Q0.5", "Q0.95"]
-    assert sel.written_statistics == ["mean"]
-    assert sel.warnings and "Q0.05" in sel.warnings[0]
 
 
 @pytest.mark.parametrize(
@@ -305,12 +297,6 @@ def test_sg2017_paths_and_points():
     assert core.sg2017_points_needed([d[0] for d in core.DEPTHS]) == list(range(7))
 
 
-def test_sg2017_interval_is_trapezoid_mean():
-    pts = {3: np.array([20.0, np.nan]), 4: np.array([30.0, 5.0])}
-    out = core.sg2017_interval(pts, "30-60cm")
-    assert out[0] == 25.0 and math.isnan(out[1])
-
-
 def test_vars_2017_cover_all_but_water_content():
     assert set(core.VARS_2017) == {
         "sand",
@@ -499,20 +485,6 @@ def test_area_loads_mean_when_no_median(grid, tmp_path):
     assert result.load_files == [os.path.join(str(tmp_path), "soilgrids_clay_mean.tif")]
 
 
-def test_area_ru90_written_and_extra_quantiles_not_written(grid, tmp_path):
-    sel = core.plan_selection(["clay"], ["0-5cm"], ["mean"], ru90=True)
-    result, writer = run_area(grid, tmp_path, sel)
-    names = sorted(os.path.basename(p) for p in writer.files)
-    assert names == ["soilgrids_clay_RU90.tif", "soilgrids_clay_mean.tif"]
-    ru_bands, ru_units = writer.files[
-        os.path.join(str(tmp_path), "soilgrids_clay_RU90.tif")
-    ]
-    assert ru_units == "ratio"
-    assert ru_bands[0][0] == "clay_0-5cm_RU90 (ratio)"
-    assert ru_bands[0][1][1, 1] == pytest.approx((50.0 - 20.0) / 30.0)
-    assert result.uncertainty[0]["median_ru90"] == pytest.approx(1.0)
-
-
 def test_area_texture_check(grid, tmp_path):
     sel = core.plan_selection(["sand", "silt", "clay"], ["0-5cm"], ["mean"])
     result, _ = run_area(grid, tmp_path, sel)
@@ -606,7 +578,7 @@ def test_area_all_routes_fail_names_routes(grid, tmp_path):
         run_area(grid, tmp_path, sel, reader=make_reader(fail_all=True))
 
 
-def test_area_sg2017_file(grid, tmp_path):
+def test_area_sg2017_file_native_depth_points(grid, tmp_path):
     sel = core.plan_selection(
         ["clay", "bdod", "wv0033"], ["0-5cm", "100-200cm"], ["Q0.5"], sg2017=True
     )
@@ -614,23 +586,26 @@ def test_area_sg2017_file(grid, tmp_path):
     path = os.path.join(str(tmp_path), "soilgrids2017_clay_mean.tif")
     bands, units = writer.files[path]
     assert units == "%"
+    # Points bounding the selected intervals, stored as published (no averaging)
     assert [b[0] for b in bands] == [
-        "clay_0-5cm_mean [SG2017] (%)",
-        "clay_100-200cm_mean [SG2017] (%)",
+        "clay_0cm_mean [SG2017] (%)",
+        "clay_5cm_mean [SG2017] (%)",
+        "clay_100cm_mean [SG2017] (%)",
+        "clay_200cm_mean [SG2017] (%)",
     ]
-    # CLYPPT fake = 25 + k: sl1=26, sl2=27 -> 26.5; sl6=31, sl7=32 -> 31.5
-    assert bands[0][1][1, 1] == pytest.approx(26.5)
-    assert bands[1][1][1, 1] == pytest.approx(31.5)
+    # CLYPPT fake = 25 + k (k = sl number): sl1 26, sl2 27, sl6 31, sl7 32
+    assert [b[1][1, 1] for b in bands] == [26.0, 27.0, 31.0, 32.0]
     bd, bd_units = writer.files[
         os.path.join(str(tmp_path), "soilgrids2017_bdod_mean.tif")
     ]
     assert bd_units == "g/cm3"
-    assert bd[0][1][1, 1] == pytest.approx((1401 + 1402) / 2 / 1000)
+    assert bd[0][1][1, 1] == pytest.approx(1401 / 1000)
     assert not any(
         os.path.basename(p).startswith("soilgrids2017_wv") for p in writer.files
     )
     recs = [r for r in result.layers if r.product == core.PRODUCT_SG2017]
-    assert recs and {r.route for r in recs} == {"2017 archive"}
+    assert {r.depth for r in recs} == {"0cm", "5cm", "100cm", "200cm"}
+    assert {r.route for r in recs} == {"2017 archive"}
     assert path not in result.load_files
 
 
@@ -754,21 +729,22 @@ def test_points_tile_failure_falls_back_to_vrt():
     assert result.warnings
 
 
-def test_points_ru90_rows():
-    sel = core.plan_selection(["clay"], ["0-5cm"], [], ru90=True)
-    result = run_points(sel)
-    assert {r["Statistic"] for r in result.rows} == {core.RU90}
-    assert result.rows[0]["Value"] == pytest.approx(1.0)
-    assert result.rows[0]["Route"] == "derived"
-
-
-def test_points_sg2017_rows():
+def test_points_sg2017_rows_native_points():
     sel = core.plan_selection(["clay"], ["0-5cm"], ["Q0.5"], sg2017=True)
     result = run_points(sel)
     rows17 = [r for r in result.rows if r["Product"] == core.PRODUCT_SG2017]
-    assert len(rows17) == 2
-    assert rows17[0]["Value"] == pytest.approx(26.5)
-    assert rows17[0]["Statistic"] == "mean" and rows17[0]["Route"] == "2017 archive"
+    assert len(rows17) == 4  # 2 depth points x 2 sites
+    first = rows17[0]
+    assert first["Value"] == pytest.approx(26.0)  # sl1 (0 cm), no averaging
+    assert (first["DepthTop_cm"], first["DepthBottom_cm"]) == (0, 0)
+    assert rows17[2]["DepthTop_cm"] == 5
+    assert first["Statistic"] == "mean" and first["Route"] == "2017 archive"
+
+
+def test_no_derived_statistics_offered():
+    assert core.STATISTICS == ("mean", "Q0.05", "Q0.5", "Q0.95")
+    assert not hasattr(core, "RU90")
+    assert core.point_label_2017(2) == "15cm"
 
 
 def test_points_bedrock_rows():
@@ -801,7 +777,6 @@ def test_metadata_contents(grid, tmp_path):
         ["sand", "silt", "clay"],
         ["0-5cm"],
         ["mean"],
-        ru90=True,
         bedrock=True,
         sg2017=True,
     )
@@ -820,9 +795,9 @@ def test_metadata_contents(grid, tmp_path):
     assert "clay 2" in run["Access route"]
     layers = next(s for s in sections if s[0] == "Layers")
     assert layers[1][0] == "Product"
-    assert {row[8] for row in layers[2]} >= {"Tiles", "derived", "2017 archive"}
-    ru = next(s for s in sections if s[0].startswith("Uncertainty"))[2]
-    assert len(ru) == 3
+    assert {row[8] for row in layers[2]} >= {"Tiles", "2017 archive"}
+    assert not any(s[0].startswith("Uncertainty") for s in sections)
+    assert "native depth POINTS" in run["Note - SoilGrids 2017"]
 
 
 def test_metadata_csv_and_paths(tmp_path):
@@ -1228,19 +1203,4 @@ def test_extract_area_mismatched_layout_end_to_end(mock_server, tmp_path):
         ds = None
         found = {round(float(v), 3) for v in np.unique(data)}
         assert found == values, (name, found)
-    assert (out / "soilgrids_clay_mean.qml").exists()
-
-
-def test_style_sidecar(tmp_path):
-    import xml.etree.ElementTree as ET
-
-    from mayim_tools.soil.soilgrids_extract.export import write_style_sidecar
-
-    qml = write_style_sidecar(tmp_path / "x.tif", np.array([[1.0, np.nan, 5.0]]))
-    root = ET.parse(qml).getroot()
-    renderer = root.find("pipe/rasterrenderer")
-    assert renderer.get("type") == "singlebandgray" and renderer.get("grayBand") == "1"
-    assert root.find("pipe/rasterrenderer/contrastEnhancement/minValue").text == "1.0"
-    assert root.find("pipe/rasterrenderer/contrastEnhancement/maxValue").text == "5.0"
-    empty = write_style_sidecar(tmp_path / "y.tif", np.array([[np.nan]]))
-    assert ET.parse(empty).getroot() is not None
+    assert not list(out.glob("*.qml"))  # no style files any more

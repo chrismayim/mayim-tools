@@ -1,5 +1,7 @@
-"""File writers shared by the soil tools (GeoTIFF + QML style, point CSV,
-sectioned metadata CSV)."""
+"""File writers shared by the soil tools (multi-band GeoTIFF, point CSV,
+sectioned metadata CSV). No style files are written: styling is applied in
+memory when layers are loaded, and optionally saved once per run in a .qlr
+layer file (see qgis_ui)."""
 
 from __future__ import annotations
 
@@ -67,68 +69,6 @@ def write_multiband_geotiff(
         band.WriteArray(out)
     ds.FlushCache()
     ds = None
-    write_style_sidecar(path, bands[0][1])
-
-
-# Single-band grey style for band 1. QGIS applies <name>.qml automatically
-# when the raster is opened, so files the user opens by hand display as one
-# band (not an RGB composite of the first three depths).
-_QML = """<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTEM'>
-<qgis version="3.40.0" styleCategories="AllStyleCategories">
-  <pipe>
-    <rasterrenderer type="singlebandgray" grayBand="1" gradient="BlackToWhite"
-     opacity="1" alphaBand="-1" nodataColor="">
-      <rasterTransparency/>
-      <minMaxOrigin>
-        <limits>MinMax</limits>
-        <extent>WholeRaster</extent>
-        <statAccuracy>Estimated</statAccuracy>
-        <cumulativeCutLower>0.02</cumulativeCutLower>
-        <cumulativeCutUpper>0.98</cumulativeCutUpper>
-        <stdDevFactor>2</stdDevFactor>
-      </minMaxOrigin>
-      <contrastEnhancement>
-        <minValue>{vmin}</minValue>
-        <maxValue>{vmax}</maxValue>
-        <algorithm>StretchToMinimumMaximum</algorithm>
-      </contrastEnhancement>
-    </rasterrenderer>
-    <brightnesscontrast brightness="0" contrast="0" gamma="1"/>
-    <rasterresampler maxOversampling="2"/>
-  </pipe>
-  <blendMode>0</blendMode>
-</qgis>
-"""
-
-
-def write_style_sidecar(path: str | Path, band1: np.ndarray) -> Path:
-    """Write <raster>.qml (single-band grey, stretched to band 1's range)."""
-    valid = np.asarray(band1, dtype=np.float64)
-    valid = valid[np.isfinite(valid)]
-    vmin, vmax = (float(valid.min()), float(valid.max())) if valid.size else (0, 1)
-    if vmax <= vmin:
-        vmax = vmin + 1
-    qml = Path(path).with_suffix(".qml")
-    qml.write_text(_QML.format(vmin=round(vmin, 6), vmax=round(vmax, 6)), "utf-8")
-    return qml
-
-
-_PALETTED_QML = """<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTEM'>
-<qgis version="3.40.0" styleCategories="AllStyleCategories">
-  <pipe>
-    <rasterrenderer type="paletted" band="{band}" opacity="1" alphaBand="-1"
-     nodataColor="">
-      <rasterTransparency/>
-      <colorPalette>
-{entries}
-      </colorPalette>
-    </rasterrenderer>
-    <brightnesscontrast brightness="0" contrast="0" gamma="1"/>
-    <rasterresampler maxOversampling="2"/>
-  </pipe>
-  <blendMode>0</blendMode>
-</qgis>
-"""
 
 
 def class_colour(code: int) -> str:
@@ -140,23 +80,6 @@ def class_colour(code: int) -> str:
     val = 0.75 + 0.2 * ((code * 5) % 2)
     r, g, b = colorsys.hsv_to_rgb(hue, sat, val)
     return f"#{int(r * 255):02x}{int(g * 255):02x}{int(b * 255):02x}"
-
-
-def write_paletted_style(
-    path: str | Path, classes: list[tuple[int, str]], band: int = 1
-) -> Path:
-    """Write <raster>.qml with a paletted (categorised) renderer: one entry
-    per (value, label), stable colours by value."""
-    from xml.sax.saxutils import quoteattr
-
-    lines = [
-        f'        <paletteEntry value="{value}" color="{class_colour(value)}" '
-        f'alpha="255" label={quoteattr(label)}/>'
-        for value, label in classes
-    ]
-    qml = Path(path).with_suffix(".qml")
-    qml.write_text(_PALETTED_QML.format(band=band, entries="\n".join(lines)), "utf-8")
-    return qml
 
 
 def write_points_csv(

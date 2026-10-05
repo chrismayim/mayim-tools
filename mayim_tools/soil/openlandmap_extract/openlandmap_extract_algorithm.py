@@ -34,7 +34,6 @@ from mayim_tools.soil._common.export import (
     metadata_path_for,
     write_metadata_csv,
     write_multiband_geotiff,
-    write_paletted_style,
     write_points_csv,
 )
 from mayim_tools.soil._common.grid import check_area, make_grid
@@ -42,9 +41,7 @@ from mayim_tools.soil._common.grid import check_area, make_grid
 from . import catalogue as cat
 from . import core
 
-STAT_OPTIONS = [(s.code, s.label) for s in cat.STATISTICS] + [
-    (cat.RU68, "RU68 - relative 68% interval width (derived, 120 m)")
-]
+STAT_OPTIONS = [(s.code, s.label) for s in cat.STATISTICS]
 METADATA_NAME = "openlandmap_metadata.csv"
 
 
@@ -120,9 +117,10 @@ class OpenLandMapExtractAlgorithm(QgsProcessingAlgorithm):
             "RESOLUTION AND STATISTICS:\tMeans are published at 30 m. The "
             "uncertainty layers - P16 and P84, the 68% prediction interval "
             "(about one standard deviation either side) - exist only at 120 m, "
-            "together with a 120 m mean. RU68 = (P84 - P16) / mean is derived "
-            "from the three 120 m layers. On a 30 m output grid the 120 m layers "
-            "repeat in 4 x 4 blocks.\n"
+            "together with a 120 m mean. On a 30 m output grid the 120 m layers "
+            "repeat in 4 x 4 blocks. This tool only acquires data; uncertainty "
+            "measures, depth harmonisation and all derived quantities are "
+            "computed by Regional soil parameterisation.\n"
             "\n"
             "PERIODS:\tSOC, SOC density and pH are mapped for 2000-2005, "
             "2005-2010, 2010-2015, 2015-2020 and 2020-2022. Texture is mapped "
@@ -146,12 +144,14 @@ class OpenLandMapExtractAlgorithm(QgsProcessingAlgorithm):
             "OUTPUTS:\tArea mode: one multi-band GeoTIFF per variable, statistic "
             "and period, e.g. olm_clay_mean_30m_2020-2022.tif, one band per "
             "depth, each band described like 'clay_30-60cm_mean_30m_2020-2022 "
-            "(%)' (later tools select bands by description). Each GeoTIFF has a "
-            ".qml style beside it (single band). The 30 m means of the latest "
-            "selected period are loaded. Point mode: long-format CSV. Both "
-            "modes write openlandmap_metadata.csv (or <name>_metadata.csv) with "
-            "sources, scales, routes, per-layer statistics, RU68 summaries, a "
-            "sand+silt+clay check, period notes and warnings.\n"
+            "(%)' (later tools select bands by description). Loaded layers are "
+            "styled in the project (band 1 grey; subgroups by name). One layer "
+            "file, openlandmap_layers.qlr, is written per run: drag it into any "
+            "QGIS project to reload every output with its style (no style file "
+            "per raster). Point mode: long-format CSV. Both modes write "
+            "openlandmap_metadata.csv (or <name>_metadata.csv) with sources, "
+            "scales, routes per layer, per-layer statistics, a sand+silt+clay "
+            "check, period notes and warnings.\n"
             "\n"
             "PARAMETERS:\n"
             "  Area: an extent OR a polygon layer (its extent, buffered by two "
@@ -167,11 +167,13 @@ class OpenLandMapExtractAlgorithm(QgsProcessingAlgorithm):
             "volumetric water content at 33 kPa (field capacity) and 1500 kPa "
             "(wilting point), 1950-2017, mapped from measured values rather "
             "than pedotransfer functions - an independent check on computed "
-            "field capacity and wilting point. Published at depths 0, 30, 60 "
-            "and 100 cm; each interval is the average of its two bounding "
-            "depths. Available water capacity (mm) = (FC - WP) x layer "
-            "thickness is derived. Outputs olm_wc33_*, olm_wc1500_* and "
-            "olm_awc_*. Licence CC BY-SA 4.0 (share-alike).\n"
+            "field capacity and wilting point. Stored as published at depth "
+            "points (0, 30, 60, 100 cm - those bounding the selected "
+            "intervals), one band per point, in "
+            "olm_field_capacity_33kPa_250m_1950-2017.tif and "
+            "olm_wilting_point_1500kPa_250m_1950-2017.tif. Available water "
+            "capacity is computed by Regional soil parameterisation. Licence "
+            "CC BY-SA 4.0 (share-alike).\n"
             "  USDA subgroup (optional): OpenLandMap publishes the probability of "
             "each of 818 USDA soil-taxonomy subgroups at 30 m. The tool keeps "
             "the most probable and second most probable subgroup per cell, with "
@@ -323,10 +325,11 @@ class OpenLandMapExtractAlgorithm(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
-            QgsProcessingParameterBoolean(
+            QgsProcessingParameterEnum(
                 self.LOAD_LAYERS,
-                "Load the 30 m mean rasters into the project (area mode)",
-                defaultValue=True,
+                "Load outputs into the project (area mode)",
+                options=qgis_ui.LOAD_OPTIONS,
+                defaultValue=qgis_ui.LOAD_ALL,
             )
         )
         self.addParameter(
@@ -360,8 +363,7 @@ class OpenLandMapExtractAlgorithm(QgsProcessingAlgorithm):
             STAT_OPTIONS[i][0]
             for i in self.parameterAsEnums(parameters, self.STATISTICS, context)
         ]
-        ru68 = cat.RU68 in stat_codes
-        stats = [s for s in stat_codes if s != cat.RU68]
+        stats = stat_codes
         subgroups = self.parameterAsBoolean(parameters, self.SUBGROUPS, context)
         water = self.parameterAsBoolean(parameters, self.WATER, context)
         try:
@@ -370,7 +372,6 @@ class OpenLandMapExtractAlgorithm(QgsProcessingAlgorithm):
                 depths,
                 periods,
                 stats,
-                ru68,
                 subgroups=subgroups,
                 water=water,
             )
@@ -456,29 +457,33 @@ class OpenLandMapExtractAlgorithm(QgsProcessingAlgorithm):
         feedback.pushInfo(f"{len(result.files)} raster(s) written to {folder}")
         feedback.pushInfo(f"Metadata: {meta_path}")
         sub_path = result.subgroup.get("file")
+        classes = []
         if sub_path:
-            self._subgroup_outputs(result, sub_path, feedback)
-        if self.parameterAsBoolean(parameters, self.LOAD_LAYERS, context):
-            qgis_ui.load_rasters(
-                context,
-                [p for p in result.load_files if p != sub_path],
-                self._post_processors,
+            self._subgroup_lookup(result, sub_path, feedback)
+            classes = [
+                (r["code"], f"{r['label']} ({r['order']})")
+                for r in result.subgroup["table"]
+            ]
+        outputs = [
+            qgis_ui.OutputLayer(
+                path=path,
+                name=Path(path).stem,
+                main=path in result.load_files,
+                classes=classes if path == sub_path else [],
             )
-            if sub_path:
-                qgis_ui.load_rasters(
-                    context, [sub_path], self._post_processors, restyle=False
-                )
+            for path in result.files
+        ]
+        qlr = str(Path(folder) / "openlandmap_layers.qlr")
+        if qgis_ui.write_layer_file(outputs, qlr, feedback):
+            feedback.pushInfo(f"Layer file (reloads all outputs, styled): {qlr}")
+        choice = self.parameterAsEnum(parameters, self.LOAD_LAYERS, context)
+        qgis_ui.load_outputs(context, outputs, choice, self._post_processors)
         return {self.OUTPUT_FOLDER: folder}
 
     @staticmethod
-    def _subgroup_outputs(result, sub_path, feedback):
-        """Categorised style (band 1 = most probable subgroup code) and a
-        lookup table of the subgroups present."""
+    def _subgroup_lookup(result, sub_path, feedback):
+        """Lookup table of the subgroups present (codes -> names, shares)."""
         table = result.subgroup["table"]
-        write_paletted_style(
-            sub_path,
-            [(r["code"], f"{r['label']} ({r['order']})") for r in table],
-        )
         lookup = Path(sub_path).with_name(Path(sub_path).stem + "_lookup.csv")
         write_metadata_csv(
             [
@@ -567,8 +572,3 @@ class OpenLandMapExtractAlgorithm(QgsProcessingAlgorithm):
                     f"{tex['flagged']} of {tex['checked']} cells/points have mean "
                     "sand+silt+clay more than 2% from 100%."
                 )
-        for unc in result.uncertainty:
-            feedback.pushInfo(
-                f"RU68 {unc['variable']} {unc['period']} {unc['depth']}: median "
-                f"{unc['median_ru68']:.2f}"
-            )
