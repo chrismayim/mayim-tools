@@ -11,18 +11,13 @@ dependency; see tests/test_soilgrids_extract_core.py).
 from pathlib import Path
 
 from qgis.core import (
-    Qgis,
-    QgsCoordinateReferenceSystem,
-    QgsCoordinateTransform,
     QgsProcessing,
     QgsProcessingAlgorithm,
     QgsProcessingContext,
     QgsProcessingException,
     QgsProcessingFeedback,
-    QgsProcessingLayerPostProcessorInterface,
     QgsProcessingParameterBoolean,
     QgsProcessingParameterCrs,
-    QgsProcessingParameterDefinition,
     QgsProcessingParameterEnum,
     QgsProcessingParameterExtent,
     QgsProcessingParameterFeatureSource,
@@ -35,6 +30,8 @@ from qgis.core import (
 )
 from qgis.PyQt.QtGui import QIcon
 
+from mayim_tools.soil._common import qgis_ui
+
 from . import core
 from .export import (
     metadata_path_for,
@@ -43,8 +40,6 @@ from .export import (
     write_points_csv,
 )
 
-WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
-
 STAT_OPTIONS = [
     ("mean", "Mean"),
     ("Q0.05", "Q0.05 (5% quantile)"),
@@ -52,42 +47,6 @@ STAT_OPTIONS = [
     ("Q0.95", "Q0.95 (95% quantile)"),
     (core.RU90, "RU90 - relative 90% interval width (derived)"),
 ]
-
-
-def _advanced(param):
-    """Mark a parameter as advanced (QGIS 4 scoped enum, QGIS 3 fallback)."""
-    try:
-        flag = Qgis.ProcessingParameterFlag.Advanced
-    except AttributeError:  # pragma: no cover - older QGIS
-        flag = QgsProcessingParameterDefinition.FlagAdvanced
-    param.setFlags(param.flags() | flag)
-    return param
-
-
-def _crs_wkt(crs: QgsCoordinateReferenceSystem) -> str:
-    """WKT in the variant GDAL prefers (QGIS 4 scoped enum, QGIS 3 fallback)."""
-    try:
-        return crs.toWkt(Qgis.CrsWktVariant.PreferredGdal)
-    except AttributeError:  # pragma: no cover - older QGIS
-        return crs.toWkt(QgsCoordinateReferenceSystem.WKT_PREFERRED_GDAL)
-
-
-class _BandOnePostProcessor(QgsProcessingLayerPostProcessorInterface):
-    """Multi-band rasters would otherwise load as an RGB composite of the
-    first three depths, which is meaningless. Show band 1 as a stretched
-    single-band grey layer instead."""
-
-    def postProcessLayer(self, layer, context, feedback):
-        try:
-            from qgis.core import QgsContrastEnhancement, QgsSingleBandGrayRenderer
-
-            layer.setRenderer(QgsSingleBandGrayRenderer(layer.dataProvider(), 1))
-            layer.setContrastEnhancement(
-                QgsContrastEnhancement.ContrastEnhancementAlgorithm.StretchToMinimumMaximum
-            )
-            layer.triggerRepaint()
-        except Exception as exc:  # noqa: BLE001 - styling must never fail a run
-            feedback.pushWarning(f"Could not set the display style: {exc}")
 
 
 class SoilGridsExtractAlgorithm(QgsProcessingAlgorithm):
@@ -309,7 +268,7 @@ class SoilGridsExtractAlgorithm(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
-            _advanced(
+            qgis_ui.advanced(
                 QgsProcessingParameterNumber(
                     self.OUTPUT_RES,
                     "Output resolution in metres (area mode; converted for a "
@@ -321,7 +280,7 @@ class SoilGridsExtractAlgorithm(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
-            _advanced(
+            qgis_ui.advanced(
                 QgsProcessingParameterNumber(
                     self.MAX_AREA_KM2,
                     "Maximum area per run (km2, bounding box; 0 = no limit)",
@@ -332,7 +291,7 @@ class SoilGridsExtractAlgorithm(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
-            _advanced(
+            qgis_ui.advanced(
                 QgsProcessingParameterNumber(
                     self.WORKERS,
                     "Parallel downloads",
@@ -392,79 +351,23 @@ class SoilGridsExtractAlgorithm(QgsProcessingAlgorithm):
             raise QgsProcessingException(str(exc)) from exc
 
     def _area_bounds(self, parameters, context, out_crs, feedback):
-        """Return (bounds in output CRS, bounds in lon/lat, description)."""
-        source = self.parameterAsSource(parameters, self.AREA_LAYER, context)
-        if source is not None and source.featureCount() > 0:
-            extent = source.sourceExtent()
-            src_crs = source.sourceCrs()
-            desc = "polygon layer extent"
-            extent_given = not self.parameterAsExtent(
-                parameters, self.EXTENT, context
-            ).isNull()
-            if extent_given:
-                feedback.pushWarning(
-                    "Both an extent and a polygon layer were given - using the "
-                    "polygon layer."
-                )
-        else:
-            extent = self.parameterAsExtent(parameters, self.EXTENT, context)
-            if extent.isNull() or extent.isEmpty():
-                raise QgsProcessingException(
-                    "Area mode needs an area of interest: draw or select an extent, "
-                    "or give a polygon layer."
-                )
-            src_crs = self.parameterAsExtentCrs(parameters, self.EXTENT, context)
-            desc = "extent"
-        tc = context.transformContext()
-        out_rect = QgsCoordinateTransform(src_crs, out_crs, tc).transformBoundingBox(
-            extent
+        return qgis_ui.area_bounds(
+            self, parameters, context, out_crs, feedback, self.AREA_LAYER, self.EXTENT
         )
-        ll_rect = QgsCoordinateTransform(src_crs, WGS84, tc).transformBoundingBox(
-            extent
-        )
-        bounds_out = (
-            out_rect.xMinimum(),
-            out_rect.yMinimum(),
-            out_rect.xMaximum(),
-            out_rect.yMaximum(),
-        )
-        bounds_ll = (
-            ll_rect.xMinimum(),
-            ll_rect.yMinimum(),
-            ll_rect.xMaximum(),
-            ll_rect.yMaximum(),
-        )
-        return bounds_out, bounds_ll, desc
 
     def _sites(self, parameters, context, feedback):
-        source = self.parameterAsSource(parameters, self.INPUT_POINTS, context)
-        point = self.parameterAsPoint(parameters, self.POINT, context, crs=WGS84)
-        has_layer = source is not None and source.featureCount() > 0
-        has_point = not point.isEmpty()
-        if has_layer and has_point:
-            feedback.pushWarning(
-                "Both a point and a point layer were given - using the point layer."
+        return [
+            core.Site(label, lon, lat)
+            for label, lon, lat in qgis_ui.point_sites(
+                self,
+                parameters,
+                context,
+                feedback,
+                self.POINT,
+                self.INPUT_POINTS,
+                self.NAME_FIELD,
             )
-        if not has_layer and not has_point:
-            raise QgsProcessingException(
-                "Points mode needs a point of interest (click the map or type "
-                "coordinates) OR a point layer - neither was supplied."
-            )
-        if not has_layer:
-            return [core.Site("Point of interest", point.x(), point.y())]
-        name_field = self.parameterAsString(parameters, self.NAME_FIELD, context)
-        transform = QgsCoordinateTransform(
-            source.sourceCrs(), WGS84, context.transformContext()
-        )
-        sites = []
-        for feature in source.getFeatures():
-            geom = feature.geometry()
-            if geom is None or geom.isEmpty():
-                continue
-            pt = transform.transform(geom.asPoint())
-            label = str(feature[name_field]) if name_field else f"Point {feature.id()}"
-            sites.append(core.Site(label, pt.x(), pt.y()))
-        return sites
+        ]
 
     # ------------------------------------------------------------------
     # Run
@@ -515,17 +418,14 @@ class SoilGridsExtractAlgorithm(QgsProcessingAlgorithm):
         if not out_crs.isValid():
             raise QgsProcessingException("Choose a valid output CRS.")
         res_m = self.parameterAsDouble(parameters, self.OUTPUT_RES, context)
-        factor = QgsUnitTypes.fromUnitToUnitFactor(
-            Qgis.DistanceUnit.Meters, out_crs.mapUnits()
-        )
-        res = res_m * factor
+        res = qgis_ui.resolution_in_crs_units(res_m, out_crs)
         max_area = self.parameterAsDouble(parameters, self.MAX_AREA_KM2, context)
 
         bounds_out, bounds_ll, desc = self._area_bounds(
             parameters, context, out_crs, feedback
         )
         area = core.check_area(bounds_ll, max_area)
-        grid = core.make_grid(bounds_out, res, _crs_wkt(out_crs))
+        grid = core.make_grid(bounds_out, res, qgis_ui.crs_wkt(out_crs))
         feedback.pushInfo(
             f"Area of interest ({desc}): {area:.1f} km2 (bounding box); output "
             f"grid {grid.width} x {grid.height} cells at {res:g} "
@@ -560,17 +460,12 @@ class SoilGridsExtractAlgorithm(QgsProcessingAlgorithm):
         feedback.pushInfo(f"Metadata: {meta_path}")
 
         if self.parameterAsBoolean(parameters, self.LOAD_LAYERS, context):
-            for path in result.load_files:
-                name = Path(path).stem
-                if name.endswith("_Q0.50"):
-                    name += " (median)"
-                details = QgsProcessingContext.LayerDetails(
-                    name, context.project(), name
-                )
-                processor = _BandOnePostProcessor()
-                self._post_processors.append(processor)
-                details.setPostProcessor(processor)
-                context.addLayerToLoadOnCompletion(path, details)
+            qgis_ui.load_rasters(
+                context,
+                result.load_files,
+                self._post_processors,
+                lambda n: n + " (median)" if n.endswith("_Q0.50") else n,
+            )
         return {self.OUTPUT_FOLDER: folder}
 
     def _run_points(self, parameters, context, feedback, selection, common, gdal_ver):

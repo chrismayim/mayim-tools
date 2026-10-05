@@ -52,15 +52,57 @@ from __future__ import annotations
 import math
 import os
 import re
-import threading
-import uuid
 from collections.abc import Callable, Sequence
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from contextlib import contextmanager, nullcontext
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import numpy as np
+
+# Generic building blocks live in soil/_common (shared with the other soil
+# tools); they are re-exported here so existing callers and tests keep working.
+from mayim_tools.soil._common.errors import SoilDataError
+from mayim_tools.soil._common.export import NODATA_OUT  # noqa: F401
+from mayim_tools.soil._common.gdal_io import (  # noqa: F401
+    HTTP_OPTIONS,
+    PROJ_LOCK,
+    WINDOW_LIMIT_CELLS,
+    _crs_transform,
+    _gdal,
+    _lonlat_to,
+    _native_window,
+    _open_source,
+    _unlink,
+    _wgs84_wkt,
+    gdal_read_grid,
+    gdal_sample_points,
+    gdal_version,
+    http_options,
+)
+from mayim_tools.soil._common.grid import (  # noqa: F401
+    BUFFER_CELLS,
+    EARTH_RADIUS_KM,
+    TargetGrid,
+    area_km2,
+    check_area,
+    make_grid,
+)
+from mayim_tools.soil._common.jobs import (  # noqa: F401
+    Source,
+    _all_nan,
+    _never_cancelled,
+    _noop,
+    _Progress,
+    read_with_fallback,
+    run_jobs,
+)
+from mayim_tools.soil._common.stats import (  # noqa: F401
+    _r,
+    convert,
+    relative_width,
+    summarise,
+    texture_sum_check,
+)
 
 TOOL_VERSION = "0.3.0"
 
@@ -91,16 +133,11 @@ CITATION_SG2017 = (
 LICENCE = "CC-BY 4.0 (ISRIC data policy: https://www.isric.org/about/data-policy)"
 LICENCE_2017 = "Open Database License (ODbL) v1.0"
 
-NODATA_OUT = -9999.0
-BUFFER_CELLS = 2
-WINDOW_LIMIT_CELLS = 2000  # point mode: read one window if points fit in this
 TEXTURE_SUM_TOLERANCE = 2.0  # % - flag cells where sand+silt+clay is further off
 DEFAULT_MAX_AREA_KM2 = 50000.0
-EARTH_RADIUS_KM = 6371.0088
 
 
-class SoilGridsError(Exception):
-    """Raised for user-facing errors (bad inputs, area limit, failed reads)."""
+SoilGridsError = SoilDataError  # same class: callers catch either name
 
 
 # ----------------------------------------------------------------------
@@ -358,136 +395,6 @@ def plan_selection(
 # ----------------------------------------------------------------------
 
 
-def area_km2(bounds_ll: tuple[float, float, float, float]) -> float:
-    """Area of a lon/lat box on a sphere (km2)."""
-    lon0, lat0, lon1, lat1 = bounds_ll
-    if lon1 <= lon0 or lat1 <= lat0:
-        return 0.0
-    dlon = math.radians(lon1 - lon0)
-    band = math.sin(math.radians(lat1)) - math.sin(math.radians(lat0))
-    return EARTH_RADIUS_KM**2 * dlon * band
-
-
-def check_area(
-    bounds_ll: tuple[float, float, float, float], max_area_km2: float
-) -> float:
-    """Return the area of interest in km2; raise if above the limit."""
-    lon0, lat0, lon1, lat1 = bounds_ll
-    if not (-180 <= lon0 < lon1 <= 180 and -90 <= lat0 < lat1 <= 90):
-        raise SoilGridsError(
-            "The area of interest has an invalid or empty extent "
-            f"(lon {lon0:.4f} to {lon1:.4f}, lat {lat0:.4f} to {lat1:.4f})."
-        )
-    area = area_km2(bounds_ll)
-    if max_area_km2 > 0 and area > max_area_km2:
-        raise SoilGridsError(
-            f"The area of interest is {area:.0f} km2 (bounding box), which is "
-            f"above the maximum of {max_area_km2:.0f} km2. Reduce the area, or "
-            "raise 'Maximum area per run (km2)' under Advanced parameters."
-        )
-    return area
-
-
-@dataclass(frozen=True)
-class TargetGrid:
-    xmin: float
-    ymin: float
-    xmax: float
-    ymax: float
-    res: float
-    crs_wkt: str
-
-    @property
-    def width(self) -> int:
-        return int(round((self.xmax - self.xmin) / self.res))
-
-    @property
-    def height(self) -> int:
-        return int(round((self.ymax - self.ymin) / self.res))
-
-    @property
-    def geotransform(self) -> tuple[float, float, float, float, float, float]:
-        return (self.xmin, self.res, 0.0, self.ymax, 0.0, -self.res)
-
-
-def make_grid(
-    bounds: tuple[float, float, float, float],
-    res: float,
-    crs_wkt: str,
-    buffer_cells: int = BUFFER_CELLS,
-) -> TargetGrid:
-    """Output grid: AOI bounds buffered by ``buffer_cells`` and snapped
-    outward to whole multiples of ``res`` (stable alignment between runs)."""
-    if res <= 0:
-        raise SoilGridsError("Output resolution must be greater than zero.")
-    xmin, ymin, xmax, ymax = bounds
-    if xmax <= xmin or ymax <= ymin:
-        raise SoilGridsError("The area of interest has an empty extent.")
-    pad = buffer_cells * res
-    xmin = math.floor((xmin - pad) / res) * res
-    ymin = math.floor((ymin - pad) / res) * res
-    xmax = math.ceil((xmax + pad) / res) * res
-    ymax = math.ceil((ymax + pad) / res) * res
-    return TargetGrid(xmin, ymin, xmax, ymax, res, crs_wkt)
-
-
-# ----------------------------------------------------------------------
-# Statistics helpers
-# ----------------------------------------------------------------------
-
-
-def convert(raw: np.ndarray, factor: float) -> np.ndarray:
-    """Mapped integers -> conventional units. NaN (nodata) stays NaN -
-    nodata is never turned into zero."""
-    return np.asarray(raw, dtype=np.float64) / float(factor)
-
-
-def summarise(values: np.ndarray) -> dict:
-    arr = np.asarray(values, dtype=np.float64).ravel()
-    valid = arr[np.isfinite(arr)]
-    out = {"valid": int(valid.size), "nodata": int(arr.size - valid.size)}
-    if valid.size:
-        out.update(
-            min=float(valid.min()),
-            median=float(np.median(valid)),
-            max=float(valid.max()),
-        )
-    else:
-        out.update(min=math.nan, median=math.nan, max=math.nan)
-    return out
-
-
-def relative_width(q05: np.ndarray, q50: np.ndarray, q95: np.ndarray) -> np.ndarray:
-    """RU90 = (Q0.95 - Q0.05) / Q0.5; NaN where Q0.5 <= 0 or any input is NaN."""
-    q05 = np.asarray(q05, dtype=np.float64)
-    q50 = np.asarray(q50, dtype=np.float64)
-    q95 = np.asarray(q95, dtype=np.float64)
-    out = np.full(np.broadcast(q05, q50, q95).shape, np.nan)
-    ok = np.isfinite(q05) & np.isfinite(q50) & np.isfinite(q95) & (q50 > 0)
-    out[ok] = (q95[ok] - q05[ok]) / q50[ok]
-    return out
-
-
-def texture_sum_check(
-    sand: np.ndarray, silt: np.ndarray, clay: np.ndarray, tol: float = 2.0
-) -> dict:
-    total = np.asarray(sand, float) + np.asarray(silt, float) + np.asarray(clay, float)
-    valid = total[np.isfinite(total)]
-    if not valid.size:
-        return {"checked": 0, "flagged": 0, "max_abs_dev": math.nan}
-    dev = np.abs(valid - 100.0)
-    return {
-        "checked": int(valid.size),
-        "flagged": int((dev > tol).sum()),
-        "max_abs_dev": float(dev.max()),
-    }
-
-
-# ----------------------------------------------------------------------
-# Reading with fallback
-# ----------------------------------------------------------------------
-
-
 def layer_vrt(var: str, depth: str, stat: str, base: str = BASE_DIR) -> str:
     """Full WebDAV VRT of one SoilGrids 2.0 layer (slow to open: ~17 s)."""
     return f"{base}{var}/{layer_name(var, depth, stat)}.vrt"
@@ -589,12 +496,6 @@ def tiles_in_window(
 # ----------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class Source:
-    route: str  # "Tiles" | "VRT" | "2017 archive"
-    path: str | tuple[str, ...]
-
-
 def layer_sources(
     index: TileIndex | None, var: str, depth: str, stat: str, base: str = BASE_DIR
 ) -> list[Source]:
@@ -603,69 +504,6 @@ def layer_sources(
         sources.append(Source("Tiles", tuple(index.paths_for(var, depth, stat, base))))
     sources.append(Source("VRT", layer_vrt(var, depth, stat, base)))
     return sources
-
-
-def read_with_fallback(sources: Sequence[Source], reader: Callable, *args):
-    """Try each source in turn. Returns (result, route, errors).
-    Raises SoilGridsError listing every attempt if all fail."""
-    errors: list[str] = []
-    for i, src in enumerate(sources):
-        try:
-            out = reader(src.path, *args)
-        except Exception as exc:  # noqa: BLE001 - every failure is reported
-            errors.append(f"{src.route}: {exc}")
-            continue
-        last = i == len(sources) - 1
-        if src.route == "Tiles" and not last and _all_nan(out):
-            # Tiles that exist but cover a different area give no data and
-            # no error; confirm against the next route before accepting.
-            errors.append(f"{src.route}: no data in the area")
-            continue
-        return out, src.route, errors
-    raise SoilGridsError("All access routes failed - " + " | ".join(errors))
-
-
-def _all_nan(values) -> bool:
-    arr = np.asarray(values, dtype=np.float64)
-    return arr.size > 0 and not np.isfinite(arr).any()
-
-
-def run_jobs(
-    keys: Sequence,
-    fn: Callable,
-    workers: int,
-    cancel_fn: Callable,
-    on_done: Callable,
-) -> dict:
-    """Run fn(key) for every key, ``workers`` at a time. Results by key.
-    Cancellation is checked as each job finishes; pending jobs are dropped."""
-    results: dict = {}
-    if workers <= 1 or len(keys) <= 1:
-        for key in keys:
-            if cancel_fn():
-                raise InterruptedError("Cancelled by user")
-            results[key] = fn(key)
-            on_done(key)
-        return results
-    pool = ThreadPoolExecutor(max_workers=workers)
-    futures = {pool.submit(fn, key): key for key in keys}
-    try:
-        for fut in as_completed(futures):
-            key = futures[fut]
-            results[key] = fut.result()
-            on_done(key)
-            if cancel_fn():
-                raise InterruptedError("Cancelled by user")
-    finally:
-        for fut in futures:
-            fut.cancel()
-        pool.shutdown(wait=True, cancel_futures=True)
-    return results
-
-
-# ----------------------------------------------------------------------
-# Result containers
-# ----------------------------------------------------------------------
 
 
 @dataclass
@@ -695,25 +533,6 @@ class RunResult:
     load_files: list[str] = field(default_factory=list)
     tiles: dict = field(default_factory=dict)  # variable -> tiles (0 = VRT)
     seconds: float = 0.0
-
-
-def _noop(*_args, **_kwargs):
-    return None
-
-
-def _never_cancelled() -> bool:
-    return False
-
-
-class _Progress:
-    def __init__(self, total: int, progress_fn: Callable):
-        self.total = max(total, 1)
-        self.done = 0
-        self.progress_fn = progress_fn
-
-    def step(self, message: str) -> None:
-        self.done += 1
-        self.progress_fn(min(self.done / self.total, 0.999), message)
 
 
 def count_jobs(selection: Selection) -> int:
@@ -1373,7 +1192,7 @@ def build_metadata(
     result: RunResult,
     selection: Selection,
     settings: dict,
-    gdal_version: str = "",
+    gdal_version_text: str = "",
 ) -> list[tuple[str, list[str], list[list]]]:
     """Sectioned metadata: list of (section title, header, rows)."""
     now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -1395,7 +1214,7 @@ def build_metadata(
                 else "Full VRT per layer"
             ),
         ],
-        ["GDAL version", gdal_version],
+        ["GDAL version", gdal_version_text],
         ["Citation", CITATION],
         ["Licence", LICENCE],
     ]
@@ -1581,87 +1400,6 @@ def build_metadata(
     ]
 
 
-def _r(value, nd: int = 4):
-    if value is None:
-        return ""
-    try:
-        if math.isnan(value):
-            return ""
-    except TypeError:
-        return value
-    return round(float(value), nd)
-
-
-# ----------------------------------------------------------------------
-# Default GDAL functions (the only part of this module that needs osgeo)
-# ----------------------------------------------------------------------
-
-HTTP_OPTIONS = {
-    "GDAL_HTTP_MAX_RETRY": "4",
-    "GDAL_HTTP_RETRY_DELAY": "3",
-    "GDAL_HTTP_TIMEOUT": "120",
-    "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
-    "VSI_CACHE": "TRUE",
-}
-
-
-def _gdal():
-    from osgeo import gdal
-
-    gdal.UseExceptions()
-    return gdal
-
-
-def gdal_version() -> str:
-    try:
-        return _gdal().__version__
-    except Exception:  # noqa: BLE001
-        return "unavailable"
-
-
-@contextmanager
-def http_options(options: dict | None = None):
-    """Set GDAL HTTP options for a whole run (set once, before any worker
-    thread starts, because config options are process-wide), then restore."""
-    gdal = _gdal()
-    options = HTTP_OPTIONS if options is None else options
-    old = {k: gdal.GetConfigOption(k) for k in options}
-    for key, value in options.items():
-        gdal.SetConfigOption(key, value)
-    try:
-        yield
-    finally:
-        for key, value in old.items():
-            gdal.SetConfigOption(key, value)
-
-
-def _crs_transform(src_wkt: str, dst_wkt: str):
-    """Coordinate transformation between two WKT CRSs (x/y = lon/lat order).
-    Callers hold PROJ_LOCK when used from worker threads."""
-    from osgeo import osr
-
-    osr.UseExceptions()
-    src = osr.SpatialReference()
-    src.ImportFromWkt(src_wkt)
-    src.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
-    dst = osr.SpatialReference()
-    dst.ImportFromWkt(dst_wkt)
-    dst.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
-    return osr.CoordinateTransformation(src, dst)
-
-
-def _wgs84_wkt() -> str:
-    from osgeo import osr
-
-    srs = osr.SpatialReference()
-    srs.ImportFromEPSG(4326)
-    return srs.ExportToWkt()
-
-
-def _lonlat_to(srs_wkt: str):
-    return _crs_transform(_wgs84_wkt(), srs_wkt)
-
-
 def _index_windows(to_pixel, bounds_ll, points):
     """Fractional pixel windows (x0, y0, x1, y1) to look up tiles for:
     one per point, or one for the densified area bounding box."""
@@ -1733,186 +1471,3 @@ def gdal_tile_index(
     if not rels:
         raise SoilGridsError("No SoilGrids tile covers the area of interest.")
     return TileIndex(tuple(rels), ref_name)
-
-
-def _unlink(gdal, mem) -> None:
-    """Remove a temporary in-memory mosaic. Never raises: a failed clean-up
-    must not hide the error that is being reported."""
-    if not mem:
-        return
-    try:
-        gdal.Unlink(mem)
-    except Exception:  # noqa: BLE001
-        pass
-
-
-def _open_source(gdal, source):
-    """Open a single path, or mosaic a list of tile paths into a small
-    in-memory VRT. Returns (dataset, vsimem_path or None)."""
-    if isinstance(source, str):
-        return gdal.Open(source), None
-    mem = f"/vsimem/soilgrids_{uuid.uuid4().hex}.vrt"
-    ds = gdal.BuildVRT(mem, list(source))
-    if ds is None:
-        raise SoilGridsError("Could not open the SoilGrids tiles.")
-    return ds, mem
-
-
-# Reprojection (PROJ) is not reliably thread-safe for the Interrupted
-# Goode Homolosine projection: parallel gdal.Warp calls crashed
-# intermittently in testing. So worker threads only DOWNLOAD native pixels
-# (the slow, network-bound part); every coordinate transformation and the
-# quick warp of the downloaded block run one at a time under this lock.
-PROJ_LOCK = threading.Lock()
-
-
-def _native_window(gdal, ds, grid: TargetGrid, pad: int = 2, strict: bool = False):
-    """Pixel window of ``ds`` that covers ``grid`` (densified edges).
-    With ``strict`` (tile mosaics) the raster must cover the whole grid."""
-    tr = _crs_transform(grid.crs_wkt, ds.GetProjection())
-    inv = gdal.InvGeoTransform(ds.GetGeoTransform())
-    n = 16
-    xs, ys = [], []
-    for i in range(n + 1):
-        for j in range(n + 1):
-            gx = grid.xmin + (grid.xmax - grid.xmin) * i / n
-            gy = grid.ymin + (grid.ymax - grid.ymin) * j / n
-            try:
-                x, y, _ = tr.TransformPoint(gx, gy)
-            except Exception:  # noqa: BLE001 - point outside the projection
-                continue
-            if not (math.isfinite(x) and math.isfinite(y)):
-                continue
-            xs.append(inv[0] + inv[1] * x + inv[2] * y)
-            ys.append(inv[3] + inv[4] * x + inv[5] * y)
-    if not xs:
-        if strict:
-            raise SoilGridsError("the tiles do not cover the area of interest")
-        return None
-    if strict and (
-        min(xs) < 0
-        or min(ys) < 0
-        or max(xs) > ds.RasterXSize
-        or max(ys) > ds.RasterYSize
-    ):
-        raise SoilGridsError("the tiles do not cover the area of interest")
-    x0 = max(0, int(math.floor(min(xs))) - pad)
-    y0 = max(0, int(math.floor(min(ys))) - pad)
-    x1 = min(ds.RasterXSize, int(math.floor(max(xs))) + 1 + pad)
-    y1 = min(ds.RasterYSize, int(math.floor(max(ys))) + 1 + pad)
-    if x0 >= x1 or y0 >= y1:
-        return None
-    return x0, y0, x1 - x0, y1 - y0
-
-
-def gdal_read_grid(source, grid: TargetGrid) -> np.ndarray:
-    """Warp a (remote) raster - one path or a list of tiles - onto ``grid``
-    with nearest neighbour. Float64 with NaN for nodata / outside coverage.
-
-    Thread-safe: the native block is downloaded without the lock; the
-    window calculation and the in-memory warp run under PROJ_LOCK."""
-    gdal = _gdal()
-    src, mem = _open_source(gdal, source)
-    try:
-        with PROJ_LOCK:
-            window = _native_window(gdal, src, grid, strict=mem is not None)
-        out = np.full((grid.height, grid.width), np.nan)
-        if window is None:
-            return out
-        x0, y0, w, h = window
-        band = src.GetRasterBand(1)
-        nodata = band.GetNoDataValue()
-        block = band.ReadAsArray(x0, y0, w, h).astype(np.float32)  # network I/O
-        if nodata is not None:
-            block[block == nodata] = np.nan
-        gt = src.GetGeoTransform()
-        block_gt = (
-            gt[0] + x0 * gt[1] + y0 * gt[2],
-            gt[1],
-            gt[2],
-            gt[3] + x0 * gt[4] + y0 * gt[5],
-            gt[4],
-            gt[5],
-        )
-        srs_wkt = src.GetProjection()
-        with PROJ_LOCK:
-            mem_src = gdal.GetDriverByName("MEM").Create("", w, h, 1, gdal.GDT_Float32)
-            mem_src.SetGeoTransform(block_gt)
-            mem_src.SetProjection(srs_wkt)
-            mband = mem_src.GetRasterBand(1)
-            mband.SetNoDataValue(float("nan"))
-            mband.WriteArray(block)
-            ds = gdal.Warp(
-                "",
-                mem_src,
-                format="MEM",
-                outputBounds=(grid.xmin, grid.ymin, grid.xmax, grid.ymax),
-                width=grid.width,
-                height=grid.height,
-                dstSRS=grid.crs_wkt,
-                resampleAlg="near",
-                outputType=gdal.GDT_Float32,
-                srcNodata=float("nan"),
-                dstNodata=float("nan"),
-            )
-            if ds is None:
-                raise SoilGridsError(f"GDAL could not warp {source}")
-            out = ds.GetRasterBand(1).ReadAsArray().astype(np.float64)
-            ds = None
-            mem_src = None
-        return out
-    finally:
-        src = None
-        _unlink(gdal, mem)
-
-
-def gdal_sample_points(source, lonlats: Sequence[tuple[float, float]]) -> list[float]:
-    """Nearest-cell values of a (remote) raster - one path or a list of
-    tiles - at lon/lat points. One window read when the points fit in
-    WINDOW_LIMIT_CELLS, otherwise one cell per point. NaN for nodata or
-    points outside the raster."""
-    gdal = _gdal()
-    ds, mem = _open_source(gdal, source)
-    try:
-        inv = gdal.InvGeoTransform(ds.GetGeoTransform())
-        band = ds.GetRasterBand(1)
-        nodata = band.GetNoDataValue()
-        cols, rows = ds.RasterXSize, ds.RasterYSize
-        pix = []
-        with PROJ_LOCK:
-            tr = _lonlat_to(ds.GetProjection())
-            for lon, lat in lonlats:
-                x, y, _ = tr.TransformPoint(lon, lat)
-                px = int(math.floor(inv[0] + inv[1] * x + inv[2] * y))
-                py = int(math.floor(inv[3] + inv[4] * x + inv[5] * y))
-                pix.append((px, py))
-        inside = [(px, py) for px, py in pix if 0 <= px < cols and 0 <= py < rows]
-        if mem is not None and len(inside) < len(pix):
-            raise SoilGridsError("the tiles do not cover every point")
-        window = None
-        if inside:
-            x0 = min(p[0] for p in inside)
-            x1 = max(p[0] for p in inside)
-            y0 = min(p[1] for p in inside)
-            y1 = max(p[1] for p in inside)
-            if (x1 - x0 + 1) <= WINDOW_LIMIT_CELLS and (
-                y1 - y0 + 1
-            ) <= WINDOW_LIMIT_CELLS:
-                window = (x0, y0, band.ReadAsArray(x0, y0, x1 - x0 + 1, y1 - y0 + 1))
-        values: list[float] = []
-        for px, py in pix:
-            if not (0 <= px < cols and 0 <= py < rows):
-                values.append(math.nan)
-                continue
-            if window is not None:
-                wx0, wy0, arr = window
-                v = float(arr[py - wy0, px - wx0])
-            else:
-                v = float(band.ReadAsArray(px, py, 1, 1)[0, 0])
-            if (nodata is not None and v == nodata) or math.isnan(v):
-                v = math.nan
-            values.append(v)
-        return values
-    finally:
-        ds = None
-        _unlink(gdal, mem)

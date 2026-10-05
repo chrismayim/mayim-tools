@@ -69,6 +69,9 @@ from mayim_tools.rainfall.persiann_extract.persiann_extract_algorithm import (
 from mayim_tools.rainfall.storm_library.storm_library_algorithm import (
     AdjustToDdfAlgorithm,
 )
+from mayim_tools.soil.openlandmap_extract.openlandmap_extract_algorithm import (
+    OpenLandMapExtractAlgorithm,
+)
 from mayim_tools.soil.soilgrids_extract.soilgrids_extract_algorithm import (
     SoilGridsExtractAlgorithm,
 )
@@ -114,3 +117,4 @@ class MayimToolsProvider(QgsProcessingProvider):
         self.addAlgorithm(DemDepressionStageStorageAlgorithm())
         self.addAlgorithm(stream_network_algo.StreamNetworkAlgorithm())
         self.addAlgorithm(SoilGridsExtractAlgorithm())
+        self.addAlgorithm(OpenLandMapExtractAlgorithm())
