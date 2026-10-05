@@ -7,9 +7,12 @@ LOCAL rasters (including one in the same Interrupted Goode Homolosine
 projection SoilGrids uses), skipped when osgeo is not available.
 """
 
+import contextlib
 import csv
 import math
 import os
+import re
+import threading
 
 import numpy as np
 import pytest
@@ -59,32 +62,13 @@ def test_defaults_exclude_optional_layers():
     assert defaults == ["sand", "silt", "clay", "soc", "bdod", "cfvo", "phh2o", "cec"]
 
 
-def test_webdav_path_pattern():
-    assert core.webdav_path("clay", "0-5cm", "Q0.5") == (
-        "/vsicurl/https://files.isric.org/soilgrids/latest/data/"
-        "clay/clay_0-5cm_Q0.5.vrt"
-    )
-    assert core.webdav_path("soc", "15-30cm", "mean").endswith(
-        "soc/soc_15-30cm_mean.vrt"
-    )
-
-
 def test_every_layer_name_is_well_formed():
     for v in core.VARIABLES:
         for depth, _, _ in core.DEPTHS:
             for stat in core.STATISTICS:
                 name = core.layer_name(v.code, depth, stat)
                 assert name == f"{v.code}_{depth}_{stat}"
-                assert " " not in core.webdav_path(v.code, depth, stat)
-
-
-def test_wcs_path_contents():
-    path = core.wcs_path("sand", "30-60cm", "Q0.95", (28.1, -25.9, 28.4, -25.6))
-    assert path.startswith("/vsicurl/https://maps.isric.org/mapserv?map=/map/sand.map")
-    assert "COVERAGEID=sand_30-60cm_Q0.95" in path
-    assert "SUBSET=long(28.100000,28.400000)" in path
-    assert "SUBSET=lat(-25.900000,-25.600000)" in path
-    assert "EPSG/0/4326" in path
+                assert " " not in core.layer_vrt(v.code, depth, stat)
 
 
 def test_bedrock_paths():
@@ -219,36 +203,216 @@ def test_summarise_counts_nodata():
 
 
 # ----------------------------------------------------------------------
-# Area mode orchestration (fake reader / writer)
+# Paths, 2017 helpers, tile index
+# ----------------------------------------------------------------------
+
+
+def test_layer_vrt_pattern():
+    assert core.layer_vrt("clay", "0-5cm", "Q0.5") == (
+        "/vsicurl/https://files.isric.org/soilgrids/latest/data/"
+        "clay/clay_0-5cm_Q0.5.vrt"
+    )
+
+
+def test_tile_paths_follow_isric_layout():
+    # Layout as reported by GDAL LocationInfo on the live server (2026-10-03).
+    index = core.TileIndex(
+        ("tileSG-025-051/tileSG-025-051_2-2.tif",), "clay_0-5cm_mean"
+    )
+    assert index.paths_for("soc", "0-5cm", "mean") == [
+        "/vsicurl/https://files.isric.org/soilgrids/latest/data/soc/./"
+        "soc_0-5cm_mean/tileSG-025-051/tileSG-025-051_2-2.tif"
+    ]
+
+
+def test_layer_sources_order():
+    index = core.TileIndex(("t/t_1-1.tif",), "clay_0-5cm_mean")
+    srcs = core.layer_sources(index, "sand", "5-15cm", "Q0.95")
+    assert [s.route for s in srcs] == ["Tiles", "VRT"]
+    assert srcs[0].path[0].endswith("sand/./sand_5-15cm_Q0.95/t/t_1-1.tif")
+    assert srcs[1].path.endswith("sand/sand_5-15cm_Q0.95.vrt")
+    assert [s.route for s in core.layer_sources(None, "sand", "0-5cm", "mean")] == [
+        "VRT"
+    ]
+
+
+VRT_XML = """<VRTDataset rasterXSize="400" rasterYSize="400">
+  <VRTRasterBand dataType="Int16" band="1">
+    <ComplexSource>
+      <SourceFilename relativeToVRT="1">./clay_0-5cm_mean/tA/tA_1-1.tif</SourceFilename>
+      <SourceBand>1</SourceBand>
+      <SrcRect xOff="0" yOff="0" xSize="200" ySize="200" />
+      <DstRect xOff="0" yOff="0" xSize="200" ySize="200" />
+    </ComplexSource>
+    <ComplexSource>
+      <SourceFilename relativeToVRT="1">./clay_0-5cm_mean/tA/tA_2-1.tif</SourceFilename>
+      <SourceBand>1</SourceBand>
+      <SrcRect xOff="0" yOff="0" xSize="200" ySize="200" />
+      <DstRect xOff="200" yOff="0" xSize="200" ySize="200" />
+    </ComplexSource>
+    <ComplexSource>
+      <SourceFilename relativeToVRT="1">./clay_0-5cm_mean/tB/tB_1-2.tif</SourceFilename>
+      <SourceBand>1</SourceBand>
+      <SrcRect xOff="0" yOff="0" xSize="200" ySize="200" />
+      <DstRect xOff="0" yOff="200" xSize="200" ySize="200" />
+    </ComplexSource>
+  </VRTRasterBand>
+</VRTDataset>"""
+
+
+def test_tiles_in_window_selects_intersecting_tiles():
+    assert core.tiles_in_window(VRT_XML, "clay_0-5cm_mean", (10, 10, 20, 20)) == (
+        "tA/tA_1-1.tif",
+    )
+    assert core.tiles_in_window(VRT_XML, "clay_0-5cm_mean", (190, 190, 210, 210)) == (
+        "tA/tA_1-1.tif",
+        "tA/tA_2-1.tif",
+        "tB/tB_1-2.tif",
+    )
+    # Window edge touching a tile edge does not select it (exclusive bounds).
+    assert core.tiles_in_window(VRT_XML, "clay_0-5cm_mean", (0, 0, 200, 200)) == (
+        "tA/tA_1-1.tif",
+    )
+
+
+def test_tiles_in_window_accepts_windows_backslash_paths():
+    # GDAL on Windows writes relative VRT paths with backslashes.
+    xml = VRT_XML.replace(
+        "./clay_0-5cm_mean/tA/tA_1-1.tif", "clay_0-5cm_mean\\tA\\tA_1-1.tif"
+    )
+    assert core.tiles_in_window(xml, "clay_0-5cm_mean", (10, 10, 20, 20)) == (
+        "tA/tA_1-1.tif",
+    )
+
+
+def test_tiles_in_window_errors():
+    with pytest.raises(core.SoilGridsError, match="No SoilGrids tile"):
+        core.tiles_in_window(VRT_XML, "clay_0-5cm_mean", (500, 500, 600, 600))
+    with pytest.raises(core.SoilGridsError, match="Unexpected tile path"):
+        core.tiles_in_window(VRT_XML, "sand_0-5cm_mean", (10, 10, 20, 20))
+    with pytest.raises(core.SoilGridsError, match="lists no tiles"):
+        core.tiles_in_window("<VRTDataset/>", "clay_0-5cm_mean", (0, 0, 1, 1))
+
+
+def test_sg2017_paths_and_points():
+    assert core.sg2017_path("clay", 0) == (
+        "/vsicurl/https://files.isric.org/soilgrids/former/2017-03-10/data/"
+        "CLYPPT_M_sl1_250m_ll.tif"
+    )
+    assert core.sg2017_path("bdod", 6).endswith("BLDFIE_M_sl7_250m_ll.tif")
+    assert core.sg2017_points_needed(["0-5cm"]) == [0, 1]
+    assert core.sg2017_points_needed(["30-60cm", "100-200cm"]) == [3, 4, 5, 6]
+    assert core.sg2017_points_needed([d[0] for d in core.DEPTHS]) == list(range(7))
+
+
+def test_sg2017_interval_is_trapezoid_mean():
+    pts = {3: np.array([20.0, np.nan]), 4: np.array([30.0, 5.0])}
+    out = core.sg2017_interval(pts, "30-60cm")
+    assert out[0] == 25.0 and math.isnan(out[1])
+
+
+def test_vars_2017_cover_all_but_water_content():
+    assert set(core.VARS_2017) == {
+        "sand",
+        "silt",
+        "clay",
+        "soc",
+        "bdod",
+        "cfvo",
+        "phh2o",
+        "cec",
+    }
+    assert core.VARS_2017["bdod"].divide_by == 1000  # kg/m3 -> g/cm3
+    assert core.VARS_2017["phh2o"].divide_by == 10
+
+
+def test_plan_selection_sg2017_warning_for_water_content_only():
+    sel = core.plan_selection(["wv0033"], ["0-5cm"], ["mean"], sg2017=True)
+    assert sel.sg2017 and any("2017" in w for w in sel.warnings)
+
+
+# ----------------------------------------------------------------------
+# Parallel job runner
+# ----------------------------------------------------------------------
+
+
+def test_run_jobs_parallel_and_sequential_agree():
+    done = []
+    par = core.run_jobs(list(range(20)), lambda k: k * k, 8, lambda: False, done.append)
+    seq = core.run_jobs(list(range(20)), lambda k: k * k, 1, lambda: False, _noop)
+    assert par == seq == {k: k * k for k in range(20)}
+    assert sorted(done) == list(range(20))
+
+
+def test_run_jobs_propagates_errors_and_cancel():
+    def boom(k):
+        if k == 3:
+            raise core.SoilGridsError("bad layer")
+        return k
+
+    with pytest.raises(core.SoilGridsError, match="bad layer"):
+        core.run_jobs(list(range(6)), boom, 4, lambda: False, _noop)
+    with pytest.raises(InterruptedError):
+        core.run_jobs(list(range(6)), lambda k: k, 4, lambda: True, _noop)
+    with pytest.raises(InterruptedError):
+        core.run_jobs(list(range(6)), lambda k: k, 1, lambda: True, _noop)
+
+
+def _noop(*_a, **_k):
+    return None
+
+
+# ----------------------------------------------------------------------
+# Area mode orchestration (fake index / reader / writer)
 # ----------------------------------------------------------------------
 
 RAW = {"mean": 300.0, "Q0.05": 200.0, "Q0.5": 300.0, "Q0.95": 500.0}
 TEXTURE_MEAN = {"sand": 400.0, "silt": 400.0, "clay": 200.0}
+RAW_2017 = {"CLYPPT": 25.0, "SNDPPT": 40.0, "SLTPPT": 35.0, "BLDFIE": 1400.0}
+LAYER_RE = re.compile(r"/(\w+?)_(\d+-\d+cm)_(mean|Q0\.05|Q0\.5|Q0\.95)")
+SL_RE = re.compile(r"/([A-Z]+)_M_sl(\d)_250m_ll\.tif$")
 
 
-def fake_raw_value(path):
-    for stat, value in RAW.items():
-        if path.endswith(f"_{stat}.vrt") or f"_{stat}&" in path:
-            for code, tex in TEXTURE_MEAN.items():
-                if stat == "mean" and f"/{code}_" in path:
-                    return tex
+def fake_raw_value(source):
+    path = source[0] if isinstance(source, tuple) else source
+    m = LAYER_RE.search(path)
+    if m:
+        var, _, stat = m.groups()
+        if stat == "mean" and var in TEXTURE_MEAN:
+            return TEXTURE_MEAN[var]
+        return RAW[stat]
+    m = SL_RE.search(path)
+    if m:
+        code, k = m.group(1), int(m.group(2))
+        return RAW_2017[code] + k  # value grows with depth point
+    for code, value in (("BDTICM", 1500.0), ("BDRICM", 200.0), ("BDRLOG", 12.0)):
+        if code in path:
             return value
-    if "BDTICM" in path:
-        return 1500.0
-    if "BDRICM" in path:
-        return 200.0
-    if "BDRLOG" in path:
-        return 12.0
     raise AssertionError(f"unexpected path {path}")
 
 
-def make_reader(fail_webdav=False, fail_all=False, calls=None):
-    def reader(path, grid):
+def fake_index(bounds_ll, points=None, base=core.BASE_DIR, ref=core.REF_LAYER):
+    return core.TileIndex(("tA/tA_1-1.tif", "tA/tA_2-1.tif"), "clay_0-5cm_mean")
+
+
+def failing_index(*_a, **_k):
+    raise RuntimeError("index server down")
+
+
+def make_reader(fail_tiles=False, fail_all=False, fail_2017=False, calls=None):
+    lock = threading.Lock()
+
+    def reader(source, grid):
         if calls is not None:
-            calls.append(path)
-        if fail_all or (fail_webdav and "files.isric.org/soilgrids/latest" in path):
+            with lock:
+                calls.append(source)
+        if fail_all:
             raise RuntimeError("HTTP 503")
-        arr = np.full((grid.height, grid.width), fake_raw_value(path))
+        if fail_tiles and isinstance(source, tuple):
+            raise RuntimeError("tile 404")
+        if fail_2017 and "_M_sl" in str(source):
+            raise RuntimeError("2017 down")
+        arr = np.full((grid.height, grid.width), fake_raw_value(source))
         arr[0, 0] = np.nan  # one nodata cell
         return arr
 
@@ -258,9 +422,11 @@ def make_reader(fail_webdav=False, fail_all=False, calls=None):
 class FakeWriter:
     def __init__(self):
         self.files = {}
+        self.lock = threading.Lock()
 
     def __call__(self, path, grid, bands, units):
-        self.files[path] = (bands, units)
+        with self.lock:
+            self.files[path] = (bands, units)
 
 
 @pytest.fixture
@@ -276,7 +442,9 @@ def run_area(grid, tmp_path, selection, **kw):
         (28.0, -26.0, 28.01, -25.99),
         str(tmp_path),
         read_grid_fn=kw.pop("reader", make_reader()),
+        index_fn=kw.pop("index_fn", fake_index),
         write_fn=writer,
+        options_ctx=kw.pop("options_ctx", contextlib.nullcontext()),
         **kw,
     )
     return result, writer
@@ -285,37 +453,50 @@ def run_area(grid, tmp_path, selection, **kw):
 def test_area_bands_units_and_nodata(grid, tmp_path):
     sel = core.plan_selection(["clay", "bdod"], ["0-5cm", "30-60cm"], ["Q0.5"])
     result, writer = run_area(grid, tmp_path, sel)
-    clay = str(tmp_path / "soilgrids_clay_Q0.50.tif")
+    clay = os.path.join(str(tmp_path), "soilgrids_clay_Q0.50.tif")
     bands, units = writer.files[clay]
     assert units == "%"
     assert [b[0] for b in bands] == ["clay_0-5cm_Q0.5 (%)", "clay_30-60cm_Q0.5 (%)"]
     assert bands[0][1][1, 1] == pytest.approx(30.0)  # 300 g/kg -> 30 %
     assert math.isnan(bands[0][1][0, 0])  # nodata kept
-    bdod_bands, bdod_units = writer.files[str(tmp_path / "soilgrids_bdod_Q0.50.tif")]
+    bdod = os.path.join(str(tmp_path), "soilgrids_bdod_Q0.50.tif")
+    bdod_bands, bdod_units = writer.files[bdod]
     assert bdod_units == "g/cm3"
     assert bdod_bands[0][1][1, 1] == pytest.approx(3.0)  # /100
-    assert result.load_files == [clay, str(tmp_path / "soilgrids_bdod_Q0.50.tif")]
+    assert result.load_files == [clay, bdod]
     assert len(result.layers) == 4
-    assert all(rec.route == "WebDAV" for rec in result.layers)
+    assert all(rec.route == "Tiles" for rec in result.layers)
     assert result.layers[0].stats["nodata"] == 1
+    assert result.tiles == {"clay": 2, "bdod": 2}
 
 
-def test_area_one_file_per_variable_statistic(grid, tmp_path):
+def test_area_tiles_route_reads_layer_specific_tile_paths(grid, tmp_path):
+    calls = []
+    sel = core.plan_selection(["soc"], ["15-30cm"], ["Q0.95"])
+    run_area(grid, tmp_path, sel, reader=make_reader(calls=calls))
+    assert calls == [
+        tuple(
+            core.BASE_DIR + f"soc/./soc_15-30cm_Q0.95/{rel}"
+            for rel in ("tA/tA_1-1.tif", "tA/tA_2-1.tif")
+        )
+    ]
+
+
+def test_area_one_file_per_variable_statistic_parallel(grid, tmp_path):
     sel = core.plan_selection(
-        ["sand", "silt", "clay"],
-        [d[0] for d in core.DEPTHS],
-        list(core.STATISTICS),
+        ["sand", "silt", "clay"], [d[0] for d in core.DEPTHS], list(core.STATISTICS)
     )
-    result, writer = run_area(grid, tmp_path, sel)
-    assert len(writer.files) == 3 * 4
-    for bands, _ in writer.files.values():
-        assert len(bands) == 6
+    for workers in (1, 8):
+        result, writer = run_area(grid, tmp_path, sel, workers=workers)
+        assert len(writer.files) == 3 * 4
+        for bands, _ in writer.files.values():
+            assert [b[0].split("_")[1] for b in bands] == [d[0] for d in core.DEPTHS]
 
 
 def test_area_loads_mean_when_no_median(grid, tmp_path):
     sel = core.plan_selection(["clay"], ["0-5cm"], ["mean", "Q0.95"])
     result, _ = run_area(grid, tmp_path, sel)
-    assert result.load_files == [str(tmp_path / "soilgrids_clay_mean.tif")]
+    assert result.load_files == [os.path.join(str(tmp_path), "soilgrids_clay_mean.tif")]
 
 
 def test_area_ru90_written_and_extra_quantiles_not_written(grid, tmp_path):
@@ -323,7 +504,9 @@ def test_area_ru90_written_and_extra_quantiles_not_written(grid, tmp_path):
     result, writer = run_area(grid, tmp_path, sel)
     names = sorted(os.path.basename(p) for p in writer.files)
     assert names == ["soilgrids_clay_RU90.tif", "soilgrids_clay_mean.tif"]
-    ru_bands, ru_units = writer.files[str(tmp_path / "soilgrids_clay_RU90.tif")]
+    ru_bands, ru_units = writer.files[
+        os.path.join(str(tmp_path), "soilgrids_clay_RU90.tif")
+    ]
     assert ru_units == "ratio"
     assert ru_bands[0][0] == "clay_0-5cm_RU90 (ratio)"
     assert ru_bands[0][1][1, 1] == pytest.approx((50.0 - 20.0) / 30.0)
@@ -338,50 +521,155 @@ def test_area_texture_check(grid, tmp_path):
     ]
 
 
-def test_area_fallback_to_wcs_is_logged(grid, tmp_path):
-    calls, logs = [], []
+def test_area_tile_failure_falls_back_to_vrt_and_logs(grid, tmp_path):
+    logs = []
     sel = core.plan_selection(["clay"], ["0-5cm"], ["Q0.5"])
-    result, writer = run_area(
-        grid,
-        tmp_path,
-        sel,
-        reader=make_reader(fail_webdav=True, calls=calls),
-        log_fn=logs.append,
+    result, _ = run_area(
+        grid, tmp_path, sel, reader=make_reader(fail_tiles=True), log_fn=logs.append
     )
-    assert len(calls) == 2 and "maps.isric.org" in calls[1]
-    assert result.layers[0].route == "WCS (EPSG:4326)"
-    assert logs and "HTTP 503" in logs[0]
+    assert result.layers[0].route == "VRT"
+    assert logs and "tile 404" in logs[0]
     assert result.warnings == logs
 
 
-def test_area_all_routes_fail_names_layer(grid, tmp_path):
+def test_area_index_failure_uses_vrt_for_every_layer(grid, tmp_path):
+    logs = []
+    sel = core.plan_selection(["clay"], ["0-5cm", "5-15cm"], ["Q0.5"])
+    result, _ = run_area(
+        grid, tmp_path, sel, index_fn=failing_index, log_fn=logs.append
+    )
+    assert {rec.route for rec in result.layers} == {"VRT"}
+    assert result.tiles == {"clay": 0}
+    assert len(logs) == 1 and "index server down" in logs[0]
+
+
+def test_area_builds_one_index_per_variable(grid, tmp_path):
+    refs = []
+    lock = threading.Lock()
+
+    def index_fn(bounds_ll, points=None, base=core.BASE_DIR, ref=core.REF_LAYER):
+        with lock:
+            refs.append(ref)
+        return fake_index(bounds_ll)
+
+    sel = core.plan_selection(["clay", "bdod", "phh2o"], ["5-15cm"], ["Q0.5"])
+    run_area(grid, tmp_path, sel, index_fn=index_fn)
+    assert sorted(refs) == [
+        ("bdod", "0-5cm", "mean"),
+        ("clay", "0-5cm", "mean"),
+        ("phh2o", "0-5cm", "mean"),
+    ]
+
+
+def test_area_tiles_with_no_data_fall_back_to_vrt(grid, tmp_path):
+    """Live bug 2026-10-05: tiles that exist but cover another area return
+    all-nodata without an error. Such a layer must be re-read via its VRT."""
+    logs = []
+
+    def reader(source, grid):
+        if isinstance(source, tuple) and "/bdod/" in source[0]:
+            return np.full((grid.height, grid.width), np.nan)
+        return make_reader()(source, grid)
+
+    sel = core.plan_selection(["clay", "bdod"], ["0-5cm"], ["mean"])
+    result, writer = run_area(grid, tmp_path, sel, reader=reader, log_fn=logs.append)
+    routes = {r.variable: r.route for r in result.layers}
+    assert routes == {"clay": "Tiles", "bdod": "VRT"}
+    bands, _ = writer.files[os.path.join(str(tmp_path), "soilgrids_bdod_mean.tif")]
+    assert bands[0][1][1, 1] == pytest.approx(3.0)
+    assert any("no data in the area" in m for m in logs)
+
+
+def test_area_layer_empty_on_every_route_is_warned(grid, tmp_path):
+    def reader(source, grid):
+        return np.full((grid.height, grid.width), np.nan)
+
+    logs = []
+    sel = core.plan_selection(["clay"], ["0-5cm"], ["Q0.5"])
+    result, _ = run_area(grid, tmp_path, sel, reader=reader, log_fn=logs.append)
+    assert result.layers[0].route == "VRT"
+    assert any("has no valid values" in m for m in result.warnings)
+
+
+def test_read_with_fallback_accepts_empty_last_route():
+    srcs = [core.Source("Tiles", ("a",)), core.Source("VRT", "b")]
+    out, route, errors = core.read_with_fallback(srcs, lambda p: [math.nan, math.nan])
+    assert route == "VRT" and errors == ["Tiles: no data in the area"]
+    only = [core.Source("Tiles", ("a",))]
+    out, route, _ = core.read_with_fallback(only, lambda p: [math.nan])
+    assert route == "Tiles"
+
+
+def test_area_all_routes_fail_names_routes(grid, tmp_path):
     sel = core.plan_selection(["clay"], ["0-5cm"], ["Q0.5"])
     with pytest.raises(core.SoilGridsError, match="All access routes failed"):
         run_area(grid, tmp_path, sel, reader=make_reader(fail_all=True))
 
 
+def test_area_sg2017_file(grid, tmp_path):
+    sel = core.plan_selection(
+        ["clay", "bdod", "wv0033"], ["0-5cm", "100-200cm"], ["Q0.5"], sg2017=True
+    )
+    result, writer = run_area(grid, tmp_path, sel)
+    path = os.path.join(str(tmp_path), "soilgrids2017_clay_mean.tif")
+    bands, units = writer.files[path]
+    assert units == "%"
+    assert [b[0] for b in bands] == [
+        "clay_0-5cm_mean [SG2017] (%)",
+        "clay_100-200cm_mean [SG2017] (%)",
+    ]
+    # CLYPPT fake = 25 + k: sl1=26, sl2=27 -> 26.5; sl6=31, sl7=32 -> 31.5
+    assert bands[0][1][1, 1] == pytest.approx(26.5)
+    assert bands[1][1][1, 1] == pytest.approx(31.5)
+    bd, bd_units = writer.files[
+        os.path.join(str(tmp_path), "soilgrids2017_bdod_mean.tif")
+    ]
+    assert bd_units == "g/cm3"
+    assert bd[0][1][1, 1] == pytest.approx((1401 + 1402) / 2 / 1000)
+    assert not any(
+        os.path.basename(p).startswith("soilgrids2017_wv") for p in writer.files
+    )
+    recs = [r for r in result.layers if r.product == core.PRODUCT_SG2017]
+    assert recs and {r.route for r in recs} == {"2017 archive"}
+    assert path not in result.load_files
+
+
+def test_area_sg2017_failure_is_a_warning(grid, tmp_path):
+    logs = []
+    sel = core.plan_selection(["clay"], ["0-5cm"], ["Q0.5"], sg2017=True)
+    result, writer = run_area(
+        grid, tmp_path, sel, reader=make_reader(fail_2017=True), log_fn=logs.append
+    )
+    assert not any("soilgrids2017" in p for p in writer.files)
+    assert any("CLYPPT" in w and "skipped" in w for w in result.warnings)
+
+
 def test_area_bedrock_file(grid, tmp_path):
     sel = core.plan_selection([], ["0-5cm"], ["mean"], bedrock=True)
     result, writer = run_area(grid, tmp_path, sel)
-    bands, _ = writer.files[str(tmp_path / core.BEDROCK_FILE_NAME)]
+    bands, _ = writer.files[os.path.join(str(tmp_path), core.BEDROCK_FILE_NAME)]
     assert [b[0].split()[0] for b in bands] == ["BDTICM", "BDRICM", "BDRLOG"]
     assert bands[0][1][1, 1] == 1500.0  # cm, no conversion
-    assert result.load_files == [str(tmp_path / core.BEDROCK_FILE_NAME)]
-    assert {rec.route for rec in result.layers} == {"WebDAV (2017 archive)"}
+    assert result.load_files == [os.path.join(str(tmp_path), core.BEDROCK_FILE_NAME)]
+    assert {rec.route for rec in result.layers} == {"2017 archive"}
+    assert result.tiles == {}  # no 2.0 variables -> no index needed
 
 
 def test_area_cancel(grid, tmp_path):
-    sel = core.plan_selection(["clay"], ["0-5cm"], ["Q0.5"])
+    sel = core.plan_selection(["clay"], ["0-5cm", "5-15cm"], ["Q0.5"])
     with pytest.raises(InterruptedError):
         run_area(grid, tmp_path, sel, cancel_fn=lambda: True)
 
 
 def test_area_progress_reaches_one(grid, tmp_path):
     seen = []
-    sel = core.plan_selection(["clay"], ["0-5cm", "5-15cm"], ["Q0.5"])
+    sel = core.plan_selection(
+        ["clay"], ["0-5cm", "5-15cm"], ["Q0.5"], sg2017=True, bedrock=True
+    )
     run_area(grid, tmp_path, sel, progress_fn=lambda f, m: seen.append(f))
     assert seen[0] == 0.0 and seen[-1] == 1.0
-    assert seen == sorted(seen)
+    assert max(seen[:-1]) < 1.0
+    assert core.count_jobs(sel) == 2 + 3 + 3  # 2.0 layers + 2017 points + bedrock
 
 
 def test_area_requires_writer(grid, tmp_path):
@@ -391,20 +679,22 @@ def test_area_requires_writer(grid, tmp_path):
 
 
 # ----------------------------------------------------------------------
-# Point mode orchestration (fake sampler)
+# Point mode orchestration (fake index / sampler)
 # ----------------------------------------------------------------------
 
 SITES = [core.Site("A", 28.10, -25.80), core.Site("B", 28.12, -25.81)]
 
 
-def make_sampler(fail_webdav=False, missing_second=False, calls=None):
-    def sampler(path, lonlats):
+def make_sampler(fail_tiles=False, missing_second=False, calls=None):
+    lock = threading.Lock()
+
+    def sampler(source, lonlats):
         if calls is not None:
-            calls.append((path, len(lonlats)))
-        if fail_webdav and "files.isric.org/soilgrids/latest" in path:
+            with lock:
+                calls.append((source, len(lonlats)))
+        if fail_tiles and isinstance(source, tuple):
             raise RuntimeError("timeout")
-        value = fake_raw_value(path)
-        values = [value] * len(lonlats)
+        values = [fake_raw_value(source)] * len(lonlats)
         if missing_second and len(values) > 1:
             values[1] = math.nan
         return values
@@ -412,91 +702,125 @@ def make_sampler(fail_webdav=False, missing_second=False, calls=None):
     return sampler
 
 
+def run_points(selection, **kw):
+    return core.extract_points(
+        selection,
+        kw.pop("sites", SITES),
+        sample_fn=kw.pop("sampler", make_sampler()),
+        index_fn=kw.pop("index_fn", fake_index),
+        options_ctx=contextlib.nullcontext(),
+        **kw,
+    )
+
+
 def test_points_rows_long_format():
     sel = core.plan_selection(["clay"], ["0-5cm", "100-200cm"], ["Q0.5"])
-    result = core.extract_points(sel, SITES, sample_fn=make_sampler())
+    result = run_points(sel)
     assert len(result.rows) == 2 * 2
     row = result.rows[0]
     assert row["Site"] == "A" and row["Variable"] == "clay"
+    assert row["Product"] == core.PRODUCT_SG2
     assert (row["DepthTop_cm"], row["DepthBottom_cm"]) == (0, 5)
     assert row["Value"] == pytest.approx(30.0)
-    assert row["Units"] == "%" and row["Route"] == "WebDAV"
+    assert row["Units"] == "%" and row["Route"] == "Tiles"
     assert result.rows[2]["DepthBottom_cm"] == 200
+
+
+def test_points_index_gets_point_locations():
+    seen = {}
+
+    def index_fn(bounds_ll, points=None, base=core.BASE_DIR, ref=core.REF_LAYER):
+        seen["bounds"], seen["points"] = bounds_ll, points
+        return fake_index(bounds_ll)
+
+    sel = core.plan_selection(["clay"], ["0-5cm"], ["Q0.5"])
+    run_points(sel, index_fn=index_fn)
+    assert seen["points"] == [(28.10, -25.80), (28.12, -25.81)]
+    assert seen["bounds"] == (28.10, -25.81, 28.12, -25.80)
 
 
 def test_points_missing_value_stays_nan():
     sel = core.plan_selection(["clay"], ["0-5cm"], ["Q0.5"])
-    result = core.extract_points(
-        sel, SITES, sample_fn=make_sampler(missing_second=True)
-    )
+    result = run_points(sel, sampler=make_sampler(missing_second=True))
     assert math.isnan(result.rows[1]["Value"])
 
 
-def test_points_wcs_fallback_groups_close_sites():
+def test_points_tile_failure_falls_back_to_vrt():
     calls = []
     sel = core.plan_selection(["clay"], ["0-5cm"], ["Q0.5"])
-    result = core.extract_points(
-        sel, SITES, sample_fn=make_sampler(fail_webdav=True, calls=calls)
-    )
-    assert len(calls) == 2  # WebDAV attempt, then ONE WCS request for both
-    assert "maps.isric.org" in calls[1][0] and calls[1][1] == 2
-    assert result.rows[0]["Route"] == "WCS (EPSG:4326)"
+    result = run_points(sel, sampler=make_sampler(fail_tiles=True, calls=calls))
+    assert len(calls) == 2 and calls[1][0].endswith("clay_0-5cm_Q0.5.vrt")
+    assert result.rows[0]["Route"] == "VRT"
     assert result.warnings
-
-
-def test_point_groups_far_apart_split():
-    far = [core.Site("A", 10, 0), core.Site("B", 20, 0)]
-    assert core.point_groups(far) == [[0], [1]]
-    assert core.point_groups(SITES) == [[0, 1]]
 
 
 def test_points_ru90_rows():
     sel = core.plan_selection(["clay"], ["0-5cm"], [], ru90=True)
-    result = core.extract_points(sel, SITES, sample_fn=make_sampler())
+    result = run_points(sel)
     assert {r["Statistic"] for r in result.rows} == {core.RU90}
     assert result.rows[0]["Value"] == pytest.approx(1.0)
     assert result.rows[0]["Route"] == "derived"
 
 
+def test_points_sg2017_rows():
+    sel = core.plan_selection(["clay"], ["0-5cm"], ["Q0.5"], sg2017=True)
+    result = run_points(sel)
+    rows17 = [r for r in result.rows if r["Product"] == core.PRODUCT_SG2017]
+    assert len(rows17) == 2
+    assert rows17[0]["Value"] == pytest.approx(26.5)
+    assert rows17[0]["Statistic"] == "mean" and rows17[0]["Route"] == "2017 archive"
+
+
 def test_points_bedrock_rows():
     sel = core.plan_selection([], ["0-5cm"], ["mean"], bedrock=True)
-    result = core.extract_points(sel, SITES, sample_fn=make_sampler())
+    result = run_points(sel)
     assert [r["Variable"] for r in result.rows[::2]] == ["BDTICM", "BDRICM", "BDRLOG"]
     assert result.rows[0]["DepthTop_cm"] == ""
+    assert result.rows[0]["Product"] == core.PRODUCT_SG2017
 
 
 def test_points_texture_check():
     sel = core.plan_selection(["sand", "silt", "clay"], ["0-5cm"], ["mean"])
-    result = core.extract_points(sel, SITES, sample_fn=make_sampler())
+    result = run_points(sel)
     assert result.texture[0]["checked"] == 2 and result.texture[0]["flagged"] == 0
 
 
 def test_points_requires_sites():
     sel = core.plan_selection(["clay"], ["0-5cm"], ["Q0.5"])
     with pytest.raises(core.SoilGridsError, match="No points"):
-        core.extract_points(sel, [], sample_fn=make_sampler())
+        run_points(sel, sites=[])
 
 
 # ----------------------------------------------------------------------
-# Metadata
+# Metadata and CSV writers
 # ----------------------------------------------------------------------
 
 
 def test_metadata_contents(grid, tmp_path):
     sel = core.plan_selection(
-        ["sand", "silt", "clay"], ["0-5cm"], ["mean"], ru90=True, bedrock=True
+        ["sand", "silt", "clay"],
+        ["0-5cm"],
+        ["mean"],
+        ru90=True,
+        bedrock=True,
+        sg2017=True,
     )
     result, _ = run_area(grid, tmp_path, sel)
-    sections = core.build_metadata(result, sel, {"Output CRS": "EPSG:2049"}, "3.11")
+    sections = core.build_metadata(result, sel, {"Output CRS": "EPSG:2049"}, "3.13")
     titles = [s[0] for s in sections]
     assert titles[0] == "Run" and "Layers" in titles and titles[-1] == "Warnings"
     run = dict(sections[0][2])
     assert "Poggio" in run["Citation"] and "CC-BY 4.0" in run["Licence"]
+    assert "Hengl" in run["Citation (2017)"] and "ODbL" in run["Licence (2017)"]
     assert run["Output CRS"] == "EPSG:2049"
     assert "Shangguan" in run["Citation (depth to bedrock)"]
     assert "marginal" in run["Note - quantiles"]
-    layers = next(s for s in sections if s[0] == "Layers")[2]
-    assert {row[7] for row in layers} >= {"WebDAV", "derived"}
+    assert "urban" in run["Note - masked areas"]
+    assert run["Access route"].startswith("Tiles (one index per variable")
+    assert "clay 2" in run["Access route"]
+    layers = next(s for s in sections if s[0] == "Layers")
+    assert layers[1][0] == "Product"
+    assert {row[8] for row in layers[2]} >= {"Tiles", "derived", "2017 archive"}
     ru = next(s for s in sections if s[0].startswith("Uncertainty"))[2]
     assert len(ru) == 3
 
@@ -519,6 +843,7 @@ def test_points_csv_missing_is_empty(tmp_path):
             "Site": "A",
             "Longitude": 28.1,
             "Latitude": -25.8,
+            "Product": core.PRODUCT_SG2,
             "Variable": "clay",
             "Description": "Clay",
             "DepthTop_cm": 0,
@@ -526,7 +851,7 @@ def test_points_csv_missing_is_empty(tmp_path):
             "Statistic": "Q0.5",
             "Value": v,
             "Units": "%",
-            "Route": "WebDAV",
+            "Route": "Tiles",
         }
         for v in (30.0, math.nan)
     ]
@@ -535,69 +860,14 @@ def test_points_csv_missing_is_empty(tmp_path):
     with open(path, newline="", encoding="utf-8") as f:
         data = list(csv.DictReader(f))
     assert data[0]["Value"] == "30.0" and data[1]["Value"] == ""
+    assert data[0]["Product"] == "SoilGrids 2.0"
 
 
 # ----------------------------------------------------------------------
-# Real GDAL on local files (no network)
+# Real GDAL on a local mock of ISRIC's server layout (no network)
 # ----------------------------------------------------------------------
 
 IGH = "+proj=igh +lon_0=0 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs"
-
-
-def _make_source(gdal, osr, path, srs_text, x0, y0, res, arr, nodata):
-    ds = gdal.GetDriverByName("GTiff").Create(
-        str(path), arr.shape[1], arr.shape[0], 1, gdal.GDT_Int16
-    )
-    ds.SetGeoTransform((x0, res, 0, y0, 0, -res))
-    srs = osr.SpatialReference()
-    srs.SetFromUserInput(srs_text)
-    ds.SetProjection(srs.ExportToWkt())
-    band = ds.GetRasterBand(1)
-    band.SetNoDataValue(nodata)
-    band.WriteArray(arr)
-    ds = None
-
-
-def test_gdal_read_grid_and_sample_from_homolosine(tmp_path):
-    gdal = pytest.importorskip("osgeo.gdal")
-    osr = pytest.importorskip("osgeo.osr")
-    osr.UseExceptions()
-    # A 40 x 40 cell, 250 m source grid in Homolosine around 28E, 25.8S,
-    # value = 100 + column index, with one nodata cell.
-    tr = osr.CoordinateTransformation(_srs(osr, "EPSG:4326"), _srs(osr, IGH))
-    cx, cy, _ = tr.TransformPoint(28.1, -25.8)
-    x0, y0 = math.floor(cx / 250) * 250 - 5000, math.floor(cy / 250) * 250 + 5000
-    arr = np.tile(np.arange(40, dtype=np.int16) + 100, (40, 1))
-    arr[20, 20] = -32768
-    src = tmp_path / "clay_igh.tif"
-    _make_source(gdal, osr, src, IGH, x0, y0, 250.0, arr, -32768)
-
-    # Sample the cell centres of column 5 and the nodata cell, from lon/lat.
-    inv = osr.CoordinateTransformation(_srs(osr, IGH), _srs(osr, "EPSG:4326"))
-    lon5, lat5, _ = inv.TransformPoint(x0 + 5.5 * 250, y0 - 10.5 * 250)
-    lon_nd, lat_nd, _ = inv.TransformPoint(x0 + 20.5 * 250, y0 - 20.5 * 250)
-    values = core.gdal_sample_points(str(src), [(lon5, lat5), (lon_nd, lat_nd)])
-    assert values[0] == 105.0
-    assert math.isnan(values[1])
-    far = core.gdal_sample_points(str(src), [(0.0, 0.0)])
-    assert math.isnan(far[0])  # outside the raster
-
-    # Warp to a grid in the SAME CRS and alignment: values must be exact.
-    grid = core.TargetGrid(
-        x0 + 1000, y0 - 3000, x0 + 3000, y0 - 1000, 250.0, _srs(osr, IGH).ExportToWkt()
-    )
-    out = core.gdal_read_grid(str(src), grid)
-    assert out.shape == (8, 8)
-    assert out[0, 0] == 104.0 and out[0, 7] == 111.0
-    # Grid in UTM: nearest neighbour keeps values within the source's range.
-    utm = _srs(osr, "EPSG:32735")
-    t2 = osr.CoordinateTransformation(_srs(osr, "EPSG:4326"), utm)
-    ux, uy, _ = t2.TransformPoint(lon5, lat5)
-    g2 = core.make_grid((ux, uy, ux + 2000, uy + 2000), 250.0, utm.ExportToWkt())
-    out2 = core.gdal_read_grid(str(src), g2)
-    valid = out2[np.isfinite(out2)]
-    assert valid.size and valid.min() >= 100 and valid.max() <= 139
-    assert np.all(valid == np.round(valid))  # nearest: no interpolated values
 
 
 def _srs(osr, text):
@@ -605,6 +875,182 @@ def _srs(osr, text):
     s.SetFromUserInput(text)
     s.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
     return s
+
+
+def _make_tif(gdal, path, wkt, x0, y0, res, arr, nodata=-32768):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ds = gdal.GetDriverByName("GTiff").Create(
+        str(path), arr.shape[1], arr.shape[0], 1, gdal.GDT_Int16
+    )
+    ds.SetGeoTransform((x0, res, 0, y0, 0, -res))
+    ds.SetProjection(wkt)
+    band = ds.GetRasterBand(1)
+    band.SetNoDataValue(nodata)
+    band.WriteArray(arr)
+    ds = None
+
+
+@pytest.fixture
+def mock_server(tmp_path):
+    """ISRIC-like layout: <base>/<var>/<layer>.vrt indexing 2 x 2 tiles at
+    <base>/<var>/<layer>/<tile>/<tile>_i-j.tif, for clay (reference) and soc.
+    Tile values encode layer and position so misplacement is detectable."""
+    gdal = pytest.importorskip("osgeo.gdal")
+    osr = pytest.importorskip("osgeo.osr")
+    gdal.UseExceptions()
+    osr.UseExceptions()
+    igh = _srs(osr, IGH)
+    tr = osr.CoordinateTransformation(_srs(osr, "EPSG:4326"), igh)
+    cx, cy, _ = tr.TransformPoint(28.2, -25.75)
+    res, n = 250.0, 60
+    x0 = math.floor(cx / res) * res - n * res
+    y0 = math.floor(cy / res) * res + n * res
+    base = tmp_path / "data"
+    for var, offset in (("clay", 1000), ("soc", 2000), ("bdod", 3000)):
+        name = f"{var}_0-5cm_mean"
+        tiles = []
+        for i in range(2):
+            for j in range(2):
+                tile = base / var / name / "tileT" / f"tileT_{i + 1}-{j + 1}.tif"
+                arr = np.full((n, n), offset + 10 * i + j, dtype=np.int16)
+                if (i, j) == (1, 1):
+                    arr[5, 5] = -32768
+                if var == "bdod":
+                    # Same tile NAMES as clay, different placement: shifted
+                    # half a tile east, like bdod/phh2o on the live server.
+                    tile_x0 = x0 + (i + 0.5) * n * res
+                else:
+                    tile_x0 = x0 + i * n * res
+                _make_tif(
+                    gdal,
+                    tile,
+                    igh.ExportToWkt(),
+                    tile_x0,
+                    y0 - j * n * res,
+                    res,
+                    arr,
+                )
+                tiles.append(str(tile))
+        gdal.BuildVRT(str(base / var / f"{name}.vrt"), tiles).FlushCache()
+    return {
+        "base": str(base) + "/",
+        "x0": x0,
+        "y0": y0,
+        "res": res,
+        "n": n,
+        "igh": igh,
+        "osr": osr,
+    }
+
+
+def test_gdal_tile_index_and_direct_read_match_full_vrt(mock_server):
+    ms = mock_server
+    osr = ms["osr"]
+    inv = osr.CoordinateTransformation(ms["igh"], _srs(osr, "EPSG:4326"))
+    # A small area in the top-left tile only.
+    lon0, lat0, _ = inv.TransformPoint(
+        ms["x0"] + 10 * ms["res"], ms["y0"] - 30 * ms["res"]
+    )
+    lon1, lat1, _ = inv.TransformPoint(
+        ms["x0"] + 30 * ms["res"], ms["y0"] - 10 * ms["res"]
+    )
+    index = core.gdal_tile_index((lon0, lat0, lon1, lat1), base=ms["base"])
+    assert index.rel_paths == ("tileT/tileT_1-1.tif",)
+    # An area spanning the four-tile corner selects all four tiles.
+    mx, my = ms["x0"] + ms["n"] * ms["res"], ms["y0"] - ms["n"] * ms["res"]
+    a, b, _ = inv.TransformPoint(mx - 5 * ms["res"], my - 5 * ms["res"])
+    c, d, _ = inv.TransformPoint(mx + 5 * ms["res"], my + 5 * ms["res"])
+    index4 = core.gdal_tile_index((a, b, c, d), base=ms["base"])
+    assert len(index4.rel_paths) == 4
+
+    grid = core.make_grid(
+        (mx - 2000, my - 2000, mx + 2000, my + 2000), 250.0, ms["igh"].ExportToWkt()
+    )
+    direct = core.gdal_read_grid(
+        tuple(index4.paths_for("soc", "0-5cm", "mean", ms["base"])), grid
+    )
+    full = core.gdal_read_grid(core.layer_vrt("soc", "0-5cm", "mean", ms["base"]), grid)
+    assert np.array_equal(direct, full, equal_nan=True)
+    assert set(np.unique(direct[np.isfinite(direct)])) == {2000, 2001, 2010, 2011}
+
+
+def test_gdal_tile_index_for_points_and_sampling(mock_server):
+    ms = mock_server
+    osr = ms["osr"]
+    inv = osr.CoordinateTransformation(ms["igh"], _srs(osr, "EPSG:4326"))
+    pts = []
+    for col, row in ((5.5, 5.5), (66.5, 66.5), (65.5, 5.5)):
+        lon, lat, _ = inv.TransformPoint(
+            ms["x0"] + col * ms["res"], ms["y0"] - row * ms["res"]
+        )
+        pts.append((lon, lat))
+    lons = [p[0] for p in pts]
+    lats = [p[1] for p in pts]
+    index = core.gdal_tile_index(
+        (min(lons), min(lats), max(lons), max(lats)), points=pts, base=ms["base"]
+    )
+    assert set(index.rel_paths) == {
+        "tileT/tileT_1-1.tif",
+        "tileT/tileT_2-2.tif",
+        "tileT/tileT_2-1.tif",
+    }
+    values = core.gdal_sample_points(
+        tuple(index.paths_for("soc", "0-5cm", "mean", ms["base"])), pts
+    )
+    assert values == [2000.0, 2011.0, 2010.0]
+    # The nodata cell in tile (2,2) is at local (5,5) -> global (65,65).
+    lon, lat, _ = inv.TransformPoint(
+        ms["x0"] + 65.5 * ms["res"], ms["y0"] - 65.5 * ms["res"]
+    )
+    nd = core.gdal_sample_points(
+        core.layer_vrt("soc", "0-5cm", "mean", ms["base"]), [(lon, lat)]
+    )
+    assert math.isnan(nd[0])
+
+
+def test_extract_area_end_to_end_with_real_gdal(mock_server, tmp_path):
+    ms = mock_server
+    osr = ms["osr"]
+    from mayim_tools.soil.soilgrids_extract.export import write_multiband_geotiff
+
+    gdal = pytest.importorskip("osgeo.gdal")
+    inv = osr.CoordinateTransformation(ms["igh"], _srs(osr, "EPSG:4326"))
+    mx, my = ms["x0"] + ms["n"] * ms["res"], ms["y0"] - ms["n"] * ms["res"]
+    lo = inv.TransformPoint(mx - 3000, my - 3000)
+    hi = inv.TransformPoint(mx + 3000, my + 3000)
+    bounds_ll = (lo[0], lo[1], hi[0], hi[1])
+    utm = _srs(osr, "EPSG:32735")
+    t = osr.CoordinateTransformation(_srs(osr, "EPSG:4326"), utm)
+    ux0, uy0, _ = t.TransformPoint(lo[0], lo[1])
+    ux1, uy1, _ = t.TransformPoint(hi[0], hi[1])
+    grid = core.make_grid(
+        (min(ux0, ux1), min(uy0, uy1), max(ux0, ux1), max(uy0, uy1)),
+        250.0,
+        utm.ExportToWkt(),
+    )
+    sel = core.plan_selection(["soc"], ["0-5cm"], ["mean"])
+    out = tmp_path / "out"
+    out.mkdir()
+    result = core.extract_area(
+        sel,
+        grid,
+        bounds_ll,
+        str(out),
+        write_fn=write_multiband_geotiff,
+        base=ms["base"],
+        workers=4,
+    )
+    assert result.tiles == {"soc": 4}
+    assert [r.route for r in result.layers] == ["Tiles"]
+    ds = gdal.Open(str(out / "soilgrids_soc_mean.tif"))
+    data = ds.GetRasterBand(1).ReadAsArray()
+    valid = data[data != core.NODATA_OUT]
+    # soc factor 10: tile values 2000..2011 -> 200.0..201.1 g/kg
+    found = np.unique(valid)
+    assert found.size and all(
+        np.isclose(v, [200.0, 200.1, 201.0, 201.1], atol=1e-4).any() for v in found
+    )
+    assert ds.GetRasterBand(1).GetDescription() == "soc_0-5cm_mean (g/kg)"
 
 
 def test_write_multiband_geotiff_roundtrip(tmp_path):
@@ -659,3 +1105,142 @@ def test_http_options_restored():
     with core.http_options():
         assert gdal.GetConfigOption("GDAL_HTTP_TIMEOUT") == "120"
     assert gdal.GetConfigOption("GDAL_HTTP_TIMEOUT") is None
+
+
+def test_windowed_reader_matches_plain_warp_and_is_thread_consistent(mock_server):
+    """The thread-safe reader (download native block, warp in memory under
+    a lock) must give exactly what a plain full gdal.Warp gives, and
+    parallel reads must equal sequential ones."""
+    gdal = pytest.importorskip("osgeo.gdal")
+    ms = mock_server
+    osr = ms["osr"]
+    utm = _srs(osr, "EPSG:32735")
+    t = osr.CoordinateTransformation(ms["igh"], utm)
+    mx, my = ms["x0"] + ms["n"] * ms["res"], ms["y0"] - ms["n"] * ms["res"]
+    ux, uy, _ = t.TransformPoint(mx, my)
+    grid = core.make_grid(
+        (ux - 7000, uy - 7000, ux + 7000, uy + 7000), 200.0, utm.ExportToWkt()
+    )
+    path = core.layer_vrt("clay", "0-5cm", "mean", ms["base"])
+    ours = core.gdal_read_grid(path, grid)
+    plain = gdal.Warp(
+        "",
+        path,
+        format="MEM",
+        outputBounds=(grid.xmin, grid.ymin, grid.xmax, grid.ymax),
+        width=grid.width,
+        height=grid.height,
+        dstSRS=grid.crs_wkt,
+        resampleAlg="near",
+        outputType=gdal.GDT_Float32,
+        dstNodata=float("nan"),
+    )
+    ref = plain.GetRasterBand(1).ReadAsArray().astype(np.float64)
+    assert np.isfinite(ours).sum() > 1000
+    assert np.array_equal(ours, ref, equal_nan=True)
+
+    keys = list(range(24))
+    seq = core.run_jobs(
+        keys, lambda k: core.gdal_read_grid(path, grid), 1, lambda: False, _noop
+    )
+    par = core.run_jobs(
+        keys, lambda k: core.gdal_read_grid(path, grid), 8, lambda: False, _noop
+    )
+    assert all(np.array_equal(seq[k], par[k], equal_nan=True) for k in keys)
+
+
+def test_mismatched_tile_layout_is_detected_and_handled(mock_server, tmp_path):
+    """bdod tiles carry clay's tile names but sit elsewhere (live bug).
+    Clay's index applied to bdod must raise (coverage check), and the
+    per-variable index must read bdod correctly."""
+    ms = mock_server
+    osr = ms["osr"]
+    inv = osr.CoordinateTransformation(ms["igh"], _srs(osr, "EPSG:4326"))
+    lo = inv.TransformPoint(ms["x0"] + 10 * ms["res"], ms["y0"] - 30 * ms["res"])
+    hi = inv.TransformPoint(ms["x0"] + 30 * ms["res"], ms["y0"] - 10 * ms["res"])
+    bounds_ll = (lo[0], lo[1], hi[0], hi[1])
+    grid = core.make_grid(
+        (
+            ms["x0"] + 10 * ms["res"],
+            ms["y0"] - 30 * ms["res"],
+            ms["x0"] + 30 * ms["res"],
+            ms["y0"] - 10 * ms["res"],
+        ),
+        250.0,
+        ms["igh"].ExportToWkt(),
+        buffer_cells=0,
+    )
+    clay_index = core.gdal_tile_index(bounds_ll, base=ms["base"])
+    wrong = tuple(clay_index.paths_for("bdod", "0-5cm", "mean", ms["base"]))
+    with pytest.raises(core.SoilGridsError, match="do not cover"):
+        core.gdal_read_grid(wrong, grid)
+
+    # In bdod's own layout, cells 100-120 lie in its second tile.
+    lo = inv.TransformPoint(ms["x0"] + 100 * ms["res"], ms["y0"] - 30 * ms["res"])
+    hi = inv.TransformPoint(ms["x0"] + 120 * ms["res"], ms["y0"] - 10 * ms["res"])
+    bdod_index = core.gdal_tile_index(
+        (lo[0], lo[1], hi[0], hi[1]), base=ms["base"], ref=("bdod", "0-5cm", "mean")
+    )
+    assert bdod_index.rel_paths == ("tileT/tileT_2-1.tif",)
+
+
+def test_extract_area_mismatched_layout_end_to_end(mock_server, tmp_path):
+    """Full run where bdod's layout differs from clay's: with per-variable
+    indices both come out right via Tiles; no empty layers."""
+    from mayim_tools.soil.soilgrids_extract.export import write_multiband_geotiff
+
+    gdal = pytest.importorskip("osgeo.gdal")
+    ms = mock_server
+    osr = ms["osr"]
+    inv = osr.CoordinateTransformation(ms["igh"], _srs(osr, "EPSG:4326"))
+    # Cells 85-95: clay tile 2-1 (cells 60-120); in bdod's layout the same
+    # area straddles its tiles 1-1 (30-90) and 2-1 (90-150).
+    xa, xb = ms["x0"] + 95 * ms["res"], ms["x0"] + 85 * ms["res"]
+    lo = inv.TransformPoint(xb, ms["y0"] - 30 * ms["res"])
+    hi = inv.TransformPoint(xa, ms["y0"] - 10 * ms["res"])
+    grid = core.make_grid(
+        (xb, ms["y0"] - 30 * ms["res"], xa, ms["y0"] - 10 * ms["res"]),
+        250.0,
+        ms["igh"].ExportToWkt(),
+        buffer_cells=0,
+    )
+    sel = core.plan_selection(["clay", "bdod"], ["0-5cm"], ["mean"])
+    out = tmp_path / "o"
+    out.mkdir()
+    result = core.extract_area(
+        sel,
+        grid,
+        (lo[0], lo[1], hi[0], hi[1]),
+        str(out),
+        write_fn=write_multiband_geotiff,
+        base=ms["base"],
+        workers=4,
+    )
+    assert not result.warnings
+    assert {r.variable: r.route for r in result.layers} == {
+        "clay": "Tiles",
+        "bdod": "Tiles",
+    }
+    expected = {"clay": {101.0}, "bdod": {30.0, 30.1}}
+    for name, values in expected.items():
+        ds = gdal.Open(str(out / f"soilgrids_{name}_mean.tif"))
+        data = ds.GetRasterBand(1).ReadAsArray()
+        ds = None
+        found = {round(float(v), 3) for v in np.unique(data)}
+        assert found == values, (name, found)
+    assert (out / "soilgrids_clay_mean.qml").exists()
+
+
+def test_style_sidecar(tmp_path):
+    import xml.etree.ElementTree as ET
+
+    from mayim_tools.soil.soilgrids_extract.export import write_style_sidecar
+
+    qml = write_style_sidecar(tmp_path / "x.tif", np.array([[1.0, np.nan, 5.0]]))
+    root = ET.parse(qml).getroot()
+    renderer = root.find("pipe/rasterrenderer")
+    assert renderer.get("type") == "singlebandgray" and renderer.get("grayBand") == "1"
+    assert root.find("pipe/rasterrenderer/contrastEnhancement/minValue").text == "1.0"
+    assert root.find("pipe/rasterrenderer/contrastEnhancement/maxValue").text == "5.0"
+    empty = write_style_sidecar(tmp_path / "y.tif", np.array([[np.nan]]))
+    assert ET.parse(empty).getroot() is not None

@@ -14,6 +14,7 @@ POINT_COLUMNS = [
     "Site",
     "Longitude",
     "Latitude",
+    "Product",
     "Variable",
     "Description",
     "DepthTop_cm",
@@ -74,6 +75,50 @@ def write_multiband_geotiff(
         band.WriteArray(out)
     ds.FlushCache()
     ds = None
+    write_style_sidecar(path, bands[0][1])
+
+
+# Single-band grey style for band 1. QGIS applies <name>.qml automatically
+# when the raster is opened, so files the user opens by hand display as one
+# band (not an RGB composite of the first three depths).
+_QML = """<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTEM'>
+<qgis version="3.40.0" styleCategories="AllStyleCategories">
+  <pipe>
+    <rasterrenderer type="singlebandgray" grayBand="1" gradient="BlackToWhite"
+     opacity="1" alphaBand="-1" nodataColor="">
+      <rasterTransparency/>
+      <minMaxOrigin>
+        <limits>MinMax</limits>
+        <extent>WholeRaster</extent>
+        <statAccuracy>Estimated</statAccuracy>
+        <cumulativeCutLower>0.02</cumulativeCutLower>
+        <cumulativeCutUpper>0.98</cumulativeCutUpper>
+        <stdDevFactor>2</stdDevFactor>
+      </minMaxOrigin>
+      <contrastEnhancement>
+        <minValue>{vmin}</minValue>
+        <maxValue>{vmax}</maxValue>
+        <algorithm>StretchToMinimumMaximum</algorithm>
+      </contrastEnhancement>
+    </rasterrenderer>
+    <brightnesscontrast brightness="0" contrast="0" gamma="1"/>
+    <rasterresampler maxOversampling="2"/>
+  </pipe>
+  <blendMode>0</blendMode>
+</qgis>
+"""
+
+
+def write_style_sidecar(path: str | Path, band1: np.ndarray) -> Path:
+    """Write <raster>.qml (single-band grey, stretched to band 1's range)."""
+    valid = np.asarray(band1, dtype=np.float64)
+    valid = valid[np.isfinite(valid)]
+    vmin, vmax = (float(valid.min()), float(valid.max())) if valid.size else (0, 1)
+    if vmax <= vmin:
+        vmax = vmin + 1
+    qml = Path(path).with_suffix(".qml")
+    qml.write_text(_QML.format(vmin=round(vmin, 6), vmax=round(vmax, 6)), "utf-8")
+    return qml
 
 
 def write_points_csv(rows: list[dict], path: str | Path) -> tuple[int, int]:
@@ -95,6 +140,7 @@ def write_points_csv(rows: list[dict], path: str | Path) -> tuple[int, int]:
                     row["Site"],
                     round(float(row["Longitude"]), 6),
                     round(float(row["Latitude"]), 6),
+                    row["Product"],
                     row["Variable"],
                     row["Description"],
                     row["DepthTop_cm"],

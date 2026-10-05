@@ -104,6 +104,8 @@ class SoilGridsExtractAlgorithm(QgsProcessingAlgorithm):
     OUTPUT_RES = "OUTPUT_RES"
     MAX_AREA_KM2 = "MAX_AREA_KM2"
     LOAD_LAYERS = "LOAD_LAYERS"
+    SG2017 = "SG2017"
+    WORKERS = "WORKERS"
     OUTPUT_FOLDER = "OUTPUT_FOLDER"
     OUTPUT_CSV = "OUTPUT_CSV"
 
@@ -152,12 +154,16 @@ class SoilGridsExtractAlgorithm(QgsProcessingAlgorithm):
             "every input the common pedotransfer functions use (sand, silt, "
             "clay, organic carbon, bulk density, coarse fragments, pH, CEC).\n"
             "\n"
-            "METHOD:\t\tReads only the requested window directly from ISRIC's "
-            "server (WebDAV virtual rasters over cloud-optimised GeoTIFFs) using "
-            "QGIS's own GDAL - no account, no API key, no extra Python packages. "
-            "If that route fails for a layer, the tool falls back automatically "
-            "to ISRIC's Web Coverage Service; the route used for every layer is "
-            "logged. Values are resampled with nearest neighbour only (no further "
+            "METHOD:\t\tReads directly from ISRIC's file server with QGIS's own "
+            "GDAL - no account, no API key, no extra Python packages. ISRIC "
+            "indexes each layer with a large virtual-raster file (about 6 MB, "
+            "slow to fetch), so the tool reads ONE index per run, finds the "
+            "tiles that cover the area, then reads those tiles directly for every "
+            "layer, several layers at once. If that fails for a layer it falls "
+            "back to that layer's full index (slow but always correct); the "
+            "route used is logged per layer. A 500 km2 area with the default "
+            "selection typically takes under a minute or two, depending on your "
+            "connection. Values are resampled with nearest neighbour only (no further "
             "smoothing) and converted to conventional units (%, g/kg, g/cm3, "
             "vol %, pH, cmol(c)/kg) before writing.\n"
             "\n"
@@ -165,10 +171,14 @@ class SoilGridsExtractAlgorithm(QgsProcessingAlgorithm):
             "statistic, e.g. soilgrids_clay_Q0.50.tif, with one band per depth. "
             "Each band carries a description such as 'clay_30-60cm_Q0.5 (%)'; "
             "later tools select bands by that description, never by band number. "
-            "The median (or mean) files are loaded into the project showing band "
-            "1 (the shallowest depth). Point mode: one long-format CSV (Site, "
-            "Longitude, Latitude, Variable, Description, depth, Statistic, Value, "
-            "Units, Route). Both modes write a metadata CSV (soilgrids_metadata.csv "
+            "The median (Q0.50, or the mean if no median is selected) files are "
+            "loaded into the project showing band 1 (the shallowest depth); pick "
+            "another depth under Layer Properties > Symbology > Band. Every "
+            "GeoTIFF has a .qml style file beside it, so files opened by hand "
+            "also display as a single band. Point mode: one long-format CSV (Site, "
+            "Longitude, Latitude, Product, Variable, Description, depth, "
+            "Statistic, Value, Units, Route). Both modes write a metadata CSV "
+            "(soilgrids_metadata.csv "
             "in the folder, or <name>_metadata.csv next to the CSV) with sources, "
             "access date, routes, units, per-layer statistics, uncertainty (RU90) "
             "summaries, a sand+silt+clay check and all warnings.\n"
@@ -197,11 +207,20 @@ class SoilGridsExtractAlgorithm(QgsProcessingAlgorithm):
             "optional name field.\n"
             "  Variables / Depths / Statistics: checklists. RU90 needs all three "
             "quantiles; missing ones are fetched for the calculation only.\n"
+            "  SoilGrids 2017 means (optional): SoilGrids 2.0 has no predictions "
+            "for urban, water, glacier and bare-surface areas. The 2017 product "
+            "(Hengl et al. 2017, ODbL licence) does cover urban and bare areas; "
+            "its mean values are averaged to the same six depth intervals and "
+            "written as soilgrids2017_<variable>_mean.tif, for filling those "
+            "gaps in later tools. Mean only, no quantiles. Each 2017 layer is a "
+            "single global file and reads more slowly (several seconds each).\n"
             "  Output CRS and resolution (area mode): default project CRS and "
             "250 m (converted to degrees for a geographic CRS).\n"
             "  Maximum area per run (advanced, default 50000 km2): the run stops "
             "if the area's bounding box is larger; raise it deliberately for "
             "large studies.\n"
+            "  Parallel downloads (advanced, default 8): layers read at the same "
+            "time. Lower it on a slow or metered connection.\n"
         )
 
     def initAlgorithm(self, config=None):
@@ -277,6 +296,14 @@ class SoilGridsExtractAlgorithm(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
+            QgsProcessingParameterBoolean(
+                self.SG2017,
+                "Also extract SoilGrids 2017 means (cover urban and bare areas "
+                "that SoilGrids 2.0 leaves empty)",
+                defaultValue=False,
+            )
+        )
+        self.addParameter(
             QgsProcessingParameterCrs(
                 self.OUTPUT_CRS, "Output CRS (area mode)", defaultValue="ProjectCrs"
             )
@@ -301,6 +328,18 @@ class SoilGridsExtractAlgorithm(QgsProcessingAlgorithm):
                     type=QgsProcessingParameterNumber.Type.Double,
                     defaultValue=core.DEFAULT_MAX_AREA_KM2,
                     minValue=0.0,
+                )
+            )
+        )
+        self.addParameter(
+            _advanced(
+                QgsProcessingParameterNumber(
+                    self.WORKERS,
+                    "Parallel downloads",
+                    type=QgsProcessingParameterNumber.Type.Integer,
+                    defaultValue=core.DEFAULT_WORKERS,
+                    minValue=1,
+                    maxValue=16,
                 )
             )
         )
@@ -345,7 +384,10 @@ class SoilGridsExtractAlgorithm(QgsProcessingAlgorithm):
         ru90 = core.RU90 in stat_codes
         stats = [s for s in stat_codes if s != core.RU90]
         try:
-            return core.plan_selection(variables, depths, stats, ru90, bedrock)
+            sg2017 = self.parameterAsBoolean(parameters, self.SG2017, context)
+            return core.plan_selection(
+                variables, depths, stats, ru90, bedrock, sg2017=sg2017
+            )
         except core.SoilGridsError as exc:
             raise QgsProcessingException(str(exc)) from exc
 
@@ -442,6 +484,7 @@ class SoilGridsExtractAlgorithm(QgsProcessingAlgorithm):
             feedback.setProgressText(message)
 
         common = {
+            "workers": self.parameterAsInt(parameters, self.WORKERS, context),
             "progress_fn": progress,
             "log_fn": feedback.pushWarning,
             "cancel_fn": feedback.isCanceled,
@@ -519,6 +562,8 @@ class SoilGridsExtractAlgorithm(QgsProcessingAlgorithm):
         if self.parameterAsBoolean(parameters, self.LOAD_LAYERS, context):
             for path in result.load_files:
                 name = Path(path).stem
+                if name.endswith("_Q0.50"):
+                    name += " (median)"
                 details = QgsProcessingContext.LayerDetails(
                     name, context.project(), name
                 )
@@ -554,6 +599,14 @@ class SoilGridsExtractAlgorithm(QgsProcessingAlgorithm):
 
     @staticmethod
     def _report(result, feedback):
+        if any(result.tiles.values()):
+            per_var = ", ".join(f"{v} {n}" for v, n in result.tiles.items())
+            feedback.pushInfo(
+                f"Read via SoilGrids tiles (per variable: {per_var}); "
+                f"finished in {result.seconds:.0f} s."
+            )
+        else:
+            feedback.pushInfo(f"Finished in {result.seconds:.0f} s.")
         for tex in result.texture:
             if tex["flagged"]:
                 feedback.pushWarning(
