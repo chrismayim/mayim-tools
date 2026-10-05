@@ -726,7 +726,9 @@ def subgroup_reader(source, grid, with_scale=False):
 def test_plan_selection_subgroups_only():
     sel = core.plan_selection([], [], [], [], subgroups=True)
     assert sel.subgroups and sel.variables == []
-    with pytest.raises(core.SoilDataError, match="USDA subgroup option"):
+    with pytest.raises(
+        core.SoilDataError, match="USDA subgroup or water-content option"
+    ):
         core.plan_selection([], [], [], [])
 
 
@@ -823,3 +825,133 @@ def test_paletted_style(tmp_path):
     entries = [(e.get("value"), e.get("label")) for e in root.iter("paletteEntry")]
     assert entries == [("5", 'Typic "A" & B'), ("812", "Lithic C")]
     assert class_colour(5) == class_colour(5) != class_colour(6)
+
+
+# ----------------------------------------------------------------------
+# Legacy 250 m water content (33 / 1500 kPa) and AWC
+# ----------------------------------------------------------------------
+
+
+def test_legacy_urls_as_confirmed_live():
+    """Exact paths confirmed by the live probe (2026-10-05) for 33 kPa; the
+    1500 kPa names follow the same pattern (catalogue / Zenodo record)."""
+    arco, zenodo = cat.legacy_urls("wc33", 0)
+    assert arco == (
+        "https://s3.openlandmap.org/arco/watercontent.33kPa_usda.4b1c_m_250m_b0cm_"
+        "19500101_20171231_go_epsg.4326_v0.1.tif"
+    )
+    assert zenodo == (
+        "https://zenodo.org/records/2784001/files/sol_watercontent.33kPa_usda.4b1c"
+        "_m_250m_b0..0cm_1950..2017_v0.1.tif"
+    )
+    arco, zenodo = cat.legacy_urls("wc1500", 60)
+    assert "watercontent.1500kPa_usda.3c2a1a_m_250m_b60cm_" in arco
+    assert zenodo.endswith(
+        "sol_watercontent.1500kPa_usda.3c2a1a_m_250m_b60..60cm_1950..2017_v0.1.tif"
+    )
+    assert cat.legacy_points_needed(["30-60cm"]) == [30, 60]
+    assert cat.legacy_points_needed([d[0] for d in cat.DEPTHS]) == [0, 30, 60, 100]
+
+
+def test_interval_mean_and_awc():
+    pts = {0: np.array([20.0, np.nan]), 30: np.array([30.0, 10.0])}
+    assert core.interval_mean(pts, "0-30cm")[0] == 25.0
+    assert math.isnan(core.interval_mean(pts, "0-30cm")[1])
+    # FC 30 %, WP 12 % over 0-30 cm (300 mm): 0.18 x 300 = 54 mm
+    out = core.awc_mm(
+        np.array([30.0, 10.0, np.nan]), np.array([12.0, 15.0, 5.0]), "0-30cm"
+    )
+    assert out[0] == pytest.approx(54.0)
+    assert out[1] == 0.0  # negative difference clipped
+    assert math.isnan(out[2])
+    # 60-100 cm is 400 mm thick
+    assert core.awc_mm(np.array([25.0]), np.array([10.0]), "60-100cm")[0] == 60.0
+
+
+WATER = {("wc33", 0): 20, ("wc33", 30): 24, ("wc1500", 0): 8, ("wc1500", 30): 10}
+
+
+def water_reader(fail_arco=False, calls=None):
+    def reader(source, grid, with_scale=False):
+        if "watercontent" not in source:
+            return make_reader()(source, grid, with_scale)
+        if calls is not None:
+            calls.append(source)
+        if fail_arco and "s3.openlandmap.org" in source:
+            raise RuntimeError("HTTP 404")
+        code = "wc33" if "33kPa" in source else "wc1500"
+        depth = 0 if ("_b0cm_" in source or "_b0..0cm_" in source) else 30
+        arr = np.full((grid.height, grid.width), float(WATER[(code, depth)]))
+        arr[0, 0] = np.nan
+        return arr, None, None
+
+    return reader
+
+
+def test_area_water_content_and_awc(grid, tmp_path):
+    sel = core.plan_selection([], ["0-30cm"], [], [], water=True)
+    result, writer = run_area(grid, tmp_path, sel, reader=water_reader())
+    assert set(writer.files) == {
+        "olm_wc33_250m_1950-2017.tif",
+        "olm_wc1500_250m_1950-2017.tif",
+        "olm_awc_250m_1950-2017.tif",
+    }
+    fc, units = writer.files["olm_wc33_250m_1950-2017.tif"]
+    assert units == "vol %"
+    assert fc[0][0] == "wc33_0-30cm_mean_250m_1950-2017 (vol %)"
+    assert fc[0][1][1, 1] == 22.0  # (20 + 24) / 2
+    wp, _ = writer.files["olm_wc1500_250m_1950-2017.tif"]
+    assert wp[0][1][1, 1] == 9.0
+    awc, awc_units = writer.files["olm_awc_250m_1950-2017.tif"]
+    assert awc_units == "mm" and awc[0][1][1, 1] == pytest.approx(39.0)  # 13 % x 300
+    assert math.isnan(awc[0][1][0, 0])
+    routes = {r.variable: r.route for r in result.layers}
+    assert routes == {
+        "wc33": "COG (s3.openlandmap.org)",
+        "wc1500": "COG (s3.openlandmap.org)",
+        "awc": "derived",
+    }
+
+
+def test_area_water_falls_back_to_zenodo(grid, tmp_path):
+    calls, logs = [], []
+    sel = core.plan_selection([], ["0-30cm"], [], [], water=True)
+    result, _ = run_area(
+        grid,
+        tmp_path,
+        sel,
+        reader=water_reader(fail_arco=True, calls=calls),
+        log_fn=logs.append,
+    )
+    assert any("zenodo.org" in c for c in calls)
+    assert {r.route for r in result.layers if r.variable == "wc33"} == {
+        "Zenodo (slower)"
+    }
+    assert logs and "HTTP 404" in logs[0]
+
+
+def test_points_water(tmp_path):
+    def sampler(source, lonlats, with_scale=False):
+        if "watercontent" in source:
+            code = "wc33" if "33kPa" in source else "wc1500"
+            depth = 0 if "_b0cm_" in source else 30
+            return [float(WATER[(code, depth)])] * len(lonlats), None, None
+        return make_sampler()(source, lonlats, with_scale)
+
+    sel = core.plan_selection([], ["0-30cm"], [], [], water=True)
+    result = run_points(sel, sampler=sampler)
+    by = {(r["Site"], r["Variable"]): r for r in result.rows}
+    assert by[("A", "wc33")]["Value"] == 22.0
+    assert by[("A", "awc")]["Value"] == pytest.approx(39.0)
+    assert by[("A", "awc")]["Units"] == "mm"
+    assert by[("A", "wc1500")]["Period"] == "1950-2017"
+    assert by[("A", "wc33")]["Resolution_m"] == 250
+
+
+def test_metadata_water(grid, tmp_path):
+    sel = core.plan_selection([], ["0-30cm"], [], [], water=True)
+    result, _ = run_area(grid, tmp_path, sel, reader=water_reader())
+    run = dict(core.build_metadata(result, sel, {}, "3.13")[0][2])
+    assert "CC BY-SA 4.0" in run["Licence (water content)"]
+    assert "2784001" in run["Data DOI (water content)"]
+    assert "measured" in run["Note - water content"]

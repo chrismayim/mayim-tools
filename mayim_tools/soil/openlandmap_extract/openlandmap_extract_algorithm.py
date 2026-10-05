@@ -71,6 +71,7 @@ class OpenLandMapExtractAlgorithm(QgsProcessingAlgorithm):
     PERIODS = "PERIODS"
     STATISTICS = "STATISTICS"
     SUBGROUPS = "SUBGROUPS"
+    WATER = "WATER"
     OUTPUT_CRS = "OUTPUT_CRS"
     OUTPUT_RES = "OUTPUT_RES"
     MAX_AREA_KM2 = "MAX_AREA_KM2"
@@ -162,6 +163,15 @@ class OpenLandMapExtractAlgorithm(QgsProcessingAlgorithm):
             "16 times denser than 120 m). Raise it deliberately, or use 120 m "
             "output, for large areas.\n"
             "  Parallel downloads (advanced, default 8).\n"
+            "  Water content (optional): the older OpenLandMap 250 m maps of "
+            "volumetric water content at 33 kPa (field capacity) and 1500 kPa "
+            "(wilting point), 1950-2017, mapped from measured values rather "
+            "than pedotransfer functions - an independent check on computed "
+            "field capacity and wilting point. Published at depths 0, 30, 60 "
+            "and 100 cm; each interval is the average of its two bounding "
+            "depths. Available water capacity (mm) = (FC - WP) x layer "
+            "thickness is derived. Outputs olm_wc33_*, olm_wc1500_* and "
+            "olm_awc_*. Licence CC BY-SA 4.0 (share-alike).\n"
             "  USDA subgroup (optional): OpenLandMap publishes the probability of "
             "each of 818 USDA soil-taxonomy subgroups at 30 m. The tool keeps "
             "the most probable and second most probable subgroup per cell, with "
@@ -257,6 +267,15 @@ class OpenLandMapExtractAlgorithm(QgsProcessingAlgorithm):
         )
         self.addParameter(
             QgsProcessingParameterBoolean(
+                self.WATER,
+                "Also extract water content at 33 and 1500 kPa and available "
+                "water capacity (OpenLandMap 250 m, 1950-2017, measured-data "
+                "maps)",
+                defaultValue=False,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterBoolean(
                 self.SUBGROUPS,
                 "Also map the most probable USDA soil subgroup (reads 818 "
                 "probability layers; slower)",
@@ -344,9 +363,16 @@ class OpenLandMapExtractAlgorithm(QgsProcessingAlgorithm):
         ru68 = cat.RU68 in stat_codes
         stats = [s for s in stat_codes if s != cat.RU68]
         subgroups = self.parameterAsBoolean(parameters, self.SUBGROUPS, context)
+        water = self.parameterAsBoolean(parameters, self.WATER, context)
         try:
             return core.plan_selection(
-                variables, depths, periods, stats, ru68, subgroups=subgroups
+                variables,
+                depths,
+                periods,
+                stats,
+                ru68,
+                subgroups=subgroups,
+                water=water,
             )
         except core.SoilDataError as exc:
             raise QgsProcessingException(str(exc)) from exc

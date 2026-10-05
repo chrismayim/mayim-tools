@@ -59,9 +59,16 @@ from mayim_tools.soil._common.stats import (
 )
 
 from .catalogue import (
+    AWC_CODE,
+    AWC_LABEL,
     DEPTH_BY_LABEL,
     DEPTHS,
     LATEST_PERIOD,
+    LEGACY_CITATION,
+    LEGACY_DOI,
+    LEGACY_LICENCE,
+    LEGACY_PERIOD,
+    LEGACY_VARIABLES,
     PERIODS,
     PRODUCT,
     RU68,
@@ -78,6 +85,8 @@ from .catalogue import (
     cog_url,
     great_group,
     layer_label,
+    legacy_points_needed,
+    legacy_urls,
     output_file_name,
     resolve_period,
     soil_order,
@@ -86,7 +95,7 @@ from .catalogue import (
 )
 from .soil_types import SUBGROUP_NAMES
 
-TOOL_VERSION = "0.2.0"
+TOOL_VERSION = "0.3.0"
 DEFAULT_WORKERS = 8
 DEFAULT_MAX_AREA_KM2 = 5000.0  # 30 m data: 5000 km2 is ~5.6 million cells
 TEXTURE_SUM_TOLERANCE = 2.0
@@ -125,6 +134,7 @@ class Selection:
     written_statistics: list[str]
     ru68: bool
     subgroups: bool = False
+    water: bool = False
     warnings: list[str] = field(default_factory=list)
 
 
@@ -135,6 +145,7 @@ def plan_selection(
     statistics: Sequence[str],
     ru68: bool = False,
     subgroups: bool = False,
+    water: bool = False,
 ) -> Selection:
     unknown = [v for v in variables if v not in VARIABLE_BY_CODE]
     if unknown:
@@ -148,10 +159,13 @@ def plan_selection(
     bad = [s for s in statistics if s not in STAT_BY_CODE]
     if bad:
         raise SoilDataError(f"Unknown statistic(s): {', '.join(bad)}")
-    if not variables and not subgroups:
+    if not variables and not subgroups and not water:
         raise SoilDataError(
-            "Select at least one variable (or the USDA subgroup option)."
+            "Select at least one variable (or the USDA subgroup or water-content "
+            "option)."
         )
+    if water and not depths:
+        raise SoilDataError("Select at least one depth interval.")
     if variables and not depths:
         raise SoilDataError("Select at least one depth interval.")
     if variables and not periods:
@@ -178,6 +192,7 @@ def plan_selection(
         written_statistics=written,
         ru68=ru68,
         subgroups=subgroups,
+        water=water,
         warnings=warnings,
     )
 
@@ -299,6 +314,7 @@ class RunResult:
     rows: list[dict] = field(default_factory=list)
     load_files: list[str] = field(default_factory=list)
     subgroup: dict = field(default_factory=dict)
+    water: dict = field(default_factory=dict)
     seconds: float = 0.0
 
 
@@ -382,13 +398,14 @@ def extract_area(
     result = RunResult(mode="area", warnings=list(selection.warnings), notes=notes)
     for note in notes:
         log_fn(note)
-    if not jobs and not selection.subgroups:
+    if not jobs and not selection.subgroups and not selection.water:
         raise SoilDataError(
             "Nothing to read: none of the selected layers is published for the "
             "selected period(s)."
         )
     n_sub = len(SUBGROUP_NAMES) if selection.subgroups else 0
-    progress = _Progress(len(jobs) + n_sub, progress_fn)
+    n_water = water_job_count(selection)
+    progress = _Progress(len(jobs) + n_sub + n_water, progress_fn)
     t_start = datetime.now(UTC)
     texture: dict[tuple[str, str], dict[str, np.ndarray]] = {}
     latest = selection.periods[-1] if selection.periods else LATEST_PERIOD
@@ -466,6 +483,13 @@ def extract_area(
                         var, period, selection, arrays, grid, out_dir, write_fn, result
                     )
             del got
+
+    if selection.water:
+        with _options(options_ctx, read_grid_fn is None):
+            water = _read_water(
+                read, grid, selection, workers, cancel_fn, progress, result, log_fn
+            )
+        _write_water(water, selection, grid, out_dir, write_fn, result, log_fn)
 
     if selection.subgroups:
         with _options(options_ctx, read_grid_fn is None):
@@ -555,6 +579,121 @@ def _check_empty(records, result, log_fn):
                 f"{rec.layer} has no valid values in the area of interest "
                 "(deserts and permanent ice are not mapped).",
             )
+
+
+# ----------------------------------------------------------------------
+# Legacy 250 m water content (33 / 1500 kPa) and derived AWC
+# ----------------------------------------------------------------------
+
+
+def water_job_count(selection: Selection) -> int:
+    if not selection.water:
+        return 0
+    return len(LEGACY_VARIABLES) * len(legacy_points_needed(selection.depths))
+
+
+def water_sources(code: str, depth_cm: int) -> list[Source]:
+    arco, zenodo = legacy_urls(code, depth_cm)
+    return [
+        Source("COG (s3.openlandmap.org)", "/vsicurl/" + arco),
+        Source("Zenodo (slower)", "/vsicurl/" + zenodo),
+    ]
+
+
+def interval_mean(points: dict[int, np.ndarray], depth: str) -> np.ndarray:
+    """Interval value from the two bounding depth points (trapezoidal rule)."""
+    _, top, bottom = DEPTH_BY_LABEL[depth]
+    return (np.asarray(points[top], float) + np.asarray(points[bottom], float)) / 2
+
+
+def awc_mm(fc, wp, depth: str) -> np.ndarray:
+    """(FC - WP) x layer thickness with FC/WP in vol %: mm of water held in
+    the layer. Negative differences (map noise) are set to 0."""
+    _, top, bottom = DEPTH_BY_LABEL[depth]
+    diff = np.asarray(fc, float) - np.asarray(wp, float)
+    out = np.clip(diff, 0, None) / 100.0 * (bottom - top) * 10.0
+    out[~np.isfinite(diff)] = np.nan
+    return out
+
+
+def _read_water(reader, arg, selection, workers, cancel_fn, progress, result, log_fn):
+    points = legacy_points_needed(selection.depths)
+    keys = [(v.code, d) for v in LEGACY_VARIABLES for d in points]
+
+    def job(key):
+        (raw, f_scale, f_offset), route, errors = read_with_fallback(
+            water_sources(*key), reader, arg, True
+        )
+        return raw, f_scale, f_offset, route, errors
+
+    def done(key):
+        progress.step(f"Read {key[0]} at {key[1]} cm (250 m, {LEGACY_PERIOD})")
+
+    got = run_jobs(keys, job, workers, cancel_fn, done)
+    data: dict = {v.code: {} for v in LEGACY_VARIABLES}
+    routes: dict[str, int] = {}
+    for code, depth_cm in keys:
+        raw, f_scale, f_offset, route, errors = got[(code, depth_cm)]
+        for err in errors:
+            _log(
+                result,
+                log_fn,
+                f"{code} {depth_cm} cm: primary route failed, used {route} ({err})",
+            )
+        scale, offset, _ = resolve_scale(f_scale, f_offset, 1.0)
+        data[code][depth_cm] = apply_scale(raw, scale, offset)
+        routes[route] = routes.get(route, 0) + 1
+    data["route"] = max(routes, key=routes.get)
+    data["routes"] = routes
+    return data
+
+
+def _water_products(water, selection):
+    """[(code, label, units, {depth: values})] for wc33, wc1500 and AWC."""
+    out = []
+    by = {}
+    for v in LEGACY_VARIABLES:
+        by[v.code] = {d: interval_mean(water[v.code], d) for d in selection.depths}
+        out.append((v.code, v.label, "vol %", by[v.code]))
+    awc = {d: awc_mm(by["wc33"][d], by["wc1500"][d], d) for d in selection.depths}
+    out.append((AWC_CODE, AWC_LABEL, "mm", awc))
+    return out
+
+
+def water_file_name(code: str) -> str:
+    return f"olm_{code}_250m_{LEGACY_PERIOD}.tif"
+
+
+def _write_water(water, selection, grid, out_dir, write_fn, result, log_fn):
+    for code, _label, units, by_depth in _water_products(water, selection):
+        path = os.path.join(out_dir, water_file_name(code))
+        derived = code == AWC_CODE
+        bands, records = [], []
+        for depth, values in by_depth.items():
+            name = f"{code}_{depth}_mean_250m_{LEGACY_PERIOD}"
+            bands.append((f"{name} ({units})", values))
+            records.append(
+                LayerRecord(
+                    file=os.path.basename(path),
+                    band=len(bands),
+                    layer=name,
+                    variable=code,
+                    depth=depth,
+                    period=LEGACY_PERIOD,
+                    statistic="derived" if derived else "mean",
+                    resolution_m=250,
+                    units=units,
+                    scale=1.0,
+                    scale_source="derived" if derived else "file metadata or none",
+                    route="derived" if derived else water["route"],
+                    stats=summarise(values),
+                )
+            )
+        write_fn(path, grid, bands, units)
+        result.files.append(path)
+        result.layers.extend(records)
+        _check_empty(records, result, log_fn)
+    result.water = {"routes": water["routes"]}
 
 
 # ----------------------------------------------------------------------
@@ -756,13 +895,14 @@ def extract_points(
     result = RunResult(mode="points", warnings=list(selection.warnings), notes=notes)
     for note in notes:
         log_fn(note)
-    if not jobs and not selection.subgroups:
+    if not jobs and not selection.subgroups and not selection.water:
         raise SoilDataError(
             "Nothing to read: none of the selected layers is published for the "
             "selected period(s)."
         )
     n_sub = len(SUBGROUP_NAMES) if selection.subgroups else 0
-    progress = _Progress(len(jobs) + n_sub, progress_fn)
+    n_water = water_job_count(selection)
+    progress = _Progress(len(jobs) + n_sub + n_water, progress_fn)
     lonlats = [(s.lon, s.lat) for s in sites]
     t_start = datetime.now(UTC)
     store: dict[tuple[str, str, str, str], np.ndarray] = {}
@@ -863,6 +1003,49 @@ def extract_points(
                                 **_ru_summary(ru),
                             }
                         )
+    if selection.water:
+        with _options(options_ctx, sample_fn is None):
+            water = _read_water(
+                sample,
+                lonlats,
+                selection,
+                workers,
+                cancel_fn,
+                progress,
+                result,
+                log_fn,
+            )
+        for code, label, units, by_depth in _water_products(water, selection):
+            for depth, values in by_depth.items():
+                add_rows(
+                    code,
+                    label,
+                    depth,
+                    LEGACY_PERIOD,
+                    "mean" if code != AWC_CODE else "derived",
+                    250,
+                    values,
+                    units,
+                    water["route"] if code != AWC_CODE else "derived",
+                )
+                result.layers.append(
+                    LayerRecord(
+                        file="",
+                        band=0,
+                        layer=f"{code}_{depth}_mean_250m_{LEGACY_PERIOD}",
+                        variable=code,
+                        depth=depth,
+                        period=LEGACY_PERIOD,
+                        statistic="mean" if code != AWC_CODE else "derived",
+                        resolution_m=250,
+                        units=units,
+                        scale=1.0,
+                        scale_source="file metadata or none",
+                        route=water["route"] if code != AWC_CODE else "derived",
+                        stats=summarise(values),
+                    )
+                )
+
     if selection.subgroups:
         with _options(options_ctx, sample_fn is None):
             top = _scan_subgroups(
@@ -1052,6 +1235,25 @@ def build_metadata(
         [t["period"], t["depth"], t["checked"], t["flagged"], _r(t["max_abs_dev"])]
         for t in result.texture
     ]
+    if selection.water:
+        run_rows += [
+            ["Water content (250 m)", "33 kPa and 1500 kPa, 1950-2017; AWC derived"],
+            ["Citation (water content)", LEGACY_CITATION],
+            ["Data DOI (water content)", LEGACY_DOI],
+            ["Licence (water content)", LEGACY_LICENCE + " (share-alike)"],
+            [
+                "Note - water content",
+                "Older OpenLandMap layers (v0.1, 250 m) mapped from measured "
+                "volumetric water contents - no pedotransfer functions except to "
+                "fill missing bulk densities - so they are an independent check "
+                "on PTF field capacity and wilting point. Published at depth "
+                "points (0, 30, 60, 100 cm); each interval is the average of its "
+                "two bounding points. AWC = (FC - WP) x layer thickness (mm), the "
+                "authors' own definition, negative differences set to 0. Read "
+                "from the cloud-optimised copy on s3.openlandmap.org (Zenodo as "
+                "fallback).",
+            ],
+        ]
     if selection.subgroups:
         run_rows += [
             ["USDA subgroups", f"most probable of {len(SUBGROUP_NAMES)} (2000-2022)"],

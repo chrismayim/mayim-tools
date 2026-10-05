@@ -271,3 +271,75 @@ def soil_order(name: str) -> str:
         if gg.endswith(suffix):
             return order
     return "Unknown"
+
+
+# ----------------------------------------------------------------------
+# Legacy 250 m water content (Hengl & Gupta 2019, OpenLandMap v0.1)
+# ----------------------------------------------------------------------
+# Volumetric water content (%) at 33 kPa (field capacity) and 1500 kPa
+# (wilting point), mapped from measured values (no pedotransfer functions),
+# 1950-2017, at depth POINTS. Licence CC BY-SA 4.0 (Zenodo record 2784001;
+# the older record 2609114 is non-commercial and is not used).
+# Paths confirmed live 2026-10-05: OpenLandMap STAC -> s3.openlandmap.org/arco
+# (tiled COG, primary); Zenodo files (striped, slower) as fallback.
+
+LEGACY_PERIOD = "1950-2017"
+LEGACY_POINTS_CM: tuple[int, ...] = (0, 30, 60, 100)
+LEGACY_DOI = "https://doi.org/10.5281/zenodo.2784001"
+LEGACY_LICENCE = "CC BY-SA 4.0"
+LEGACY_CITATION = (
+    "Hengl, T. and Gupta, S. (2019). Soil water content (volumetric %) for "
+    "33kPa and 1500kPa suctions predicted at 6 standard depths (0, 10, 30, "
+    "60, 100 and 200 cm) at 250 m resolution (v0.1). Zenodo. "
+    "https://doi.org/10.5281/zenodo.2784001"
+)
+
+
+@dataclass(frozen=True)
+class LegacyVariable:
+    code: str
+    label: str
+    arco_name: str
+    zenodo_name: str
+
+
+LEGACY_VARIABLES: tuple[LegacyVariable, ...] = (
+    LegacyVariable(
+        "wc33",
+        "Volumetric water content at 33 kPa (field capacity)",
+        "watercontent.33kPa_usda.4b1c",
+        "sol_watercontent.33kPa_usda.4b1c",
+    ),
+    LegacyVariable(
+        "wc1500",
+        "Volumetric water content at 1500 kPa (wilting point)",
+        "watercontent.1500kPa_usda.3c2a1a",
+        "sol_watercontent.1500kPa_usda.3c2a1a",
+    ),
+)
+LEGACY_BY_CODE = {v.code: v for v in LEGACY_VARIABLES}
+AWC_CODE = "awc"
+AWC_LABEL = "Available water capacity, (FC - WP) x layer thickness"
+
+
+def legacy_urls(code: str, depth_cm: int) -> tuple[str, str]:
+    """(primary COG URL, Zenodo fallback URL) for one depth point."""
+    v = LEGACY_BY_CODE[code]
+    arco = (
+        f"https://s3.openlandmap.org/arco/{v.arco_name}_m_250m_b{depth_cm}cm_"
+        "19500101_20171231_go_epsg.4326_v0.1.tif"
+    )
+    zenodo = (
+        f"https://zenodo.org/records/2784001/files/{v.zenodo_name}_m_250m_"
+        f"b{depth_cm}..{depth_cm}cm_1950..2017_v0.1.tif"
+    )
+    return arco, zenodo
+
+
+def legacy_points_needed(depths) -> list[int]:
+    """Depth points (cm) bounding the selected intervals."""
+    needed = set()
+    for depth in depths:
+        _, top, bottom = DEPTH_BY_LABEL[depth]
+        needed.update((top, bottom))
+    return sorted(needed)
