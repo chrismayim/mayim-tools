@@ -70,17 +70,23 @@ from .catalogue import (
     STAT_BY_CODE,
     STATISTICS,
     STATS_FOR_RU,
+    SUBGROUP_PERIOD,
     TEXTURE_CODES,
     VARIABLE_BY_CODE,
     VARIABLES,
     band_description,
     cog_url,
+    great_group,
     layer_label,
     output_file_name,
     resolve_period,
+    soil_order,
+    subgroup_label,
+    subgroup_url,
 )
+from .soil_types import SUBGROUP_NAMES
 
-TOOL_VERSION = "0.1.0"
+TOOL_VERSION = "0.2.0"
 DEFAULT_WORKERS = 8
 DEFAULT_MAX_AREA_KM2 = 5000.0  # 30 m data: 5000 km2 is ~5.6 million cells
 TEXTURE_SUM_TOLERANCE = 2.0
@@ -118,6 +124,7 @@ class Selection:
     statistics: list[str]  # fetched (RU68 inputs auto-added)
     written_statistics: list[str]
     ru68: bool
+    subgroups: bool = False
     warnings: list[str] = field(default_factory=list)
 
 
@@ -127,6 +134,7 @@ def plan_selection(
     periods: Sequence[str],
     statistics: Sequence[str],
     ru68: bool = False,
+    subgroups: bool = False,
 ) -> Selection:
     unknown = [v for v in variables if v not in VARIABLE_BY_CODE]
     if unknown:
@@ -140,13 +148,15 @@ def plan_selection(
     bad = [s for s in statistics if s not in STAT_BY_CODE]
     if bad:
         raise SoilDataError(f"Unknown statistic(s): {', '.join(bad)}")
-    if not variables:
-        raise SoilDataError("Select at least one variable.")
-    if not depths:
+    if not variables and not subgroups:
+        raise SoilDataError(
+            "Select at least one variable (or the USDA subgroup option)."
+        )
+    if variables and not depths:
         raise SoilDataError("Select at least one depth interval.")
-    if not periods:
+    if variables and not periods:
         raise SoilDataError("Select at least one period.")
-    if not statistics and not ru68:
+    if variables and not statistics and not ru68:
         raise SoilDataError("Select at least one statistic.")
 
     written = [s.code for s in STATISTICS if s.code in statistics]
@@ -167,6 +177,7 @@ def plan_selection(
         statistics=fetched,
         written_statistics=written,
         ru68=ru68,
+        subgroups=subgroups,
         warnings=warnings,
     )
 
@@ -287,6 +298,7 @@ class RunResult:
     notes: list[str] = field(default_factory=list)
     rows: list[dict] = field(default_factory=list)
     load_files: list[str] = field(default_factory=list)
+    subgroup: dict = field(default_factory=dict)
     seconds: float = 0.0
 
 
@@ -370,15 +382,16 @@ def extract_area(
     result = RunResult(mode="area", warnings=list(selection.warnings), notes=notes)
     for note in notes:
         log_fn(note)
-    if not jobs:
+    if not jobs and not selection.subgroups:
         raise SoilDataError(
             "Nothing to read: none of the selected layers is published for the "
             "selected period(s)."
         )
-    progress = _Progress(len(jobs), progress_fn)
+    n_sub = len(SUBGROUP_NAMES) if selection.subgroups else 0
+    progress = _Progress(len(jobs) + n_sub, progress_fn)
     t_start = datetime.now(UTC)
     texture: dict[tuple[str, str], dict[str, np.ndarray]] = {}
-    latest = selection.periods[-1]
+    latest = selection.periods[-1] if selection.periods else LATEST_PERIOD
 
     with _options(options_ctx, read_grid_fn is None):
         for var in selection.variables:
@@ -454,6 +467,25 @@ def extract_area(
                     )
             del got
 
+    if selection.subgroups:
+        with _options(options_ctx, read_grid_fn is None):
+            top = _scan_subgroups(
+                read,
+                grid,
+                (grid.height, grid.width),
+                workers,
+                cancel_fn,
+                progress,
+                result,
+                log_fn,
+            )
+        path = os.path.join(out_dir, SUBGROUP_FILE)
+        write_fn(path, grid, _subgroup_bands(top), "code / %")
+        result.files.append(path)
+        result.load_files.append(path)
+        result.subgroup = _subgroup_summary(top, path)
+        _subgroup_records(result, top, os.path.basename(path))
+
     for (period, depth), means in sorted(texture.items()):
         if all(c in means for c in TEXTURE_CODES):
             result.texture.append(
@@ -526,6 +558,156 @@ def _check_empty(records, result, log_fn):
 
 
 # ----------------------------------------------------------------------
+# USDA subgroups: streaming "most probable" over 818 probability layers
+# ----------------------------------------------------------------------
+
+SUBGROUP_FILE = f"olm_usda_subgroup_{SUBGROUP_PERIOD}.tif"
+SUBGROUP_BATCH = 32  # layers held in memory at once (per batch)
+
+
+def subgroup_sources(name: str) -> list[Source]:
+    return [
+        Source("COG (https)", "/vsicurl/" + subgroup_url(name)),
+        Source("COG (http)", "/vsicurl/" + subgroup_url(name, scheme="http")),
+    ]
+
+
+def top2_update(state: dict, values: np.ndarray, code: int) -> None:
+    """Keep the two highest probabilities (and their codes) per cell.
+    NaN never wins; on a tie the earlier (lower) code is kept."""
+    v = np.asarray(values, dtype=np.float64)
+    finite = np.isfinite(v)
+    first = finite & (v > state["p1"])
+    second = finite & ~first & (v > state["p2"])
+    state["p2"][first] = state["p1"][first]
+    state["code2"][first] = state["code1"][first]
+    state["p1"][first] = v[first]
+    state["code1"][first] = code
+    state["p2"][second] = v[second]
+    state["code2"][second] = code
+    state["psum"][finite] += v[finite]
+    state["n"][finite] += 1
+
+
+def _scan_subgroups(reader, arg, shape, workers, cancel_fn, progress, result, log_fn):
+    state = {
+        "p1": np.full(shape, -1.0),
+        "p2": np.full(shape, -1.0),
+        "code1": np.zeros(shape, dtype=np.int32),
+        "code2": np.zeros(shape, dtype=np.int32),
+        "psum": np.zeros(shape),
+        "n": np.zeros(shape, dtype=np.int32),
+    }
+    routes: dict[str, int] = {}
+
+    def job(k):
+        (raw, f_scale, f_offset), route, errors = read_with_fallback(
+            subgroup_sources(SUBGROUP_NAMES[k]), reader, arg, True
+        )
+        return raw, f_scale, f_offset, route, errors
+
+    def done(k):
+        progress.step(f"Read subgroup {subgroup_label(SUBGROUP_NAMES[k])}")
+
+    n_names = len(SUBGROUP_NAMES)
+    batch = max(SUBGROUP_BATCH, workers * 4)
+    for start in range(0, n_names, batch):
+        keys = list(range(start, min(n_names, start + batch)))
+        got = run_jobs(keys, job, workers, cancel_fn, done)
+        for k in keys:  # in code order, so ties are deterministic
+            raw, f_scale, f_offset, route, errors = got[k]
+            for err in errors:
+                _log(
+                    result,
+                    log_fn,
+                    f"{SUBGROUP_NAMES[k]}: primary route failed, used {route} ({err})",
+                )
+            scale, offset, _ = resolve_scale(f_scale, f_offset, 1.0)
+            top2_update(state, apply_scale(raw, scale, offset), k + 1)
+            routes[route] = routes.get(route, 0) + 1
+        del got
+
+    mapped = state["n"] > 0
+    for key in ("p1", "p2", "psum"):
+        state[key] = np.where(mapped, state[key], np.nan)
+    state["p1"][state["p1"] < 0] = np.nan
+    state["p2"][state["p2"] < 0] = np.nan
+    state["code1"][~mapped] = 0
+    state["code2"][~np.isfinite(state["p2"])] = 0
+    state["route"] = max(routes, key=routes.get) if routes else ""
+    state["routes"] = routes
+    return state
+
+
+def _subgroup_bands(top: dict) -> list[tuple[str, np.ndarray]]:
+    def code_array(codes):
+        return np.where(codes > 0, codes.astype(np.float64), np.nan)
+
+    period = SUBGROUP_PERIOD
+    return [
+        (f"usda_subgroup_code_rank1_{period} (code)", code_array(top["code1"])),
+        (f"usda_subgroup_probability_rank1_{period} (%)", top["p1"]),
+        (f"usda_subgroup_code_rank2_{period} (code)", code_array(top["code2"])),
+        (f"usda_subgroup_probability_rank2_{period} (%)", top["p2"]),
+        (f"usda_subgroup_probability_sum_{period} (%)", top["psum"]),
+    ]
+
+
+def _subgroup_summary(top: dict, path: str) -> dict:
+    codes = top["code1"].ravel()
+    probs = top["p1"].ravel()
+    mapped = codes > 0
+    total = int(mapped.sum())
+    table = []
+    for code in sorted(set(codes[mapped].tolist())):
+        sel = codes == code
+        name = SUBGROUP_NAMES[code - 1]
+        table.append(
+            {
+                "code": code,
+                "name": name,
+                "label": subgroup_label(name),
+                "great_group": great_group(name),
+                "order": soil_order(name),
+                "cells": int(sel.sum()),
+                "share_pct": 100.0 * sel.sum() / total if total else math.nan,
+                "mean_probability": float(np.nanmean(probs[sel])),
+            }
+        )
+    table.sort(key=lambda r: -r["cells"])
+    psum = top["psum"][np.isfinite(top["psum"])]
+    return {
+        "file": path,
+        "table": table,
+        "mapped": total,
+        "median_probability": float(np.nanmedian(probs[mapped])) if total else math.nan,
+        "median_sum": float(np.median(psum)) if psum.size else math.nan,
+        "routes": top["routes"],
+    }
+
+
+def _subgroup_records(result: RunResult, top: dict, file_name: str) -> None:
+    for band, (desc, arr) in enumerate(_subgroup_bands(top), start=1):
+        result.layers.append(
+            LayerRecord(
+                file=file_name,
+                band=band,
+                layer=desc.split(" (")[0],
+                variable="usda_subgroup",
+                depth="n/a",
+                period=SUBGROUP_PERIOD,
+                statistic=desc.split("_")[2],
+                resolution_m=30,
+                units=desc.split("(")[-1].rstrip(")"),
+                scale=1.0,
+                scale_source="file metadata or none",
+                route=top["route"],
+                stats=summarise(arr),
+            )
+        )
+
+
+# ----------------------------------------------------------------------
 # Point mode
 # ----------------------------------------------------------------------
 
@@ -574,18 +756,21 @@ def extract_points(
     result = RunResult(mode="points", warnings=list(selection.warnings), notes=notes)
     for note in notes:
         log_fn(note)
-    if not jobs:
+    if not jobs and not selection.subgroups:
         raise SoilDataError(
             "Nothing to read: none of the selected layers is published for the "
             "selected period(s)."
         )
-    progress = _Progress(len(jobs), progress_fn)
+    n_sub = len(SUBGROUP_NAMES) if selection.subgroups else 0
+    progress = _Progress(len(jobs) + n_sub, progress_fn)
     lonlats = [(s.lon, s.lat) for s in sites]
     t_start = datetime.now(UTC)
     store: dict[tuple[str, str, str, str], np.ndarray] = {}
 
     def add_rows(var, label, depth, period, stat, res, values, units, route):
-        _, top, bottom = DEPTH_BY_LABEL[depth]
+        top, bottom = ("", "")
+        if depth in DEPTH_BY_LABEL:
+            _, top, bottom = DEPTH_BY_LABEL[depth]
         for site, value in zip(sites, values, strict=True):
             result.rows.append(
                 {
@@ -678,6 +863,50 @@ def extract_points(
                                 **_ru_summary(ru),
                             }
                         )
+    if selection.subgroups:
+        with _options(options_ctx, sample_fn is None):
+            top = _scan_subgroups(
+                sample,
+                lonlats,
+                (len(sites),),
+                workers,
+                cancel_fn,
+                progress,
+                result,
+                log_fn,
+            )
+        for rank, (codes, probs) in enumerate(
+            ((top["code1"], top["p1"]), (top["code2"], top["p2"])), start=1
+        ):
+            label = "Most probable" if rank == 1 else "Second most probable"
+            for i, site in enumerate(sites):
+                code = int(codes[i])
+                name = SUBGROUP_NAMES[code - 1] if code > 0 else ""
+                result.rows.append(
+                    {
+                        "Site": site.label,
+                        "Longitude": site.lon,
+                        "Latitude": site.lat,
+                        "Product": PRODUCT,
+                        "Variable": "usda_subgroup",
+                        "Description": (
+                            f"{subgroup_label(name)} ({great_group(name)}, "
+                            f"{soil_order(name)}; code {code})"
+                            if name
+                            else "not mapped"
+                        ),
+                        "DepthTop_cm": "",
+                        "DepthBottom_cm": "",
+                        "Period": SUBGROUP_PERIOD,
+                        "Statistic": f"{label} subgroup - probability",
+                        "Resolution_m": 30,
+                        "Value": float(probs[i]),
+                        "Units": "%",
+                        "Route": top["route"],
+                    }
+                )
+        result.subgroup = _subgroup_summary(top, "")
+
     for period in selection.periods + [LATEST_PERIOD]:
         for depth in selection.depths:
             keys = [(c, "mean30", period, depth) for c in TEXTURE_CODES]
@@ -823,6 +1052,54 @@ def build_metadata(
         [t["period"], t["depth"], t["checked"], t["flagged"], _r(t["max_abs_dev"])]
         for t in result.texture
     ]
+    if selection.subgroups:
+        run_rows += [
+            ["USDA subgroups", f"most probable of {len(SUBGROUP_NAMES)} (2000-2022)"],
+            [
+                "Note - subgroups",
+                "OpenLandMap gives the probability of each USDA soil-taxonomy "
+                "subgroup. The tool keeps the two most probable subgroups and "
+                "their probabilities per cell, plus the sum of all probabilities "
+                "(should be close to 100 %). A low top probability means the "
+                "class is uncertain; treat the map as indicative.",
+            ],
+        ]
+    sub = result.subgroup
+    sub_rows = [
+        [
+            r["code"],
+            r["label"],
+            r["great_group"],
+            r["order"],
+            r["cells"],
+            _r(r["share_pct"], 2),
+            _r(r["mean_probability"], 1),
+        ]
+        for r in sub.get("table", [])
+    ]
+    if sub:
+        sub_rows.append(
+            [
+                "",
+                "(all mapped cells)",
+                "",
+                "",
+                sub["mapped"],
+                100,
+                _r(sub["median_probability"], 1),
+            ]
+        )
+        sub_rows.append(
+            [
+                "",
+                "Median sum of probabilities (%)",
+                "",
+                "",
+                "",
+                "",
+                _r(sub["median_sum"], 1),
+            ]
+        )
     note_rows = [[n] for n in result.notes] or [["(none)"]]
     warn_rows = [[w] for w in result.warnings] or [["(none)"]]
     return [
@@ -874,6 +1151,19 @@ def build_metadata(
             f"{TEXTURE_SUM_TOLERANCE:g} %)",
             ["Period", "Depth", "Checked", "Flagged", "Max abs deviation (%)"],
             tex_rows,
+        ),
+        (
+            "USDA subgroups (most probable)",
+            [
+                "Code",
+                "Subgroup",
+                "Great group",
+                "Order",
+                "Cells/points",
+                "Share (%)",
+                "Mean top probability (%)",
+            ],
+            sub_rows or [["(not requested)"]],
         ),
         ("Notes (periods)", ["Note"], note_rows),
         ("Warnings", ["Warning"], warn_rows),

@@ -222,3 +222,52 @@ def band_description(
 
 def output_file_name(var: str, stat_tag: str, period: str) -> str:
     return f"olm_{var}_{stat_tag}_{period}.tif"
+
+
+# ----------------------------------------------------------------------
+# USDA subgroups (soil-type probability layers)
+# ----------------------------------------------------------------------
+
+SUBGROUP_FOLDER = "soil_types_v20250403"
+SUBGROUP_PERIOD = "2000-2022"
+SUBGROUP_VERSION = "v20250403"
+
+# Order from the great-group formative element (last letters of the name).
+_ORDER_SUFFIXES: tuple[tuple[str, str], ...] = (
+    ("alfs", "Alfisols"),
+    ("ands", "Andisols"),
+    ("ids", "Aridisols"),
+    ("ents", "Entisols"),
+    ("els", "Gelisols"),
+    ("ists", "Histosols"),
+    ("epts", "Inceptisols"),
+    ("olls", "Mollisols"),
+    ("ox", "Oxisols"),
+    ("ods", "Spodosols"),
+    ("ults", "Ultisols"),
+    ("erts", "Vertisols"),
+)
+
+
+def subgroup_url(name: str, scheme: str = "https") -> str:
+    return (
+        f"{scheme}://{HOST}/global-soil/{SUBGROUP_FOLDER}/soil.types_ensemble."
+        f"{name}_p_30m_s_20000101_20221231_g_epsg.4326_{SUBGROUP_VERSION}.tif"
+    )
+
+
+def subgroup_label(name: str) -> str:
+    """'typic.haplustalfs' -> 'Typic Haplustalfs'."""
+    return " ".join(w.capitalize() for w in name.replace(".", " ").split())
+
+
+def great_group(name: str) -> str:
+    return name.split(".")[-1].capitalize()
+
+
+def soil_order(name: str) -> str:
+    gg = name.split(".")[-1]
+    for suffix, order in _ORDER_SUFFIXES:
+        if gg.endswith(suffix):
+            return order
+    return "Unknown"

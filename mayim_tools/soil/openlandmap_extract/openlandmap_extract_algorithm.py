@@ -34,6 +34,7 @@ from mayim_tools.soil._common.export import (
     metadata_path_for,
     write_metadata_csv,
     write_multiband_geotiff,
+    write_paletted_style,
     write_points_csv,
 )
 from mayim_tools.soil._common.grid import check_area, make_grid
@@ -69,6 +70,7 @@ class OpenLandMapExtractAlgorithm(QgsProcessingAlgorithm):
     DEPTHS = "DEPTHS"
     PERIODS = "PERIODS"
     STATISTICS = "STATISTICS"
+    SUBGROUPS = "SUBGROUPS"
     OUTPUT_CRS = "OUTPUT_CRS"
     OUTPUT_RES = "OUTPUT_RES"
     MAX_AREA_KM2 = "MAX_AREA_KM2"
@@ -160,6 +162,13 @@ class OpenLandMapExtractAlgorithm(QgsProcessingAlgorithm):
             "16 times denser than 120 m). Raise it deliberately, or use 120 m "
             "output, for large areas.\n"
             "  Parallel downloads (advanced, default 8).\n"
+            "  USDA subgroup (optional): OpenLandMap publishes the probability of "
+            "each of 818 USDA soil-taxonomy subgroups at 30 m. The tool keeps "
+            "the most probable and second most probable subgroup per cell, with "
+            "their probabilities and the sum of all probabilities, in "
+            "olm_usda_subgroup_2000-2022.tif (band 1 = subgroup code, styled by "
+            "name) plus a lookup CSV. Reading 818 layers takes noticeably "
+            "longer. Treat as indicative where the top probability is low.\n"
             "\n"
             "Data: CC-BY 4.0. Cite Hengl et al. (2026), ESSD 18:989.\n"
         )
@@ -247,6 +256,14 @@ class OpenLandMapExtractAlgorithm(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
+            QgsProcessingParameterBoolean(
+                self.SUBGROUPS,
+                "Also map the most probable USDA soil subgroup (reads 818 "
+                "probability layers; slower)",
+                defaultValue=False,
+            )
+        )
+        self.addParameter(
             QgsProcessingParameterCrs(
                 self.OUTPUT_CRS, "Output CRS (area mode)", defaultValue="ProjectCrs"
             )
@@ -326,8 +343,11 @@ class OpenLandMapExtractAlgorithm(QgsProcessingAlgorithm):
         ]
         ru68 = cat.RU68 in stat_codes
         stats = [s for s in stat_codes if s != cat.RU68]
+        subgroups = self.parameterAsBoolean(parameters, self.SUBGROUPS, context)
         try:
-            return core.plan_selection(variables, depths, periods, stats, ru68)
+            return core.plan_selection(
+                variables, depths, periods, stats, ru68, subgroups=subgroups
+            )
         except core.SoilDataError as exc:
             raise QgsProcessingException(str(exc)) from exc
 
@@ -409,9 +429,67 @@ class OpenLandMapExtractAlgorithm(QgsProcessingAlgorithm):
         self._report(result, feedback)
         feedback.pushInfo(f"{len(result.files)} raster(s) written to {folder}")
         feedback.pushInfo(f"Metadata: {meta_path}")
+        sub_path = result.subgroup.get("file")
+        if sub_path:
+            self._subgroup_outputs(result, sub_path, feedback)
         if self.parameterAsBoolean(parameters, self.LOAD_LAYERS, context):
-            qgis_ui.load_rasters(context, result.load_files, self._post_processors)
+            qgis_ui.load_rasters(
+                context,
+                [p for p in result.load_files if p != sub_path],
+                self._post_processors,
+            )
+            if sub_path:
+                qgis_ui.load_rasters(
+                    context, [sub_path], self._post_processors, restyle=False
+                )
         return {self.OUTPUT_FOLDER: folder}
+
+    @staticmethod
+    def _subgroup_outputs(result, sub_path, feedback):
+        """Categorised style (band 1 = most probable subgroup code) and a
+        lookup table of the subgroups present."""
+        table = result.subgroup["table"]
+        write_paletted_style(
+            sub_path,
+            [(r["code"], f"{r['label']} ({r['order']})") for r in table],
+        )
+        lookup = Path(sub_path).with_name(Path(sub_path).stem + "_lookup.csv")
+        write_metadata_csv(
+            [
+                (
+                    "USDA subgroups present (most probable), largest first",
+                    [
+                        "Code",
+                        "Subgroup",
+                        "Great group",
+                        "Order",
+                        "Cells",
+                        "Share (%)",
+                        "Mean top probability (%)",
+                    ],
+                    [
+                        [
+                            r["code"],
+                            r["label"],
+                            r["great_group"],
+                            r["order"],
+                            r["cells"],
+                            round(r["share_pct"], 2),
+                            round(r["mean_probability"], 1),
+                        ]
+                        for r in table
+                    ],
+                )
+            ],
+            lookup,
+        )
+        if table:
+            main = table[0]
+            feedback.pushInfo(
+                f"USDA subgroups: {len(table)} present; most common "
+                f"{main['label']} ({main['share_pct']:.0f}% of cells, mean top "
+                f"probability {main['mean_probability']:.0f}%). Lookup: {lookup}"
+            )
 
     def _run_points(self, parameters, context, feedback, selection, common, gdal_ver):
         out_csv = self.parameterAsFileOutput(parameters, self.OUTPUT_CSV, context)

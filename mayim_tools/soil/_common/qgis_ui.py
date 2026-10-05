@@ -63,18 +63,20 @@ class BandOnePostProcessor(QgsProcessingLayerPostProcessorInterface):
             feedback.pushWarning(f"Could not set the display style: {exc}")
 
 
-def load_rasters(context, paths, keep_alive: list, name_fn=None) -> None:
-    """Queue rasters to load on completion with the band-1 style. The
-    post-processors are appended to ``keep_alive`` (QGIS needs a live
-    Python reference until they run)."""
+def load_rasters(context, paths, keep_alive: list, name_fn=None, restyle=True) -> None:
+    """Queue rasters to load on completion. With ``restyle`` the band-1 grey
+    style is applied by a post-processor (kept alive in ``keep_alive`` - QGIS
+    needs a live Python reference until it runs); without it the layer keeps
+    the style QGIS loads from the .qml beside the file."""
     for path in paths:
         name = Path(path).stem
         if name_fn is not None:
             name = name_fn(name)
         details = QgsProcessingContext.LayerDetails(name, context.project(), name)
-        processor = BandOnePostProcessor()
-        keep_alive.append(processor)
-        details.setPostProcessor(processor)
+        if restyle:
+            processor = BandOnePostProcessor()
+            keep_alive.append(processor)
+            details.setPostProcessor(processor)
         context.addLayerToLoadOnCompletion(path, details)
 
 

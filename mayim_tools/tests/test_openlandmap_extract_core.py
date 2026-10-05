@@ -633,3 +633,193 @@ def _ll(osr):
     s.ImportFromEPSG(4326)
     s.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
     return s
+
+
+# ----------------------------------------------------------------------
+# USDA subgroups
+# ----------------------------------------------------------------------
+
+from mayim_tools.soil.openlandmap_extract.soil_types import SUBGROUP_NAMES  # noqa: E402
+
+SOIL_TYPES_CSV = Path(__file__).parent / "data" / "openlandmap_soil_types.csv"
+
+
+def test_subgroup_urls_match_official_table_exactly():
+    with open(SOIL_TYPES_CSV, newline="", encoding="utf-8") as f:
+        official = {row["s3_path"] for row in csv.DictReader(f)}
+    built = {cat.subgroup_url(n) for n in SUBGROUP_NAMES}
+    assert len(SUBGROUP_NAMES) == 818
+    assert built == official
+
+
+def test_subgroup_names_and_orders():
+    assert cat.subgroup_label("typic.haplustalfs") == "Typic Haplustalfs"
+    assert cat.subgroup_label("ruptic-histic.aquiturbels") == (
+        "Ruptic-histic Aquiturbels"
+    )
+    assert cat.great_group("aquic.dystruderts") == "Dystruderts"
+    expected = {
+        "typic.haplustalfs": "Alfisols",
+        "typic.hapludands": "Andisols",
+        "typic.haplocambids": "Aridisols",
+        "typic.ustorthents": "Entisols",
+        "typic.haplorthels": "Gelisols",
+        "typic.haplosaprists": "Histosols",
+        "typic.haplustepts": "Inceptisols",
+        "typic.haplustolls": "Mollisols",
+        "typic.hapludox": "Oxisols",
+        "typic.haplorthods": "Spodosols",
+        "typic.haplustults": "Ultisols",
+        "typic.haplusterts": "Vertisols",
+    }
+    for name, order in expected.items():
+        assert cat.soil_order(name) == order, name
+    assert all(cat.soil_order(n) != "Unknown" for n in SUBGROUP_NAMES)
+
+
+def test_top2_update_nan_and_ties():
+    shape = (4,)
+    state = {
+        "p1": np.full(shape, -1.0),
+        "p2": np.full(shape, -1.0),
+        "code1": np.zeros(shape, dtype=np.int32),
+        "code2": np.zeros(shape, dtype=np.int32),
+        "psum": np.zeros(shape),
+        "n": np.zeros(shape, dtype=np.int32),
+    }
+    core.top2_update(state, np.array([10.0, 50.0, np.nan, 30.0]), 1)
+    core.top2_update(state, np.array([40.0, 50.0, np.nan, 20.0]), 2)
+    core.top2_update(state, np.array([20.0, 10.0, np.nan, 25.0]), 3)
+    assert state["code1"].tolist() == [2, 1, 0, 1]  # tie at cell 1: lower code
+    assert state["code2"].tolist() == [3, 2, 0, 3]
+    assert state["p1"].tolist()[:2] == [40.0, 50.0]
+    assert state["p2"].tolist()[3] == 25.0
+    assert state["psum"].tolist() == [70.0, 110.0, 0.0, 75.0]
+    assert state["n"].tolist() == [3, 3, 0, 3]
+
+
+HAPLUSTALFS = SUBGROUP_NAMES.index("typic.haplustalfs") + 1
+HAPLORTHODS = SUBGROUP_NAMES.index("typic.haplorthods") + 1
+
+
+def _subgroup_field(url, shape):
+    """Left half: Haplustalfs 60 %, Haplorthods 30 %; right half the reverse
+    (50 / 35); every other subgroup 0 %; top-left cell unmapped."""
+    left = np.zeros(shape, dtype=bool)
+    left[..., : shape[-1] // 2] = True
+    arr = np.zeros(shape)
+    if "typic.haplustalfs_p_" in url:
+        arr = np.where(left, 60.0, 35.0)
+    elif "typic.haplorthods_p_" in url:
+        arr = np.where(left, 30.0, 50.0)
+    arr = arr.astype(float)
+    arr.flat[0] = np.nan
+    return arr
+
+
+def subgroup_reader(source, grid, with_scale=False):
+    if "soil.types_ensemble." in source:
+        return _subgroup_field(source, (grid.height, grid.width)), None, None
+    return make_reader()(source, grid, with_scale)
+
+
+def test_plan_selection_subgroups_only():
+    sel = core.plan_selection([], [], [], [], subgroups=True)
+    assert sel.subgroups and sel.variables == []
+    with pytest.raises(core.SoilDataError, match="USDA subgroup option"):
+        core.plan_selection([], [], [], [])
+
+
+def test_area_subgroups(grid, tmp_path):
+    sel = core.plan_selection([], [], [], [], subgroups=True)
+    seen = []
+    result, writer = run_area(
+        grid,
+        tmp_path,
+        sel,
+        reader=subgroup_reader,
+        progress_fn=lambda f, m: seen.append(f),
+    )
+    bands, units = writer.files[core.SUBGROUP_FILE]
+    assert [b[0].split(" (")[0] for b in bands] == [
+        "usda_subgroup_code_rank1_2000-2022",
+        "usda_subgroup_probability_rank1_2000-2022",
+        "usda_subgroup_code_rank2_2000-2022",
+        "usda_subgroup_probability_rank2_2000-2022",
+        "usda_subgroup_probability_sum_2000-2022",
+    ]
+    code1, p1, code2, p2, psum = (b[1] for b in bands)
+    assert math.isnan(code1[0, 0]) and math.isnan(p1[0, 0])
+    assert code1[1, 0] == HAPLUSTALFS and p1[1, 0] == 60.0
+    assert code2[1, 0] == HAPLORTHODS and p2[1, 0] == 30.0
+    assert code1[1, -1] == HAPLORTHODS and p1[1, -1] == 50.0
+    assert psum[1, 0] == 90.0
+    table = result.subgroup["table"]
+    assert {r["code"] for r in table} == {HAPLUSTALFS, HAPLORTHODS}
+    assert table[0]["order"] in ("Alfisols", "Spodosols")
+    assert sum(r["cells"] for r in table) == result.subgroup["mapped"]
+    assert result.load_files[-1].endswith(core.SUBGROUP_FILE)
+    assert len(seen) > 800 and seen[-1] == 1.0
+
+
+def test_area_subgroups_with_properties_and_parallel_equals_sequential(grid, tmp_path):
+    sel = core.plan_selection(
+        ["soc"], ["0-30cm"], ["2020-2022"], ["mean30"], subgroups=True
+    )
+    r1, w1 = run_area(grid, tmp_path, sel, reader=subgroup_reader, workers=1)
+    r8, w8 = run_area(grid, tmp_path, sel, reader=subgroup_reader, workers=8)
+    assert set(w1.files) == {"olm_soc_mean_30m_2020-2022.tif", core.SUBGROUP_FILE}
+    a = [b[1] for b in w1.files[core.SUBGROUP_FILE][0]]
+    b = [b[1] for b in w8.files[core.SUBGROUP_FILE][0]]
+    assert all(np.array_equal(x, y, equal_nan=True) for x, y in zip(a, b, strict=True))
+    assert r1.subgroup["table"] == r8.subgroup["table"]
+
+
+def test_points_subgroups():
+    def sampler(source, lonlats, with_scale=False):
+        if "soil.types_ensemble." in source:
+            arr = _subgroup_field(source, (1, 2 * len(lonlats)))
+            # site 0 -> left column 0 (unmapped by construction), site 1 -> col 1
+            values = [float(arr[0, i]) for i in range(len(lonlats))]
+            return values, None, None
+        return make_sampler()(source, lonlats, with_scale)
+
+    sel = core.plan_selection([], [], [], [], subgroups=True)
+    result = run_points(sel, sampler=sampler)
+    rows = [r for r in result.rows if r["Variable"] == "usda_subgroup"]
+    assert len(rows) == 4  # 2 ranks x 2 sites
+    site_b = [r for r in rows if r["Site"] == "B"]
+    assert "Typic Haplustalfs" in site_b[0]["Description"]
+    assert "Alfisols" in site_b[0]["Description"]
+    assert site_b[0]["Value"] == 60.0 and site_b[1]["Value"] == 30.0
+    assert site_b[0]["DepthTop_cm"] == "" and site_b[0]["Period"] == "2000-2022"
+    site_a = [r for r in rows if r["Site"] == "A"]
+    assert site_a[0]["Description"] == "not mapped"
+    assert math.isnan(site_a[0]["Value"])
+
+
+def test_metadata_subgroup_section(grid, tmp_path):
+    sel = core.plan_selection([], [], [], [], subgroups=True)
+    result, _ = run_area(grid, tmp_path, sel, reader=subgroup_reader)
+    sections = core.build_metadata(result, sel, {}, "3.13")
+    sub = next(s for s in sections if s[0].startswith("USDA subgroups"))
+    labels = [row[1] for row in sub[2]]
+    assert "Typic Haplustalfs" in labels and "(all mapped cells)" in labels
+    run = dict(sections[0][2])
+    assert "818" in run["USDA subgroups"]
+
+
+def test_paletted_style(tmp_path):
+    import xml.etree.ElementTree as ET
+
+    from mayim_tools.soil._common.export import class_colour, write_paletted_style
+
+    qml = write_paletted_style(
+        tmp_path / "s.tif", [(5, 'Typic "A" & B'), (812, "Lithic C")]
+    )
+    root = ET.parse(qml).getroot()
+    renderer = root.find("pipe/rasterrenderer")
+    assert renderer.get("type") == "paletted" and renderer.get("band") == "1"
+    entries = [(e.get("value"), e.get("label")) for e in root.iter("paletteEntry")]
+    assert entries == [("5", 'Typic "A" & B'), ("812", "Lithic C")]
+    assert class_colour(5) == class_colour(5) != class_colour(6)

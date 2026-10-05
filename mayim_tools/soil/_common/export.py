@@ -113,6 +113,52 @@ def write_style_sidecar(path: str | Path, band1: np.ndarray) -> Path:
     return qml
 
 
+_PALETTED_QML = """<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTEM'>
+<qgis version="3.40.0" styleCategories="AllStyleCategories">
+  <pipe>
+    <rasterrenderer type="paletted" band="{band}" opacity="1" alphaBand="-1"
+     nodataColor="">
+      <rasterTransparency/>
+      <colorPalette>
+{entries}
+      </colorPalette>
+    </rasterrenderer>
+    <brightnesscontrast brightness="0" contrast="0" gamma="1"/>
+    <rasterresampler maxOversampling="2"/>
+  </pipe>
+  <blendMode>0</blendMode>
+</qgis>
+"""
+
+
+def class_colour(code: int) -> str:
+    """Stable, well-spread colour for a class code (golden-angle hues)."""
+    import colorsys
+
+    hue = (code * 0.618033988749895) % 1.0
+    sat = 0.55 + 0.35 * ((code * 7) % 3) / 2
+    val = 0.75 + 0.2 * ((code * 5) % 2)
+    r, g, b = colorsys.hsv_to_rgb(hue, sat, val)
+    return f"#{int(r * 255):02x}{int(g * 255):02x}{int(b * 255):02x}"
+
+
+def write_paletted_style(
+    path: str | Path, classes: list[tuple[int, str]], band: int = 1
+) -> Path:
+    """Write <raster>.qml with a paletted (categorised) renderer: one entry
+    per (value, label), stable colours by value."""
+    from xml.sax.saxutils import quoteattr
+
+    lines = [
+        f'        <paletteEntry value="{value}" color="{class_colour(value)}" '
+        f'alpha="255" label={quoteattr(label)}/>'
+        for value, label in classes
+    ]
+    qml = Path(path).with_suffix(".qml")
+    qml.write_text(_PALETTED_QML.format(band=band, entries="\n".join(lines)), "utf-8")
+    return qml
+
+
 def write_points_csv(
     rows: list[dict], path: str | Path, columns: list[str]
 ) -> tuple[int, int]:
