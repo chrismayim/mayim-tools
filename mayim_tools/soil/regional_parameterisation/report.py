@@ -25,7 +25,14 @@ from mayim_tools._common.docx_report import (
 )
 
 from . import fill as fill_mod
-from .ptf import METHOD_BY_CODE, PARAMETER_BY_CODE, PARAMETERS, rawls_1983, saxton_rawls
+from .ptf import (
+    METHOD_BY_CODE,
+    PARAMETER_BY_CODE,
+    PARAMETERS,
+    rawls_1983,
+    saxton_rawls,
+    toth2015,
+)
 from .texture import (
     CLASS_ABBR,
     CLASS_NAME,
@@ -34,7 +41,7 @@ from .texture import (
     ternary_xy,
     usda_class,
 )
-from .uncertainty import KSAT_ROBUST_RATIO, TEXTURE_ROBUST_SHARE, VARIANCE_PARTS
+from .uncertainty import VARIANCE_PARTS
 
 REPORT_TITLE = "Regional Soil Parameterisation"
 KEY_PARAMS = ("theta_s", "theta_fc", "theta_wp", "paw", "ksat", "psi_f")
@@ -44,8 +51,9 @@ SOURCE_COLOURS = {
     fill_mod.SOURCE_SG2017: "#1baf7a",
     fill_mod.SOURCE_NEIGHBOUR: "#b07ad6",
 }
-ROBUST_COLOURS = {0: "#d9534f", 1: "#f0ad4e", 2: "#5bc0de", 3: "#1baf7a"}
-ROBUST_SHORT = {0: "Neither", 1: "Texture only", 2: "Ksat only", 3: "Both"}
+CONF_COLOURS = {1: "#1baf7a", 2: "#5bc0de", 3: "#f0ad4e", 4: "#d9534f"}
+KSAT_SHORT = {1: "x/÷ ≤ 2", 2: "x/÷ 2-4", 3: "x/÷ 4-10", 4: "x/÷ > 10"}
+TEX_SHORT = {1: "≥ 80 %", 2: "60-80 %", 3: "40-60 %", 4: "< 40 %"}
 
 REFERENCES = [
     "Aitchison, J. (1986). The Statistical Analysis of Compositional Data. "
@@ -85,6 +93,19 @@ REFERENCES = [
     "Saxton, K.E. and Rawls, W.J. (2006). Soil water characteristic "
     "estimates by texture and organic matter for hydrologic solutions. Soil "
     "Science Society of America Journal 70: 1569-1578.",
+    "Morel-Seytoux, H.J., Meyer, P.D., Nachabe, M., Touma, J., van Genuchten, "
+    "M.Th. and Lenhard, R.J. (1996). Parameter equivalence for the Brooks-Corey "
+    "and van Genuchten soil characteristics: preserving the effective capillary "
+    "drive. Water Resources Research 32(5): 1251-1258.",
+    "Simons, G.W.H., Koster, R. and Droogers, P. (2020). HiHydroSoil v2.0 - A "
+    "high resolution soil map of global hydraulic properties. FutureWater "
+    "Report 213, Wageningen.",
+    "Tóth, B., Weynants, M., Nemes, A., Makó, A., Bilas, G. and Tóth, G. "
+    "(2015). New generation of hydraulic pedotransfer functions for Europe. "
+    "European Journal of Soil Science 66: 226-238.",
+    "van Genuchten, M.Th. (1980). A closed-form equation for predicting the "
+    "hydraulic conductivity of unsaturated soils. Soil Science Society of "
+    "America Journal 44: 892-898.",
     "Soil Science Division Staff (2017). Soil Survey Manual. USDA Handbook "
     "18. Government Printing Office, Washington, D.C.",
 ]
@@ -429,28 +450,30 @@ def _profiles(result, zone):
 
 
 def _box_by_product(result, lab):
-    """Distribution of cell values per product (central soils) and the
-    ensemble median, for Ksat and the Green-Ampt suction, with the Rawls
-    et al. (1983) value of the dominant class."""
-    fig = new_figure(7.0)
+    """Distribution over cells of each product x method central soil and of
+    the pooled ensemble median, for Ksat, the Green-Ampt suction and field
+    capacity."""
+    fig = new_figure(7.5)
     zone_mask = result.zone_raster > 0
+    short = {"SoilGrids 2.0": "SG", "OpenLandMap-soildb": "OLM"}
+    mshort = {"SR2006": "S&R", "TOTH2015": "Tóth"}
     for i, code in enumerate(("ksat", "psi_f", "theta_fc"), start=1):
         ax = fig.add_subplot(1, 3, i)
         data, names = [], []
         for p in result.products:
-            c = result.central.get(p.name, {}).get(lab)
-            if not c:
-                continue
-            if code not in c:
-                continue
-            v = c[code][zone_mask]
-            data.append(v[np.isfinite(v)])
-            names.append(
-                {"SoilGrids 2.0": "SG", "OpenLandMap-soildb": "OLM"}.get(p.name, p.name)
-            )
+            by = result.central.get(p.name, {}).get(lab, {}).get("by_method", {})
+            for mcode, vals in by.items():
+                if code not in vals:
+                    continue
+                v = vals[code][zone_mask]
+                v = v[np.isfinite(v)]
+                if not v.size:
+                    continue
+                data.append(v)
+                names.append(f"{short.get(p.name, p.name)}\n{mshort.get(mcode, mcode)}")
         v = result.stats[code][lab][1][zone_mask]
         data.append(v[np.isfinite(v)])
-        names.append("Ensemble")
+        names.append("Pooled")
         data = [d if d.size else np.array([np.nan]) for d in data]
         ax.boxplot(data, showfliers=False, widths=0.5, medianprops={"color": C_ORANGE})
         ax.set_xticks(range(1, len(names) + 1))
@@ -464,7 +487,7 @@ def _box_by_product(result, lab):
             if allv.size:
                 _log_ticks(ax.yaxis, np.percentile(allv, 1), np.percentile(allv, 99))
         ax.set_ylabel(f"{code} ({prm.units})")
-        ax.tick_params(axis="x", labelsize=7)
+        ax.tick_params(axis="x", labelsize=6)
         style_axes(ax)
     fig.tight_layout()
     return png(fig)
@@ -514,6 +537,55 @@ def _short_source(text: str) -> str:
     return text
 
 
+def core_density_warning() -> str:
+    from .core import DENSITY_WARNING
+
+    return DENSITY_WARNING
+
+
+def _product_medians_table(d, result, lab) -> None:
+    """Each product's central-soil medians next to the pooled ensemble, so
+    product disagreement is visible beside the pooled range."""
+    zone = result.zone_names[0]
+    cols = []
+    for p in result.products:
+        for m in result.settings.mc.methods:
+            cols.append(
+                (
+                    f"{SHORT_PRODUCT.get(p.name, p.name)} ({m})",
+                    f"{SHORT_CODE.get(p.name, p.name)} central ({m})",
+                )
+            )
+    if not cols:
+        return
+    rows = []
+    for code in KEY_PARAMS:
+        r = _row(result, zone, lab, code)
+        if r is None:
+            continue
+        prm = PARAMETER_BY_CODE[code]
+        fmt = (
+            (lambda v: _sig(v, 3))
+            if prm.log
+            else (lambda v, nd=prm.decimals: _f(v, nd))
+        )
+        rows.append(
+            [f"{code} ({prm.units})"]
+            + [fmt(r.get(key)) for _, key in cols]
+            + [fmt(r["Median of P50"])]
+        )
+    d.caption(
+        "Table",
+        f"{zone}, {lab}: median of each product's central soil and of the pooled "
+        "ensemble",
+    )
+    d.table(["Parameter"] + [c for c, _ in cols] + ["Pooled P50"], rows)
+
+
+SHORT_PRODUCT = {"SoilGrids 2.0": "SoilGrids", "OpenLandMap-soildb": "OpenLandMap"}
+SHORT_CODE = {"SoilGrids 2.0": "SG", "OpenLandMap-soildb": "OLM"}
+
+
 def _figure(d, builder, caption, notes):
     try:
         d.picture(builder(), caption)
@@ -545,7 +617,7 @@ def write_report(result, path: str) -> None:
         f"covering {_f(area, 1)} km2, for the depth layers "
         f"{', '.join(labs)}. The inputs are global soil maps from "
         f"{' and '.join(names)}, harmonised to these layers on a "
-        f"{_f(g.res, 0) if g.res >= 1 else _sig(g.res)} grid. Parameters were "
+        f"{_f(g.res, 0) if g.res >= 1 else _sig(g.res)} (map units) grid. Parameters were "
         f"estimated with {', '.join(m.name for m in methods)} and their "
         f"uncertainty was propagated by Monte Carlo simulation ({mc.draws} draws "
         f"per cell and product). Rawls, Brakensiek & Miller (1983) texture-class "
@@ -563,17 +635,20 @@ def write_report(result, path: str) -> None:
             [zone] + [_value_range(_row(result, zone, top, c), c) for c in KEY_PARAMS]
         )
     d.table(hdr, rows)
-    d.label("Robustness")
+    _product_medians_table(d, result, top)
+    d.label("Confidence")
     for t in result.zone_texture:
         if t["Layer"] != top:
             continue
         d.bullet(
             f"{t['Zone']} ({top}): dominant texture class {t['Dominant class']} "
-            f"({_pct(t['Dominant share (%)'])} % of cells); the texture class is "
-            f"robust (same class in at least {TEXTURE_ROBUST_SHARE:.0%} of the draws) "
-            f"in {_pct(t['Texture robust (%)'])} % of cells, and the Ksat range "
-            f"(P95/P5 <= {KSAT_ROBUST_RATIO:g}, i.e. within one Ksat class) in "
-            f"{_pct(t['Ksat robust (%)'])} % of cells."
+            f"({_pct(t['Dominant share (%)'])} % of cells). The median cell's Ksat "
+            f"is uncertain by a factor of {_sig(t['Median Ksat factor (x/÷)'], 2)} "
+            "either way (90 % range = median x/÷ that factor); "
+            f"{_pct(t['Ksat class 1 (%)'])} % of cells are within x/÷2 and "
+            f"{_pct(t['Ksat class 4 (%)'])} % are uncertain by more than x/÷10. "
+            f"The texture class holds in at least 80 % of the draws in "
+            f"{_pct(t['Texture confidence 1 (%)'])} % of cells."
         )
     d.label("Main caveats")
     d.bullet(
@@ -891,48 +966,89 @@ def write_report(result, path: str) -> None:
         "method runs on every Monte Carlo draw. A method is used outside its "
         "calibration range only with a flag (validity flags, rsp_quality.tif)."
     )
-    d.heading("5.1 Saxton & Rawls (2006)", 3)
-    d.para(
-        "Calibration data: A-horizon samples of the USDA/NRCS National Soil "
-        "Characterization database; 2149 samples reduced to 1722 by excluding "
-        "bulk density below 1.0 or above 1.8 g/cm3, organic matter above 8 % "
-        "and clay above 60 %. Reported fit: θ1500 R² = 0.86, θ33 R² = 0.63, "
-        "θS-33 R² = 0.36, air-entry tension R² = 0.78 (standard error 2.9 kPa). "
-        "Inputs: sand S and clay C (decimal, USDA), organic matter OM (%). "
-        "Water contents are decimal volume fractions."
-    )
-    eq = [
-        ("1", "θ1500t = -0.024S + 0.487C + 0.006OM + 0.005(S·OM) - 0.013(C·OM) + 0.068(S·C) + 0.031;  θ1500 = θ1500t + (0.14θ1500t - 0.02)"),
-        ("2", "θ33t = -0.251S + 0.195C + 0.011OM + 0.006(S·OM) - 0.027(C·OM) + 0.452(S·C) + 0.299;  θ33 = θ33t + (1.283θ33t² - 0.374θ33t - 0.015)"),
-        ("3", "θ(S-33)t = 0.278S + 0.034C + 0.022OM - 0.018(S·OM) - 0.027(C·OM) - 0.584(S·C) + 0.078;  θS-33 = θ(S-33)t + (0.636θ(S-33)t - 0.107)"),
-        ("4", "ψet = -21.67S - 27.93C - 81.97θS-33 + 71.12(S·θS-33) + 8.29(C·θS-33) + 14.05(S·C) + 27.16;  ψe = ψet + (0.02ψet² - 0.113ψet - 0.70)  [kPa]"),
-        ("5", "θS = θ33 + θS-33 - 0.097S + 0.043"),
-        ("6", "ρN = (1 - θS) · 2.65  [g/cm3]"),
-        ("7-10", "Density adjustment (optional): DF = ρ/ρN limited to 0.9-1.3; θS-DF = 1 - ρN·DF/2.65; θ33-DF = θ33 - 0.2(θS - θS-DF)"),
-        ("14-15", "B = [ln 1500 - ln 33] / [ln θ33 - ln θ1500];  A = exp(ln 33 + B ln θ33)"),
-        ("16", "Ksat = 1930 (θS - θ33)^(3 - λ)  [mm/h]"),
-        ("18", "λ = 1 / B"),
-        ("19-22", "Gravel (optional): Rv = αRw / [1 - Rw(1 - α)], α = ρ/2.65; Kb/Ks = (1 - Rw) / [1 - Rw(1 - 3α/2)]; PAWB = PAW(1 - Rv)"),
-    ]  # fmt: skip
-    d.caption(
-        "Table",
-        "Saxton & Rawls (2006) equations used (numbers as in the paper's Table 1)",
-    )
-    d.table(["Eq.", "Equation"], [list(e) for e in eq], widths_cm=[1.6, 14.4])
-    d.para(
-        "Verification: the implementation reproduces the paper's Table 3 "
-        "(twelve texture-class examples at 2.5 % OM) exactly for wilting "
-        "point, field capacity, saturation, plant-available water, Ksat and "
-        "normal density; this is part of the automated test suite."
-    )
-    d.para(
-        f"Air-entry tension: Eq. 4 returns values near or below zero for sands "
-        f"(-0.96 kPa for the paper's sand example). ψe is therefore bounded below "
-        f"at {saxton_rawls.YE_MIN_KPA:g} kPa, the geometric-mean bubbling "
-        "pressure of sand (7.26 cm; Rawls, Brakensiek & Saxton, 1982); such "
-        "cells carry validity flag 16."
-    )
-    d.heading("5.2 Green-Ampt wetting-front suction", 3)
+    sec = 0
+    if "SR2006" in mc.methods:
+        sec += 1
+        d.heading(f"5.{sec} Saxton & Rawls (2006)", 3)
+        d.para(
+            "Calibration data: A-horizon samples of the USDA/NRCS National Soil "
+            "Characterization database; 2149 samples reduced to 1722 by excluding "
+            "bulk density below 1.0 or above 1.8 g/cm3, organic matter above 8 % "
+            "and clay above 60 %. Reported fit: θ1500 R² = 0.86, θ33 R² = 0.63, "
+            "θS-33 R² = 0.36, air-entry tension R² = 0.78 (standard error 2.9 kPa). "
+            "Inputs: sand S and clay C (decimal, USDA), organic matter OM (%). "
+            "Water contents are decimal volume fractions."
+        )
+        eq = [
+            ("1", "θ1500t = -0.024S + 0.487C + 0.006OM + 0.005(S·OM) - 0.013(C·OM) + 0.068(S·C) + 0.031;  θ1500 = θ1500t + (0.14θ1500t - 0.02)"),
+            ("2", "θ33t = -0.251S + 0.195C + 0.011OM + 0.006(S·OM) - 0.027(C·OM) + 0.452(S·C) + 0.299;  θ33 = θ33t + (1.283θ33t² - 0.374θ33t - 0.015)"),
+            ("3", "θ(S-33)t = 0.278S + 0.034C + 0.022OM - 0.018(S·OM) - 0.027(C·OM) - 0.584(S·C) + 0.078;  θS-33 = θ(S-33)t + (0.636θ(S-33)t - 0.107)"),
+            ("4", "ψet = -21.67S - 27.93C - 81.97θS-33 + 71.12(S·θS-33) + 8.29(C·θS-33) + 14.05(S·C) + 27.16;  ψe = ψet + (0.02ψet² - 0.113ψet - 0.70)  [kPa]"),
+            ("5", "θS = θ33 + θS-33 - 0.097S + 0.043"),
+            ("6", "ρN = (1 - θS) · 2.65  [g/cm3]"),
+            ("7-10", "Density adjustment (optional): DF = ρ/ρN limited to 0.9-1.3; θS-DF = 1 - ρN·DF/2.65; θ33-DF = θ33 - 0.2(θS - θS-DF)"),
+            ("14-15", "B = [ln 1500 - ln 33] / [ln θ33 - ln θ1500];  A = exp(ln 33 + B ln θ33)"),
+            ("16", "Ksat = 1930 (θS - θ33)^(3 - λ)  [mm/h]"),
+            ("18", "λ = 1 / B"),
+            ("19-22", "Gravel (optional): Rv = αRw / [1 - Rw(1 - α)], α = ρ/2.65; Kb/Ks = (1 - Rw) / [1 - Rw(1 - 3α/2)]; PAWB = PAW(1 - Rv)"),
+        ]  # fmt: skip
+        d.caption(
+            "Table",
+            "Saxton & Rawls (2006) equations used (numbers as in the paper's Table 1)",
+        )
+        d.table(["Eq.", "Equation"], [list(e) for e in eq], widths_cm=[1.6, 14.4])
+        d.para(
+            "Verification: the implementation reproduces the paper's Table 3 "
+            "(twelve texture-class examples at 2.5 % OM) exactly for wilting "
+            "point, field capacity, saturation, plant-available water, Ksat and "
+            "normal density; this is part of the automated test suite."
+        )
+        d.para(
+            f"Air-entry tension: Eq. 4 returns values near or below zero for sands "
+            f"(-0.96 kPa for the paper's sand example). ψe is therefore bounded below "
+            f"at {saxton_rawls.YE_MIN_KPA:g} kPa, the geometric-mean bubbling "
+            "pressure of sand (7.26 cm; Rawls, Brakensiek & Saxton, 1982); such "
+            "cells carry validity flag 16."
+        )
+    if "TOTH2015" in mc.methods:
+        sec += 1
+        d.heading(f"5.{sec} Tóth et al. (2015) / HiHydroSoil v2.0", 3)
+        d.para(
+            "European continuous pedotransfer functions (Tóth et al., 2015), "
+            "calibrated on the EU-HYDI database of European soils. They are the "
+            "method behind the global HiHydroSoil v2.0 maps (Simons et al., "
+            "2020), which applied them to SoilGrids; this tool applies them to "
+            "the harmonised inputs and adds the Monte Carlo uncertainty. The "
+            "retention curve is Mualem-van Genuchten (van Genuchten, 1980). "
+            "Inputs: clay and silt (%, USDA limits), organic carbon OC (%), "
+            "bulk density BD (g/cm3), pH in water and CEC (cmol(c)/kg); T/S = 1 "
+            "for topsoil (0-30 cm) and 0 below."
+        )
+        teq = [
+            ("θr", "0.041 if sand >= 2 %, else 0.179  [m3/m3]"),
+            ("θs", "0.83080 - 0.28217 BD + 0.0002728 Cl + 0.000187 Si  [m3/m3]"),
+            ("α", "log10 α = -0.43348 - 0.41729 BD - 0.04762 OC + 0.21810 T/S - 0.01581 Cl - 0.01207 Si  [1/cm]"),
+            ("n", "log10 (n - 1) = 0.22236 - 0.30189 BD - 0.05558 T/S - 0.005306 Cl - 0.003084 Si - 0.01072 OC"),
+            ("Ksat", "log10 Ksat = 0.40220 + 0.26122 pH + 0.44565 T/S - 0.02329 Cl - 0.01265 Si - 0.01038 CEC  [cm/day]"),
+            ("θ(h)", "θr + (θs - θr) / [1 + (α h)^n]^(1 - 1/n);  h = 336.5 cm (33 kPa), 15296 cm (1500 kPa)"),
+        ]  # fmt: skip
+        d.caption("Table", "Tóth et al. (2015) equations as used in HiHydroSoil v2.0")
+        d.table(["Output", "Equation"], [list(e) for e in teq], widths_cm=[1.6, 14.4])
+        d.para(
+            "Verification: every coefficient was checked against the "
+            "HiHydroSoil v2.0 report (Simons et al., 2020, pp. 7-8). Two "
+            "deliberate differences from the HiHydroSoil product: field "
+            "capacity is θ at 33 kPa here (HiHydroSoil publishes pF2, about 10 "
+            "kPa, which gives wetter values), and the 0-30 cm Ksat is computed "
+            "from layer-averaged inputs (HiHydroSoil averages the depth values "
+            "harmonically). Ksat needs CEC, which only SoilGrids provides; "
+            "with both products the OpenLandMap member uses the SoilGrids CEC. "
+            "Calibration region: Europe. Applied elsewhere, the functions "
+            "extrapolate, and their spread against the other method is part of "
+            "the reported uncertainty."
+        )
+    sec += 1
+    d.heading(f"5.{sec} Green-Ampt wetting-front suction", 3)
     d.para(
         "For Brooks-Corey type methods the wetting-front suction follows from "
         "the air-entry (bubbling) suction ψb and the pore-size distribution "
@@ -940,7 +1056,13 @@ def write_report(result, path: str) -> None:
     )
     d.para("ψf = (2 + 3λ) / (1 + 3λ) · ψb / 2")
     d.para(
-        "with ψb = ψe of Saxton & Rawls (kPa x 101.97 = mm). The Green-Ampt "
+        "with ψb = ψe of Saxton & Rawls (kPa x 101.97 = mm). For van Genuchten "
+        "methods (Tóth et al.) ψf is the effective capillary drive of the "
+        "Mualem conductivity curve, in the closed form of Morel-Seytoux et al. "
+        "(1996): ψf = (1/α)(0.046m + 2.07m² + 19.5m³)/(1 + 4.7m + 16m²), m = "
+        "1 - 1/n; the test suite checks it against numerical integration "
+        "(within 2 %). The two definitions differ: the Brooks-Corey form "
+        "follows the air-entry suction and gives larger values. The Green-Ampt "
         "moisture deficit, Δθ = effective porosity - initial water content, "
         "depends on antecedent conditions and is set in the infiltration "
         "model, not here. Saxton & Rawls have no residual water content, so "
@@ -948,7 +1070,8 @@ def write_report(result, path: str) -> None:
         "effective conductivity of about 0.5 Ksat for the wetted zone "
         "(Bouwer, 1966); the Ksat outputs are not reduced."
     )
-    d.heading("5.3 Reference check: Rawls, Brakensiek & Miller (1983)", 3)
+    sec += 1
+    d.heading(f"5.{sec} Reference check: Rawls, Brakensiek & Miller (1983)", 3)
     d.para(
         "Green-Ampt parameters tabulated per USDA texture class (as reproduced "
         "in Chow et al., 1988, Table 4.3.1) are compared with the tool's "
@@ -971,17 +1094,20 @@ def write_report(result, path: str) -> None:
             for c, v in rawls_1983.RAWLS_1983.items()
         ],
     )
-    d.heading("5.4 Validity flags", 3)
+    sec += 1
+    d.heading(f"5.{sec} Validity flags", 3)
     d.table(
         ["Bit", "Meaning"],
-        [[str(k), v] for k, v in saxton_rawls.FLAG_LABELS.items()],
+        [
+            [str(k), v]
+            for k, v in {**saxton_rawls.FLAG_LABELS, **toth2015.FLAG_LABELS}.items()
+        ],
         widths_cm=[1.6, 14.4],
     )
     d.para(
         "Flags are evaluated on each product's central soil and combined. "
-        "Additional ensemble members (Rosetta3, HYPRES, Rawls & Brakensiek "
-        "1985, Hodnett & Tomasella 2002) are planned; with a single method "
-        "the method share of the uncertainty is zero by construction."
+        "With a single method the method share of the uncertainty is zero by "
+        "construction; select both methods to see the method spread."
     )
 
     # 6. Uncertainty ------------------------------------------------------------
@@ -1015,12 +1141,15 @@ def write_report(result, path: str) -> None:
         "the products' own interval estimates are taken at face value."
     )
     d.para(
-        f"Robustness per cell: the texture class is robust when the most "
-        f"frequent class holds in at least {TEXTURE_ROBUST_SHARE:.0%} of the "
-        f"draws; Ksat is robust when P95/P5 <= {KSAT_ROBUST_RATIO:g}, i.e. the "
-        "90 % range stays within one Ksat class (the NRCS Ksat class limits "
-        "used for hydrologic soil groups are a factor of about 4 apart)."
+        "Confidence per cell is graded rather than pass/fail. Ksat: the "
+        "uncertainty factor F = √(P95/P5), so the 90 % range is the median "
+        "multiplied or divided by F; classes F ≤ 2 (the range stays within one "
+        "NRCS Ksat class, which are about a factor 4 apart), 2-4, 4-10 and > 10. "
+        "Texture: the share of the draws that fall in the most frequent USDA "
+        "class; classes ≥ 80 %, 60-80 %, 40-60 % and < 40 %."
     )
+    if mc.density:
+        d.para(core_density_warning(), bold_lead="Density adjustment:")
 
     # 7. Results ------------------------------------------------------------
     d.heading("7. Results", 2)
@@ -1070,7 +1199,7 @@ def write_report(result, path: str) -> None:
     _figure(
         d,
         lambda: _box_by_product(result, top),
-        f"Distribution over cells per product (central soils) and the ensemble median, {top}",
+        f"Distribution over cells per product and method (central soils) and the pooled median, {top}",
         notes,
     )
     for lab in labs[:1]:
@@ -1109,23 +1238,52 @@ def write_report(result, path: str) -> None:
         ],
         tex_rows,
     )
-    rob_panels = [(result.robust[lab], lab) for lab in labs]
     _figure(
         d,
-        lambda: _categorical_maps(result, rob_panels, ROBUST_COLOURS, ROBUST_SHORT),
-        "Robustness of the texture class and the Ksat class",
+        lambda: _categorical_maps(
+            result,
+            [(result.ksat_class[lab], lab) for lab in labs],
+            CONF_COLOURS,
+            KSAT_SHORT,
+        ),
+        "Ksat uncertainty class (90 % range = median x/÷ factor)",
         notes,
     )
-    d.caption("Table", "Robustness per zone and layer (% of cells)")
+    _figure(
+        d,
+        lambda: _categorical_maps(
+            result,
+            [(result.texture_conf[lab], lab) for lab in labs],
+            CONF_COLOURS,
+            TEX_SHORT,
+        ),
+        "Texture class confidence (share of draws in the most frequent class)",
+        notes,
+    )
+    d.caption("Table", "Confidence per zone and layer (% of cells)")
     d.table(
-        ["Zone", "Layer", "Texture robust", "Ksat robust", "Both"],
+        [
+            "Zone",
+            "Layer",
+            "Ksat factor (median)",
+            "Ksat x/÷ ≤ 2",
+            "x/÷ 2-4",
+            "x/÷ 4-10",
+            "x/÷ > 10",
+            "Texture ≥ 80 %",
+            "Texture < 40 %",
+        ],
         [
             [
                 t["Zone"],
                 t["Layer"],
-                _pct(t["Texture robust (%)"]),
-                _pct(t["Ksat robust (%)"]),
-                _pct(t["Both robust (%)"]),
+                _sig(t["Median Ksat factor (x/÷)"], 2),
+                _pct(t["Ksat class 1 (%)"]),
+                _pct(t["Ksat class 2 (%)"]),
+                _pct(t["Ksat class 3 (%)"]),
+                _pct(t["Ksat class 4 (%)"]),
+                _pct(t["Texture confidence 1 (%)"]),
+                _pct(t["Texture confidence 4 (%)"]),
             ]
             for t in result.zone_texture
         ],

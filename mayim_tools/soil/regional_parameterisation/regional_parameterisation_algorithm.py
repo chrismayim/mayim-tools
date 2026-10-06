@@ -33,6 +33,7 @@ from mayim_tools.soil._common.errors import SoilDataError
 
 from . import core
 from .inputs import TARGET_LAYERS
+from .ptf import AVAILABLE_METHODS
 from .texture import TEXTURE_CLASSES
 from .uncertainty import Settings
 
@@ -50,6 +51,7 @@ MAIN_FILES = {"rsp_ksat", "rsp_psi_f", "rsp_theta_s", "rsp_texture_class"}
 
 
 class RegionalSoilParameterisationAlgorithm(QgsProcessingAlgorithm):
+    METHODS = "METHODS"
     SG_FOLDER = "SG_FOLDER"
     OLM_FOLDER = "OLM_FOLDER"
     ZONES = "ZONES"
@@ -100,8 +102,9 @@ class RegionalSoilParameterisationAlgorithm(QgsProcessingAlgorithm):
             "outputs of 'Extract: SoilGrids 2.0' and/or 'Extract: OpenLandMap "
             "Soils': water content at saturation, field capacity (33 kPa) and "
             "wilting point (1500 kPa), plant-available water, saturated "
-            "hydraulic conductivity (Ksat), Brooks-Corey parameters and the "
-            "Green-Ampt wetting-front suction - each as a median (P50) with a "
+            "hydraulic conductivity (Ksat), Brooks-Corey and van Genuchten "
+            "parameters and the Green-Ampt wetting-front suction - each as a "
+            "median (P50) with a "
             "90 % range (P05-P95). A detailed Word report documents the data, "
             "methods, uncertainty and checks.\n"
             "\n"
@@ -109,8 +112,9 @@ class RegionalSoilParameterisationAlgorithm(QgsProcessingAlgorithm):
             "(both is best: each product is an ensemble member, their "
             "disagreement is reported and included in the uncertainty, and each "
             "fills the other's gaps). Needed in the folders: sand, silt, clay and "
-            "SOC; bulk density and coarse fragments (SoilGrids) are used by the "
-            "optional adjustments; mapped water contents (SoilGrids wv0033/"
+            "SOC; bulk density is needed by Tóth et al., and pH and CEC by its "
+            "Ksat (CEC: SoilGrids only); coarse fragments (SoilGrids) are used by "
+            "the optional gravel correction; mapped water contents (SoilGrids wv0033/"
             "wv1500, OpenLandMap 250 m) are used for checks. Bands are found by "
             "their descriptions, so any depth/statistic selection works if the "
             "depths cover the target layers.\n"
@@ -120,7 +124,9 @@ class RegionalSoilParameterisationAlgorithm(QgsProcessingAlgorithm):
             "SoilGrids 2017 means, then neighbours. (3-4) Monte Carlo: each cell "
             "draws inputs from the products' own uncertainty (texture sampled as "
             "a composition so every draw sums to 100 %) and runs every method "
-            "(Saxton & Rawls 2006 in this version; more methods to follow). "
+            "chosen: Saxton & Rawls (2006), Tóth et al. (2015) as used in "
+            "HiHydroSoil v2.0, or both (default; the method spread is then part "
+            "of the uncertainty). "
             "Rawls, Brakensiek & Miller (1983) class values are a reference "
             "check.\n"
             "\n"
@@ -129,7 +135,8 @@ class RegionalSoilParameterisationAlgorithm(QgsProcessingAlgorithm):
             "\n"
             "OUTPUTS:\tOne GeoTIFF per parameter (bands: P50, P05, P95 per "
             "layer - select bands by description), harmonised inputs, USDA "
-            "texture class, quality raster (robustness, validity flags, input "
+            "texture class, quality raster (Ksat uncertainty factor and class, texture "
+            "confidence, validity flags, input "
             "source), product difference (both products), zone summary CSV, "
             "metadata CSV, Word report and one .qlr layer file that reloads every "
             "output styled.\n"
@@ -156,6 +163,15 @@ class RegionalSoilParameterisationAlgorithm(QgsProcessingAlgorithm):
                 "OpenLandMap output folder (from Extract: OpenLandMap Soils)",
                 behavior=folder,
                 optional=True,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterEnum(
+                self.METHODS,
+                "Methods (both = ensemble with the method spread in the uncertainty)",
+                options=[m.name for m in AVAILABLE_METHODS],
+                allowMultiple=True,
+                defaultValue=list(range(len(AVAILABLE_METHODS))),
             )
         )
         self.addParameter(
@@ -296,7 +312,11 @@ class RegionalSoilParameterisationAlgorithm(QgsProcessingAlgorithm):
         Path(out_dir).mkdir(parents=True, exist_ok=True)
         sg = self.parameterAsFile(parameters, self.SG_FOLDER, context)
         olm = self.parameterAsFile(parameters, self.OLM_FOLDER, context)
+        chosen = self.parameterAsEnums(parameters, self.METHODS, context)
+        if not chosen:
+            raise QgsProcessingException("Select at least one method.")
         mc = Settings(
+            methods=tuple(AVAILABLE_METHODS[i].code for i in chosen),
             draws=self.parameterAsInt(parameters, self.DRAWS, context),
             seed=self.parameterAsInt(parameters, self.SEED, context),
             om_factor=self.parameterAsDouble(parameters, self.OM_FACTOR, context),
@@ -365,7 +385,7 @@ class RegionalSoilParameterisationAlgorithm(QgsProcessingAlgorithm):
             feedback.pushInfo(f"Report: {result.report_path}")
 
         texture_classes = [(c, f"{n} ({a})") for c, n, a in TEXTURE_CLASSES]
-        robust_classes = list(core.ROBUST_LABELS.items())
+        ksat_classes = list(core.KSAT_CLASS_LABELS.items())
         outputs = []
         for path, _ in result.files:
             if not path.lower().endswith(".tif"):
@@ -375,7 +395,7 @@ class RegionalSoilParameterisationAlgorithm(QgsProcessingAlgorithm):
             if stem == "rsp_texture_class":
                 classes = texture_classes
             elif stem == "rsp_quality":
-                classes = robust_classes
+                classes = ksat_classes
             outputs.append(
                 qgis_ui.OutputLayer(
                     path=path, name=stem, main=stem in MAIN_FILES, classes=classes

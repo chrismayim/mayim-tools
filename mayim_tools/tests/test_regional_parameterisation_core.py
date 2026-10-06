@@ -200,6 +200,8 @@ def test_normalise_texture_and_ternary():
     [
         ("clay_15-30cm_Q0.5 (%)", "sg", "clay", 15, 30, "Q0.5"),
         ("bdod_0-5cm_mean (g/cm3)", "sg", "bdod", 0, 5, "mean"),
+        ("cec_0-5cm_Q0.5 (cmol(c)/kg)", "sg", "cec", 0, 5, "Q0.5"),
+        ("cec_15cm_mean [SG2017] (cmol(c)/kg)", "sg2017", "cec", 15, None, "mean"),
         ("clay_15cm_mean [SG2017] (%)", "sg2017", "clay", 15, None, "mean"),
         ("clay_0-30cm_mean_30m_2020-2022 (%)", "olm", "clay", 0, 30, "mean_30m"),
         ("soc_30-60cm_p84_120m_2015-2020 (g/kg)", "olm", "soc", 30, 60, "p84_120m"),
@@ -318,11 +320,28 @@ def test_run_layer_reproducible_and_ordered():
     p5, p50, p95 = a.stats["ksat"]
     assert (p5 <= p50).all() and (p50 <= p95).all()
     assert (a.texture_class == 3).all()  # sandy loam
-    # Narrow inputs -> robust texture and Ksat
+    # Narrow inputs -> top confidence classes; wide inputs -> lower
+    from mayim_tools.soil.regional_parameterisation import core
+
     narrow = unc.run_layer(
         [_cells("USDA", width=0.01)], settings, np.random.default_rng(7)
     )
-    assert (narrow.robust == 3).all()
+    f = core.ksat_factor(narrow.stats["ksat"][0], narrow.stats["ksat"][2])
+    assert (core.ksat_class(f) == 1).all()
+    assert (core.texture_conf_class(narrow.texture_share) == 1).all()
+    fw = core.ksat_factor(a.stats["ksat"][0], a.stats["ksat"][2])
+    assert (core.ksat_class(fw) >= 1).all() and np.nanmedian(fw) > np.nanmedian(f)
+
+
+def test_confidence_classes():
+    from mayim_tools.soil.regional_parameterisation import core
+
+    f = core.ksat_factor(
+        np.array([1.0, 1.0, 1.0, 1.0, np.nan]), np.array([3.9, 16.0, 99.0, 101.0, 1.0])
+    )
+    assert core.ksat_class(f).tolist() == [1, 2, 3, 4, 0]
+    sh = np.array([0.95, 0.8, 0.7, 0.5, 0.2, np.nan])
+    assert core.texture_conf_class(sh).tolist() == [1, 1, 2, 3, 4, 0]
 
 
 def test_rawls_lookup_units():
@@ -412,8 +431,23 @@ def _write_folders(base):
     os.makedirs(olm_dir)
     g250 = grid(250.0)
     sg_depths = [(0, 5), (5, 15), (15, 30), (30, 60), (60, 100), (100, 200)]
-    means = {"sand": 60, "silt": 20, "clay": 20, "soc": 8, "bdod": 1.4, "cfvo": 5}
-    units = {"soc": "g/kg", "bdod": "g/cm3", "cfvo": "vol %"}
+    means = {
+        "sand": 60,
+        "silt": 20,
+        "clay": 20,
+        "soc": 8,
+        "bdod": 1.4,
+        "cfvo": 5,
+        "phh2o": 6.5,
+        "cec": 12,
+    }
+    units = {
+        "soc": "g/kg",
+        "bdod": "g/cm3",
+        "cfvo": "vol %",
+        "phh2o": "pH",
+        "cec": "cmol(c)/kg",
+    }
     for var, m in means.items():
         for stat, tag, f in (
             ("Q0.05", "Q0.05", 0.75),
@@ -581,3 +615,151 @@ def test_wrong_folder_and_missing_inputs(tmp_path, folders):
     empty.mkdir()
     with pytest.raises(SoilDataError, match="No SoilGrids or OpenLandMap"):
         _run(tmp_path, folders, sg=str(empty), olm="")
+
+
+# ----------------------------------------------------------------------
+# Tóth et al. (2015) / HiHydroSoil and van Genuchten helpers
+# ----------------------------------------------------------------------
+
+from mayim_tools.soil.regional_parameterisation.ptf import (  # noqa: E402
+    AVAILABLE_METHODS,
+    METHOD_BY_CODE,
+    active_parameters,
+    toth2015,
+)
+from mayim_tools.soil.regional_parameterisation.ptf import (  # noqa: E402
+    van_genuchten as vg,
+)
+
+
+@pytest.mark.parametrize(
+    "alpha,n",
+    [
+        (0.145, 2.68),
+        (0.124, 2.28),
+        (0.075, 1.89),
+        (0.036, 1.56),
+        (0.02, 1.41),
+        (0.01, 1.23),
+        (0.05, 1.3),
+    ],
+)
+def test_capillary_drive_matches_numerical_integral(alpha, n):
+    # Integral of the Mualem Kr(h) over h from 0 to infinity (log-spaced
+    # trapezoid; the tail beyond 1e7 cm is negligible).
+    h = np.concatenate([[0.0], np.logspace(-6, 7, 200001)])
+    kr = vg.mualem_kr(h, alpha, n)
+    numeric = float(np.sum((kr[1:] + kr[:-1]) / 2 * np.diff(h)))
+    assert float(vg.capillary_drive_cm(alpha, n)) == pytest.approx(numeric, rel=0.02)
+
+
+def test_theta_at_limits():
+    assert float(vg.theta_at(0.0, 0.05, 0.45, 0.03, 1.5)) == pytest.approx(0.45)
+    assert float(vg.theta_at(1e12, 0.05, 0.45, 0.03, 1.5)) == pytest.approx(
+        0.05, abs=1e-4
+    )
+    assert vg.H33_CM == pytest.approx(336.5, abs=0.1)
+
+
+def test_toth2015_hand_calculation():
+    # Equations as printed in the HiHydroSoil v2.0 report (pp. 7-8), typed
+    # out independently of the coefficient table.
+    bd, cl, si, oc, ph, cec = 1.4, 20.0, 20.0, 1.0, 6.5, 12.0
+    r = toth2015.toth2015(60.0, si, cl, oc, bd, True, ph=ph, cec=cec)
+    ths = 0.83080 - 0.28217 * bd + 0.0002728 * cl + 0.000187 * si
+    la = (
+        -0.43348
+        - 0.41729 * bd
+        - 0.04762 * oc
+        + 0.21810 * 1
+        - 0.01581 * cl
+        - 0.01207 * si
+    )
+    ln1 = (
+        0.22236
+        - 0.30189 * bd
+        - 0.05558 * 1
+        - 0.005306 * cl
+        - 0.003084 * si
+        - 0.01072 * oc
+    )
+    lk = (
+        0.40220
+        + 0.26122 * ph
+        + 0.44565 * 1
+        - 0.02329 * cl
+        - 0.01265 * si
+        - 0.01038 * cec
+    )
+    assert float(r["theta_s"]) == pytest.approx(ths)
+    assert float(r["alpha"]) == pytest.approx(10**la)
+    assert float(r["n_vg"]) == pytest.approx(1 + 10**ln1)
+    assert float(r["ksat"]) == pytest.approx(10**lk * 10 / 24)  # cm/d -> mm/h
+    assert float(r["theta_r"]) == 0.041
+    t33 = vg.theta_at(vg.H33_CM, 0.041, ths, 10**la, 1 + 10**ln1)
+    assert float(r["theta_fc"]) == pytest.approx(float(t33))
+    assert 0.041 < float(r["theta_wp"]) < float(r["theta_fc"]) < ths
+    assert int(r["flags"]) == 0
+
+
+def test_toth2015_topsoil_flag_and_theta_r_tree():
+    top = toth2015.toth2015(60.0, 20.0, 20.0, 1.0, 1.4, True, ph=6.5, cec=12.0)
+    sub = toth2015.toth2015(60.0, 20.0, 20.0, 1.0, 1.4, False, ph=6.5, cec=12.0)
+    assert float(top["alpha"]) / float(sub["alpha"]) == pytest.approx(10**0.21810)
+    assert float(top["ksat"]) / float(sub["ksat"]) == pytest.approx(10**0.44565)
+    assert float(toth2015.toth2015(1.0, 40.0, 59.0, 1.0, 1.2, True)["theta_r"]) == 0.179
+
+
+def test_toth2015_without_ph_cec_flags_ksat():
+    r = toth2015.toth2015(np.array([60.0]), 20.0, 20.0, 1.0, 1.4, True)
+    assert np.isnan(r["ksat"]).all()
+    assert int(r["flags"][0]) & toth2015.FLAG_NO_KSAT_INPUTS
+    assert np.isfinite(r["theta_fc"]).all()
+
+
+def test_method_registry():
+    codes = [m.code for m in AVAILABLE_METHODS]
+    assert codes == ["SR2006", "TOTH2015"]
+    params = {p.code for p in active_parameters(["SR2006"])}
+    assert "alpha" not in params and "lambda" in params
+    params = {p.code for p in active_parameters(["TOTH2015"])}
+    assert "alpha" in params and "lambda" not in params
+
+
+def test_run_layer_two_methods_split_and_missing_ksat():
+    settings = unc.Settings(draws=100, methods=("SR2006", "TOTH2015"))
+    a = unc.run_layer(
+        [_cells("USDA")], settings, np.random.default_rng(1), topsoil=True
+    )
+    assert "alpha" in a.stats and "lambda" in a.stats
+    # Without pH/CEC Tóth Ksat is left out: pooled Ksat equals S&R alone
+    sr = unc.run_layer(
+        [_cells("USDA")],
+        unc.Settings(draws=100, methods=("SR2006",)),
+        np.random.default_rng(1),
+        topsoil=True,
+    )
+    assert np.allclose(a.stats["ksat"], sr.stats["ksat"])
+    assert np.nanmean(a.variance["psi_f"]["method"]) > 0
+
+
+def test_end_to_end_methods(tmp_path, folders):
+    r = _run(tmp_path / "both", folders)
+    assert r.settings.mc.methods == ("SR2006", "TOTH2015")
+    names = {os.path.basename(f) for f, _ in r.files}
+    assert {"rsp_alpha.tif", "rsp_n_vg.tif", "rsp_lambda.tif"} <= names
+    ks = [
+        x for x in r.zone_rows if x["Parameter"] == "ksat" and x["Layer"] == "0-30cm"
+    ][0]
+    assert ks["Share method"] > 0  # Tóth Ksat computed (pH and CEC parsed)
+    assert np.isfinite(ks["SG central (TOTH2015)"])
+    one = _run(tmp_path / "toth", folders, olm="")
+    one.settings.mc.methods  # noqa: B018
+    from mayim_tools.soil.regional_parameterisation import core
+
+    s = core.RunSettings(
+        out_dir=str(tmp_path / "x"), sg_folder=folders[0], write_report=False
+    )
+    s.mc.methods = ()
+    with pytest.raises(SoilDataError, match="at least one method"):
+        core.run(s)

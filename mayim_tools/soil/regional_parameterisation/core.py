@@ -31,7 +31,7 @@ from mayim_tools.soil._common.stats import _r
 
 from . import fill as fill_mod
 from . import inputs as inp
-from .ptf import METHOD_BY_CODE, PARAMETERS, rawls_1983, saxton_rawls
+from .ptf import METHOD_BY_CODE, active_parameters, rawls_1983, saxton_rawls, toth2015
 from .texture import (
     CLASS_NAME,
     ISO_TO_USDA_SILT_FACTOR,
@@ -39,9 +39,7 @@ from .texture import (
     usda_class,
 )
 from .uncertainty import (
-    KSAT_ROBUST_RATIO,
     STAT_TAGS,
-    TEXTURE_ROBUST_SHARE,
     VARIANCE_PARTS,
     ProductCells,
     Settings,
@@ -49,7 +47,7 @@ from .uncertainty import (
 )
 
 TOOL_NAME = "Regional soil parameterisation"
-TOOL_VERSION = "0.5.0"
+TOOL_VERSION = "0.6.0"
 CHUNK_CELLS = 1024
 MAX_CELLS_DEFAULT = 2_000_000  # ~1800 km2 at 30 m; about 6 GB of memory
 SAMPLE_POINTS = 3000  # cells kept for scatter plots in the report
@@ -64,12 +62,60 @@ METADATA_CSV = "rsp_metadata.csv"
 REPORT_FILE = "regional_soil_parameterisation_report.docx"
 LAYER_FILE = "rsp_layers.qlr"
 
-ROBUST_LABELS = {
-    0: "Neither texture class nor Ksat class robust",
-    1: "Texture class robust only",
-    2: "Ksat class robust only",
-    3: "Texture class and Ksat class robust",
+# Graded confidence (replaces the v0.5.0 yes/no robustness).
+# Ksat uncertainty factor F = sqrt(P95 / P5): the median times or divided by F
+# spans the 90 % range. F <= 2 keeps the range within one NRCS Ksat class.
+KSAT_FACTOR_LIMITS = (2.0, 4.0, 10.0)
+KSAT_CLASS_LABELS = {
+    1: "Ksat within x/÷2 (P95/P5 <= 4)",
+    2: "Ksat within x/÷2-4",
+    3: "Ksat within x/÷4-10",
+    4: "Ksat uncertain by more than x/÷10",
 }
+TEXTURE_SHARE_LIMITS = (0.8, 0.6, 0.4)
+TEXTURE_CONF_LABELS = {
+    1: "Texture class in >= 80 % of draws",
+    2: "Texture class in 60-80 % of draws",
+    3: "Texture class in 40-60 % of draws",
+    4: "Texture class in < 40 % of draws",
+}
+DENSITY_WARNING = (
+    "Density adjustment is on: each draw takes its bulk density from the map's "
+    "own uncertainty, independently of texture. Dense draws push the drainable "
+    "porosity towards zero, so Ksat P5 can fall by orders of magnitude (in "
+    "testing the P95/P5 ratio rose about seven-fold). Use it with measured or "
+    "trusted bulk densities; leave it off for screening."
+)
+CENTRAL_PARAMS = ("theta_s", "theta_fc", "theta_wp", "paw", "ksat", "psi_f")
+
+
+def ksat_factor(p05, p95):
+    """F = sqrt(P95 / P5); NaN where undefined."""
+    with np.errstate(invalid="ignore", divide="ignore"):
+        f = np.sqrt(np.asarray(p95, float) / np.asarray(p05, float))
+    return np.where(np.isfinite(f) & (f >= 1), f, np.nan)
+
+
+def ksat_class(factor):
+    """1-4 by KSAT_FACTOR_LIMITS; 0 where unknown."""
+    f = np.asarray(factor, float)
+    out = np.zeros(f.shape, dtype=np.int16)
+    ok = np.isfinite(f)
+    out[ok] = 1 + np.searchsorted(KSAT_FACTOR_LIMITS, f[ok], side="left")
+    return out
+
+
+def texture_conf_class(share):
+    """1-4 by TEXTURE_SHARE_LIMITS (descending); 0 where unknown."""
+    sh = np.asarray(share, float)
+    out = np.zeros(sh.shape, dtype=np.int16)
+    for i, lim in enumerate(TEXTURE_SHARE_LIMITS, start=1):
+        sel = np.isfinite(sh) & (out == 0) & (sh >= lim)
+        out[sel] = i
+    out[np.isfinite(sh) & (out == 0)] = 4
+    return out
+
+
 INPUT_BANDS = (
     ("sand", "%"),
     ("silt", "%"),
@@ -96,6 +142,7 @@ class RunSettings:
     workers: int = 0  # 0 = automatic
     max_cells: int = MAX_CELLS_DEFAULT
     write_report: bool = True
+    allow_unverified: bool = False  # tests only
 
 
 @dataclass
@@ -111,7 +158,9 @@ class RunResult:
     inputs_p50: dict = field(default_factory=dict)  # var -> layer -> (r, c)
     texture_class: dict = field(default_factory=dict)
     texture_share: dict = field(default_factory=dict)
-    robust: dict = field(default_factory=dict)
+    ksat_factor: dict = field(default_factory=dict)
+    ksat_class: dict = field(default_factory=dict)
+    texture_conf: dict = field(default_factory=dict)
     flags: dict = field(default_factory=dict)
     central: dict = field(default_factory=dict)  # product -> layer -> dict
     variance: dict = field(default_factory=dict)  # zone -> layer -> param -> parts
@@ -258,6 +307,18 @@ def run(
     unknown = [m for m in settings.mc.methods if m not in METHOD_BY_CODE]
     if unknown:
         raise SoilDataError(f"Unknown method(s): {', '.join(unknown)}")
+    if not settings.mc.methods:
+        raise SoilDataError("Select at least one method.")
+    blocked = [
+        METHOD_BY_CODE[m].name
+        for m in settings.mc.methods
+        if not METHOD_BY_CODE[m].available and not settings.allow_unverified
+    ]
+    if blocked:
+        raise SoilDataError(
+            f"Method not yet available (coefficients not verified against the "
+            f"primary source): {', '.join(blocked)}"
+        )
     if settings.mc.draws < 10:
         raise SoilDataError("Use at least 10 Monte Carlo draws.")
     os.makedirs(settings.out_dir, exist_ok=True)
@@ -317,6 +378,22 @@ def run(
             "available - not applied."
         )
         settings.mc.density = False
+    if settings.mc.density:
+        result.warnings.append(DENSITY_WARNING)
+    if "TOTH2015" in settings.mc.methods:
+        have = {v for p in result.products for d in p.layers.values() for v in d}
+        if "bdod" not in have:
+            raise SoilDataError(
+                "Tóth et al. (2015) needs bulk density (bdod) in at least one "
+                "input folder."
+            )
+        missing = [v for v in ("phh2o", "cec") if v not in have]
+        if missing:
+            result.warnings.append(
+                "Tóth et al. (2015) Ksat needs pH and CEC; missing "
+                f"{', '.join(missing)} (CEC comes from SoilGrids only). Its Ksat "
+                "is not computed, so Ksat comes from the other method(s) only."
+            )
     progress_fn(0.15)
 
     # Zones
@@ -369,15 +446,21 @@ def _snapshot(p):
     return q
 
 
+def _duration(seconds: float) -> str:
+    return f"{seconds:.0f} s" if seconds < 90 else f"{seconds / 60:.0f} min"
+
+
 def _monte_carlo(result, settings, log_fn, progress_fn, cancel_fn):
     grid = result.grid
     shape = (grid.height, grid.width)
     zones = result.zone_raster
     mc = settings.mc
-    workers = settings.workers or min(8, os.cpu_count() or 1)
+    workers = settings.workers or min(16, os.cpu_count() or 1)
     nz = len(result.zone_names)
     n_layers = len(settings.layers)
-    for li, (lab, _, _) in enumerate(settings.layers):
+    t_start = time.time()
+    eta_logged = False
+    for li, (lab, _, bottom) in enumerate(settings.layers):
         mask = _layer_cells(result.products, lab)
         if mask is None:
             result.warnings.append(f"No product has every input for {lab}.")
@@ -391,7 +474,7 @@ def _monte_carlo(result, settings, log_fn, progress_fn, cancel_fn):
         # Shared inputs (e.g. SoilGrids coarse fragments for OpenLandMap)
         shared = {}
         for p in result.products:
-            for v in ("bdod", "cfvo"):
+            for v in inp.OPTIONAL_VARIABLES:
                 if v in p.layers.get(lab, {}) and v not in shared:
                     shared[v] = p.layers[lab][v]
         flat = {
@@ -419,27 +502,27 @@ def _monte_carlo(result, settings, log_fn, progress_fn, cancel_fn):
         seeds = np.random.SeedSequence([mc.seed, li]).spawn(len(chunks))
 
         f4 = np.float32  # result grids: float32 halves the memory
-        stats = {prm.code: np.full((3,) + shape, np.nan, f4) for prm in PARAMETERS}
+        params = active_parameters(mc.methods)
+        stats = {prm.code: np.full((3,) + shape, np.nan, f4) for prm in params}
         inputs_p50 = {k: np.full(shape, np.nan, f4) for k, _ in INPUT_BANDS}
         tex = np.zeros(shape, dtype=np.int16)
         share = np.full(shape, np.nan, f4)
-        robust = np.full(shape, -1, dtype=np.int16)
         flags = np.zeros(shape, dtype=np.int16)
+        # Central soils per product: inputs, and per method the parameters.
         central = {
             p.name: {
-                "sand": np.full(shape, np.nan),
-                "clay": np.full(shape, np.nan),
-                "silt": np.full(shape, np.nan),
-                "ksat": np.full(shape, np.nan),
-                "theta_fc": np.full(shape, np.nan),
-                "psi_f": np.full(shape, np.nan),
+                **{k: np.full(shape, np.nan, f4) for k in ("sand", "silt", "clay")},
+                "by_method": {
+                    m: {k: np.full(shape, np.nan, f4) for k in CENTRAL_PARAMS}
+                    for m in mc.methods
+                },
             }
             for p in result.products
         }
         var_sum = {
             z: {
                 prm.code: dict.fromkeys(VARIANCE_PARTS + ("total",), 0.0)
-                for prm in PARAMETERS
+                for prm in params
             }
             for z in range(1, nz + 1)
         }
@@ -451,6 +534,7 @@ def _monte_carlo(result, settings, log_fn, progress_fn, cancel_fn):
             lab=lab,
             shared=flat_shared,
             seeds=seeds,
+            topsoil=bottom <= 30,
         ):
             idx = chunks[k]
             cells = []
@@ -458,7 +542,9 @@ def _monte_carlo(result, settings, log_fn, progress_fn, cancel_fn):
                 pc = _cells_for(fp, lab, idx, shared)
                 if pc is not None:
                     cells.append(pc)
-            return run_layer(cells, mc, np.random.default_rng(seeds[k]))
+            return run_layer(
+                cells, mc, np.random.default_rng(seeds[k]), topsoil=topsoil
+            )
 
         done = 0
         with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -481,21 +567,19 @@ def _monte_carlo(result, settings, log_fn, progress_fn, cancel_fn):
                 rr, cc = np.unravel_index(idx, shape)
                 for code, a in r.stats.items():
                     stats[code][:, rr, cc] = a
-                for key, a in r.inputs_p50.items():
-                    inputs_p50[key][rr, cc] = a
+                for key in inputs_p50:
+                    inputs_p50[key][rr, cc] = r.inputs_p50[key]
                 tex[rr, cc] = r.texture_class
                 share[rr, cc] = r.texture_share
-                robust[rr, cc] = r.robust
                 flags[rr, cc] = r.flags
                 for pname, cdict in r.central.items():
                     ci = cdict["inputs"]
-                    m0 = cdict["methods"][mc.methods[0]]
-                    central[pname]["sand"][rr, cc] = ci["sand"]
-                    central[pname]["silt"][rr, cc] = ci["silt"]
-                    central[pname]["clay"][rr, cc] = ci["clay"]
-                    central[pname]["ksat"][rr, cc] = m0["ksat"]
-                    central[pname]["theta_fc"][rr, cc] = m0["theta_fc"]
-                    central[pname]["psi_f"][rr, cc] = m0["psi_f"]
+                    for key in ("sand", "silt", "clay"):
+                        central[pname][key][rr, cc] = ci[key]
+                    for mcode, vals in cdict["methods"].items():
+                        dst = central[pname]["by_method"][mcode]
+                        for key in CENTRAL_PARAMS:
+                            dst[key][rr, cc] = vals[key]
                 zc = zones[rr, cc]
                 for z in range(1, nz + 1):
                     sel = zc == z
@@ -508,16 +592,31 @@ def _monte_carlo(result, settings, log_fn, progress_fn, cancel_fn):
                             acc[part] += float(np.nansum(vals))
                 done += 1
                 progress_fn(0.15 + 0.7 * (li + done / len(chunks)) / n_layers)
+                if not eta_logged and li == 0 and done >= max(8, len(chunks) // 30):
+                    per_chunk = (time.time() - t_start) / done
+                    left = per_chunk * (len(chunks) * n_layers - done)
+                    log_fn(
+                        f"Monte Carlo: {len(chunks)} chunks per layer on {workers} "
+                        f"worker(s); about {_duration(left)} remaining for this "
+                        "stage. A coarser processing resolution or fewer draws "
+                        "shortens the run."
+                    )
+                    eta_logged = True
         for code in stats:
             result.stats.setdefault(code, {})[lab] = stats[code]
         for key in inputs_p50:
             result.inputs_p50.setdefault(key, {})[lab] = inputs_p50[key]
         result.texture_class[lab] = tex
         result.texture_share[lab] = share
-        result.robust[lab] = robust
+        factor = ksat_factor(stats["ksat"][0], stats["ksat"][2])
+        result.ksat_factor[lab] = factor
+        result.ksat_class[lab] = ksat_class(factor)
+        result.texture_conf[lab] = texture_conf_class(share)
         result.flags[lab] = flags
         for pname, arrs in central.items():
-            result.central.setdefault(pname, {})[lab] = arrs
+            # Top-level parameter arrays = the first method (product comparison)
+            first = arrs["by_method"][mc.methods[0]]
+            result.central.setdefault(pname, {})[lab] = {**arrs, **first}
         for z, per in var_sum.items():
             result.variance.setdefault(z, {})[lab] = per
         log_fn(f"{lab}: {idx_all.size} cells, {mc.draws} draws per product.")
@@ -536,6 +635,25 @@ def _zone_cells(result, z):
     return result.zone_raster == z
 
 
+def _share_pct(codes, c) -> float:
+    return 100.0 * float((codes == c).mean()) if codes.size else math.nan
+
+
+def _central_medians(result, lab, code, zmask) -> dict:
+    """Median over the zone of each product's central soil, per method."""
+    out = {}
+    for p in result.products:
+        by = result.central.get(p.name, {}).get(lab, {}).get("by_method", {})
+        for mcode, vals in by.items():
+            if code not in vals:
+                continue
+            v = vals[code][zmask]
+            v = v[np.isfinite(v)]
+            key = f"{SHORT[p.name]} central ({mcode})"
+            out[key] = float(np.median(v)) if v.size else math.nan
+    return out
+
+
 def _zone_summary(result: RunResult) -> None:
     rows = []
     tex_rows = []
@@ -544,7 +662,7 @@ def _zone_summary(result: RunResult) -> None:
         for lab, _, _ in result.settings.layers:
             if lab not in result.texture_class:
                 continue
-            for prm in PARAMETERS:
+            for prm in active_parameters(result.settings.mc.methods):
                 st = result.stats[prm.code][lab]
                 p50 = st[1][zmask]
                 ok = np.isfinite(p50)
@@ -576,6 +694,7 @@ def _zone_summary(result: RunResult) -> None:
                         "Median cell P5": float(np.nanmedian(st[0][zmask][ok])),
                         "Median cell P95": float(np.nanmedian(st[2][zmask][ok])),
                         **{f"Share {k}": share[k] for k in VARIANCE_PARTS},
+                        **_central_medians(result, lab, prm.code, zmask),
                     }
                 )
             cls = result.texture_class[lab][zmask]
@@ -583,8 +702,11 @@ def _zone_summary(result: RunResult) -> None:
             if cls.size:
                 counts = np.bincount(cls, minlength=13)
                 dom = int(counts.argmax())
-                rob = result.robust[lab][zmask]
-                rob = rob[rob >= 0]
+                kc = result.ksat_class[lab][zmask]
+                kc = kc[kc > 0]
+                tc = result.texture_conf[lab][zmask]
+                tc = tc[tc > 0]
+                kf = result.ksat_factor[lab][zmask]
                 tex_rows.append(
                     {
                         "Zone": zname,
@@ -593,9 +715,19 @@ def _zone_summary(result: RunResult) -> None:
                         "Dominant class code": dom,
                         "Dominant share (%)": 100.0 * counts[dom] / cls.size,
                         "Classes present": int((counts[1:] > 0).sum()),
-                        "Texture robust (%)": 100.0 * np.isin(rob, (1, 3)).mean(),
-                        "Ksat robust (%)": 100.0 * np.isin(rob, (2, 3)).mean(),
-                        "Both robust (%)": 100.0 * (rob == 3).mean(),
+                        "Median Ksat factor (x/÷)": (
+                            float(np.nanmedian(kf))
+                            if np.isfinite(kf).any()
+                            else math.nan
+                        ),
+                        **{
+                            f"Ksat class {c} (%)": _share_pct(kc, c)
+                            for c in KSAT_CLASS_LABELS
+                        },
+                        **{
+                            f"Texture confidence {c} (%)": _share_pct(tc, c)
+                            for c in TEXTURE_CONF_LABELS
+                        },
                         "Sand (%)": float(
                             np.nanmedian(result.inputs_p50["sand"][lab][zmask])
                         ),
@@ -776,7 +908,7 @@ def _write_rasters(result: RunResult, write_fn) -> None:
     if not labs:
         raise SoilDataError("No depth layer could be processed (see warnings).")
     order = (1, 0, 2)  # P50 first so band 1 is the 0-30 cm median
-    for prm in PARAMETERS:
+    for prm in active_parameters(result.settings.mc.methods):
         bands = []
         for si in order:
             for lab in labs:
@@ -820,9 +952,15 @@ def _write_rasters(result: RunResult, write_fn) -> None:
 
     bands = []
     for lab in labs:
-        rob = result.robust[lab].astype(float)
-        rob[rob < 0] = np.nan
-        bands.append((f"robustness_{lab} (code)", rob))
+        kc = result.ksat_class[lab].astype(float)
+        kc[kc == 0] = np.nan
+        bands.append((f"ksat_uncertainty_class_{lab} (code)", kc))
+    for lab in labs:
+        bands.append((f"ksat_uncertainty_factor_{lab} (x/÷)", result.ksat_factor[lab]))
+    for lab in labs:
+        tc = result.texture_conf[lab].astype(float)
+        tc[tc == 0] = np.nan
+        bands.append((f"texture_confidence_class_{lab} (code)", tc))
     for lab in labs:
         fl = result.flags[lab].astype(float)
         fl[~np.isfinite(result.stats["ksat"][lab][1])] = np.nan
@@ -837,7 +975,9 @@ def _write_rasters(result: RunResult, write_fn) -> None:
             bands.append((f"source_{SHORT[p.name]}_{lab} (code)", s))
     path = os.path.join(out, QUALITY_FILE)
     write_fn(path, grid, bands, "", src, TOOL_VERSION)
-    result.files.append((path, "Robustness, validity flags and input source codes"))
+    result.files.append(
+        (path, "Ksat uncertainty, texture confidence, validity flags, input sources")
+    )
 
     if len(result.products) == 2:
         sg, olm = (p.name for p in result.products)
@@ -859,6 +999,11 @@ def _write_rasters(result: RunResult, write_fn) -> None:
 
 
 def _fmt(v, nd=4):
+    """CSV value: integers stay integers; floats rounded; NaN empty."""
+    if isinstance(v, (bool, np.bool_)):
+        return str(bool(v))
+    if isinstance(v, (int, np.integer)):
+        return int(v)
     return _r(v, nd)
 
 
@@ -880,12 +1025,17 @@ def _write_tables(result: RunResult) -> None:
         "Median cell P5",
         "Median cell P95",
     ] + [f"Share {k}" for k in VARIANCE_PARTS]
+    for row in result.zone_rows:  # per-product central medians
+        cols += [k for k in row if k not in cols]
     with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(cols)
         for row in result.zone_rows:
             w.writerow(
-                [_fmt(row[c]) if not isinstance(row[c], str) else row[c] for c in cols]
+                [
+                    v if isinstance(v, str) else _fmt(v)
+                    for v in (row.get(c, "") for c in cols)
+                ]
             )
     result.files.append((path, "Zone summary per layer and parameter"))
 
@@ -946,14 +1096,23 @@ def _write_metadata(result: RunResult) -> None:
             "bound (soil structure and macropores are not represented).",
         ],
         [
-            "Robustness codes",
-            "; ".join(f"{k} = {v}" for k, v in ROBUST_LABELS.items())
-            + f" (texture: modal class in >= {TEXTURE_ROBUST_SHARE:.0%} of draws; "
-            f"Ksat: P95/P5 <= {KSAT_ROBUST_RATIO:g})",
+            "Ksat uncertainty classes",
+            "; ".join(f"{k} = {v}" for k, v in KSAT_CLASS_LABELS.items())
+            + " (factor F = sqrt(P95/P5): the 90 % range is the median x/÷ F)",
+        ],
+        [
+            "Texture confidence classes",
+            "; ".join(f"{k} = {v}" for k, v in TEXTURE_CONF_LABELS.items()),
         ],
         [
             "Validity flag bits",
-            "; ".join(f"{k} = {v}" for k, v in saxton_rawls.FLAG_LABELS.items()),
+            "; ".join(
+                f"{k} = {v}"
+                for k, v in {
+                    **saxton_rawls.FLAG_LABELS,
+                    **toth2015.FLAG_LABELS,
+                }.items()
+            ),
         ],
         [
             "Source codes",
@@ -1022,7 +1181,7 @@ def _write_metadata(result: RunResult) -> None:
             ["Code", "Parameter", "Units", "File"],
             [
                 [p.code, p.label, p.units, PARAM_FILE.format(code=p.code)]
-                for p in PARAMETERS
+                for p in active_parameters(mc.methods)
             ],
         )
     )
@@ -1035,7 +1194,7 @@ def _write_metadata(result: RunResult) -> None:
         )
     )
     for title, rows in (
-        ("Zones - texture and robustness", result.zone_texture),
+        ("Zones - texture and confidence", result.zone_texture),
         ("Reference check - Rawls, Brakensiek & Miller (1983)", result.reference_rows),
         ("Check - mapped water contents", result.checks),
         ("Product comparison", result.comparison),

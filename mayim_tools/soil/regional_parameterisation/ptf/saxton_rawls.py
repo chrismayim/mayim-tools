@@ -141,7 +141,7 @@ def saxton_rawls(
         ts = ts_df
 
     # Eq. 11-18 - moisture-tension and conductivity
-    with np.errstate(invalid="ignore", divide="ignore"):
+    with np.errstate(invalid="ignore", divide="ignore", over="ignore"):
         B = (np.log(1500.0) - np.log(33.0)) / (np.log(t33) - np.log(t1500))
         A = np.exp(np.log(33.0) + B * np.log(t33))
         lam = 1.0 / B

@@ -47,7 +47,8 @@ TARGET_LAYERS: tuple[tuple[str, int, int], ...] = (
 )
 
 # Inputs the methods use (others in the folders are ignored).
-INPUT_VARIABLES = ("sand", "silt", "clay", "soc", "bdod", "cfvo")
+INPUT_VARIABLES = ("sand", "silt", "clay", "soc", "bdod", "cfvo", "phh2o", "cec")
+OPTIONAL_VARIABLES = ("bdod", "cfvo", "phh2o", "cec")  # not every product has them
 TEXTURE = ("sand", "silt", "clay")
 
 # Transform space and plausible range per variable.
@@ -60,6 +61,8 @@ VARIABLE_SPACE: dict[str, tuple[str, float, float, float]] = {
     "soc": ("log", 0.1, 0.0, 600.0),
     "bdod": ("linear", 0.0, 0.3, 2.3),
     "cfvo": ("linear", 0.0, 0.0, 90.0),
+    "phh2o": ("linear", 0.0, 3.0, 11.0),
+    "cec": ("log", 0.5, 0.0, 300.0),
 }
 
 Z90 = 1.6448536  # standard-normal quantile for a central 90 % interval
@@ -67,19 +70,19 @@ Z68 = 0.9944579  # standard-normal quantile for a central 68 % interval
 
 _SG_RE = re.compile(
     r"^(?P<var>[a-z0-9]+)_(?P<top>\d+)-(?P<bot>\d+)cm_"
-    r"(?P<stat>mean|Q0\.05|Q0\.5|Q0\.95) \((?P<units>[^)]*)\)$"
+    r"(?P<stat>mean|Q0\.05|Q0\.5|Q0\.95) \((?P<units>.*)\)$"
 )
 _SG17_RE = re.compile(
-    r"^(?P<var>[a-z0-9]+)_(?P<pt>\d+)cm_mean \[SG2017\] \((?P<units>[^)]*)\)$"
+    r"^(?P<var>[a-z0-9]+)_(?P<pt>\d+)cm_mean \[SG2017\] \((?P<units>.*)\)$"
 )
 _OLM_RE = re.compile(
     r"^(?P<var>[a-z0-9]+)_(?P<top>\d+)-(?P<bot>\d+)cm_"
     r"(?P<stat>mean_30m|mean_120m|p16_120m|p84_120m)_(?P<period>\d{4}-\d{4}) "
-    r"\((?P<units>[^)]*)\)$"
+    r"\((?P<units>.*)\)$"
 )
 _WATER_RE = re.compile(
     r"^(?P<name>field_capacity_33kPa|wilting_point_1500kPa)_(?P<pt>\d+)cm_250m_"
-    r"(?P<period>[\d-]+) \((?P<units>[^)]*)\)$"
+    r"(?P<period>[\d-]+) \((?P<units>.*)\)$"
 )
 WATER_CODES = {"field_capacity_33kPa": "fc", "wilting_point_1500kPa": "wp"}
 SG_WATER_CODES = {"wv0033": "fc", "wv1500": "wp"}
@@ -496,7 +499,7 @@ def _olm_inputs(refs, read, layers, notes, periods_used) -> dict:
             periods = sorted({p for (v, s, p) in by if v == var and s == "mean_120m"})
             centre_stat = "mean_120m"
         if not periods:
-            if var != "cfvo":
+            if var not in ("cfvo", "cec"):  # never published by OpenLandMap
                 notes.append(f"OpenLandMap: {var} not in the folder.")
             continue
         period = periods[-1]
