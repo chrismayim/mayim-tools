@@ -13,17 +13,10 @@ import math
 import numpy as np
 
 from mayim_tools._common.docx_report import (
-    C_AQUA,
-    C_BLUE,
-    C_INK,
-    C_INK_2,
-    C_ORANGE,
     Doc,
-    new_figure,
-    png,
-    style_axes,
 )
 
+from . import figures
 from . import fill as fill_mod
 from .ptf import (
     METHOD_BY_CODE,
@@ -34,14 +27,9 @@ from .ptf import (
     toth2015,
 )
 from .texture import (
-    CLASS_ABBR,
     CLASS_NAME,
     ISO_TO_USDA_SILT_FACTOR,
-    TEXTURE_CLASSES,
-    ternary_xy,
-    usda_class,
 )
-from .uncertainty import VARIANCE_PARTS
 
 REPORT_TITLE = "Regional Soil Parameterisation"
 KEY_PARAMS = ("theta_s", "theta_fc", "theta_wp", "paw", "ksat", "psi_f")
@@ -161,372 +149,246 @@ def _value_range(r, code) -> str:
 
 
 # ----------------------------------------------------------------------
-# Figures
+# Figures (publication style, see figures.py)
 # ----------------------------------------------------------------------
 
-
-def _extent(grid):
-    return (grid.xmin, grid.xmax, grid.ymin, grid.ymax)
-
-
-def _log_ticks(axis, lo, hi):
-    """Three to five readable ticks on a log axis (no minor labels)."""
-    from matplotlib.ticker import (
-        FixedLocator,
-        FuncFormatter,
-        NullFormatter,
-        NullLocator,
-    )
-
-    lo, hi = max(lo, 1e-6), max(hi, lo * 1.0001)
-    ticks = np.geomspace(lo, hi, 4)
-    ticks = sorted({float(_sig(t, 2)) for t in ticks})
-    axis.set_major_locator(FixedLocator(ticks))
-    axis.set_major_formatter(FuncFormatter(lambda v, _: _sig(v, 2)))
-    axis.set_minor_locator(NullLocator())
-    axis.set_minor_formatter(NullFormatter())
-
-
-def _map_axes(ax):
-    ax.set_xticks([])
-    ax.set_yticks([])
-    for side in ax.spines.values():
-        side.set_color(C_INK_2)
-        side.set_linewidth(0.5)
-    ax.set_aspect("equal")
-
-
-def _continuous_maps(result, panels, height_cm=7.0):
-    """panels: [(array, title, cmap, log, label)] - up to 3 side by side."""
-    from matplotlib.colors import LogNorm
-
-    fig = new_figure(height_cm)
-    n = len(panels)
-    for i, (arr, title, cmap, log, label) in enumerate(panels, start=1):
-        ax = fig.add_subplot(1, n, i)
-        v = arr[np.isfinite(arr)]
-        if v.size == 0:
-            ax.set_title(title + " (no data)", fontsize=8)
-            _map_axes(ax)
-            continue
-        lo, hi = np.percentile(v, (2, 98))
-        if log:
-            lo = max(lo, 1e-3)
-            hi = max(hi, lo * 1.01)
-            norm = LogNorm(vmin=lo, vmax=hi)
-            im = ax.imshow(
-                arr,
-                extent=_extent(result.grid),
-                cmap=cmap,
-                norm=norm,
-                interpolation="nearest",
-            )
-        else:
-            if hi <= lo:
-                hi = lo + 1e-6
-            im = ax.imshow(
-                arr,
-                extent=_extent(result.grid),
-                cmap=cmap,
-                vmin=lo,
-                vmax=hi,
-                interpolation="nearest",
-            )
-        _map_axes(ax)
-        ax.set_title(title, fontsize=8, color=C_INK)
-        cb = fig.colorbar(im, ax=ax, shrink=0.75, pad=0.02, orientation="horizontal")
-        if log:
-            _log_ticks(cb.ax.xaxis, lo, hi)
-        cb.ax.tick_params(labelsize=6)
-        cb.set_label(label, fontsize=7)
-    fig.tight_layout()
-    return png(fig)
-
-
-def _categorical_maps(result, panels, colours, labels, height_cm=7.0):
-    """panels: [(int array, title)]; colours/labels: code -> colour/label."""
-    from matplotlib.colors import BoundaryNorm, ListedColormap
-    from matplotlib.patches import Patch
-
-    codes = sorted(colours)
-    cmap = ListedColormap([colours[c] for c in codes])
-    norm = BoundaryNorm([c - 0.5 for c in codes] + [codes[-1] + 0.5], cmap.N)
-    fig = new_figure(height_cm)
-    n = len(panels)
-    present = set()
-    for i, (arr, title) in enumerate(panels, start=1):
-        ax = fig.add_subplot(1, n, i)
-        a = np.where(np.isin(arr, codes), arr, np.nan).astype(float)
-        present |= {int(c) for c in np.unique(a[np.isfinite(a)])}
-        ax.imshow(
-            a,
-            extent=_extent(result.grid),
-            cmap=cmap,
-            norm=norm,
-            interpolation="nearest",
-        )
-        _map_axes(ax)
-        ax.set_title(title, fontsize=8, color=C_INK)
-    handles = [Patch(color=colours[c], label=labels[c]) for c in codes if c in present]
-    if handles:
-        fig.legend(
-            handles=handles,
-            loc="lower center",
-            ncol=min(4, len(handles)),
-            fontsize=7,
-            frameon=False,
-        )
-    fig.tight_layout(rect=(0, 0.08, 1, 1))
-    return png(fig)
-
-
-def _class_colours():
-    from mayim_tools.soil._common.export import class_colour
-
-    return {c: class_colour(c) for c, _, _ in TEXTURE_CLASSES}
-
-
-def _texture_triangle(result, lab):
-    """USDA triangle (class areas from the tool's own classifier) with the
-    area's median soils and each product's central soils."""
-    from matplotlib.colors import ListedColormap
-
-    fig = new_figure(11.0)
-    ax = fig.add_subplot(1, 1, 1)
-    step = 0.5
-    g = np.arange(0, 100 + step / 2, step)
-    sa, cl = np.meshgrid(g, g)
-    si = 100 - sa - cl
-    inside = si >= -1e-9
-    codes = np.where(inside, usda_class(sa, np.maximum(si, 0), cl), 0).astype(float)
-    codes[~inside] = np.nan
-    x, y = ternary_xy(sa, cl)
-    cols = _class_colours()
-    cmap = ListedColormap(["#ffffff"] + [cols[c] for c in range(1, 13)])
-    ax.scatter(
-        x[inside].ravel(),
-        y[inside].ravel(),
-        c=codes[inside].ravel(),
-        cmap=cmap,
-        vmin=-0.5,
-        vmax=12.5,
-        s=1.2,
-        marker="s",
-        alpha=0.18,
-        linewidths=0,
-        rasterized=True,
-    )
-    for c in range(1, 13):
-        sel = codes == c
-        if sel.any():
-            ax.text(
-                x[sel].mean(),
-                y[sel].mean(),
-                CLASS_ABBR[c],
-                fontsize=7,
-                ha="center",
-                va="center",
-                color=C_INK_2,
-            )
-    # outline and axes ticks
-    tri = np.array([[0, 0], [100, 0], [50, 50 * math.sqrt(3)], [0, 0]])
-    ax.plot(tri[:, 0], tri[:, 1], color=C_INK, linewidth=0.8)
-    rng = np.random.default_rng(3)
-    markers = []
-    for pname, colour in zip(
-        [p.name for p in result.products], (C_BLUE, C_ORANGE), strict=False
-    ):
-        c = result.central.get(pname, {}).get(lab)
-        if not c:
-            continue
-        ok = np.flatnonzero(
-            np.isfinite(c["clay"].ravel()) & (result.zone_raster.ravel() > 0)
-        )
-        if ok.size > 1500:
-            ok = rng.choice(ok, 1500, replace=False)
-        px, py = ternary_xy(c["sand"].ravel()[ok], c["clay"].ravel()[ok])
-        ax.scatter(
-            px,
-            py,
-            s=3,
-            color=colour,
-            alpha=0.35,
-            linewidths=0,
-            label=f"{pname} (central soil)",
-        )
-        markers.append(pname)
-    med = result.inputs_p50
-    ok = np.flatnonzero(
-        np.isfinite(med["clay"][lab].ravel()) & (result.zone_raster.ravel() > 0)
-    )
-    if ok.size > 1500:
-        ok = rng.choice(ok, 1500, replace=False)
-    px, py = ternary_xy(med["sand"][lab].ravel()[ok], med["clay"][lab].ravel()[ok])
-    ax.scatter(
-        px, py, s=3, color=C_INK, alpha=0.5, linewidths=0, label="Ensemble median"
-    )
-    for v in (20, 40, 60, 80):
-        # bottom edge (clay 0): sand = v
-        xs, ys = ternary_xy(v, 0)
-        ax.text(xs, ys - 3.5, f"{v}", fontsize=6, ha="center", color=C_INK_2)
-        # left edge (silt 0): clay = v
-        xc, yc = ternary_xy(100 - v, v)
-        ax.text(xc - 2, yc, f"{v}", fontsize=6, ha="right", va="center", color=C_INK_2)
-        # right edge (sand 0): silt = v
-        xr, yr = ternary_xy(0, 100 - v)
-        ax.text(xr + 2, yr, f"{v}", fontsize=6, ha="left", va="center", color=C_INK_2)
-    ax.text(50, -9, "Sand (%)", fontsize=7, ha="center", color=C_INK)
-    ax.text(14, 46, "Clay (%)", fontsize=7, rotation=60, ha="center", color=C_INK)
-    ax.text(86, 46, "Silt (%)", fontsize=7, rotation=-60, ha="center", color=C_INK)
-    ax.set_xlim(-8, 108)
-    ax.set_ylim(-12, 92)
-    ax.set_aspect("equal")
-    ax.axis("off")
-    ax.legend(loc="upper right", fontsize=7, frameon=False, markerscale=3)
-    fig.tight_layout()
-    return png(fig)
-
-
-def _scatter_panels(panels, height_cm=6.5):
-    """panels: [(x, y, xlabel, ylabel, log)] with a 1:1 line."""
-    fig = new_figure(height_cm)
-    n = len(panels)
-    for i, (x, y, xl, yl, log) in enumerate(panels, start=1):
-        ax = fig.add_subplot(1, n, i)
-        ok = np.isfinite(x) & np.isfinite(y)
-        if log:
-            ok &= (x > 0) & (y > 0)
-        x, y = x[ok], y[ok]
-        ax.scatter(x, y, s=3, color=C_BLUE, alpha=0.35, linewidths=0)
-        if x.size:
-            lo = min(x.min(), y.min())
-            hi = max(x.max(), y.max())
-            ax.plot([lo, hi], [lo, hi], color=C_INK_2, linewidth=0.7, linestyle="--")
-        if log and x.size:
-            ax.set_xscale("log")
-            ax.set_yscale("log")
-            lo_, hi_ = min(x.min(), y.min()), max(x.max(), y.max())
-            _log_ticks(ax.xaxis, lo_, hi_)
-            _log_ticks(ax.yaxis, lo_, hi_)
-        ax.set_xlabel(xl)
-        ax.set_ylabel(yl)
-        style_axes(ax)
-    fig.tight_layout()
-    return png(fig)
-
-
-def _profiles(result, zone):
-    fig = new_figure(7.0)
-    codes = ("theta_s", "theta_fc", "theta_wp", "ksat", "psi_f")
-    labs = [
-        lab for lab, top, bot in result.settings.layers if lab in result.texture_class
-    ]
-    mids = {lab: (top + bot) / 2 for lab, top, bot in result.settings.layers}
-    for i, code in enumerate(codes, start=1):
-        ax = fig.add_subplot(1, len(codes), i)
-        prm = PARAMETER_BY_CODE[code]
-        ys, med, lo, hi = [], [], [], []
-        for lab in labs:
-            r = _row(result, zone, lab, code)
-            if r is None:
-                continue
-            ys.append(mids[lab])
-            med.append(r["Median of P50"])
-            lo.append(r["Median cell P5"])
-            hi.append(r["Median cell P95"])
-        if ys:
-            ax.fill_betweenx(ys, lo, hi, color=C_BLUE, alpha=0.18, linewidth=0)
-            ax.plot(med, ys, color=C_BLUE, marker="o", markersize=3, linewidth=1)
-        ax.invert_yaxis()
-        if prm.log and ys:
-            ax.set_xscale("log")
-            _log_ticks(ax.xaxis, min(lo), max(hi))
-        ax.set_xlabel(f"{code} ({prm.units})")
-        if i == 1:
-            ax.set_ylabel("Depth (cm, layer middle)")
-        style_axes(ax)
-    fig.tight_layout()
-    return png(fig)
-
-
-def _box_by_product(result, lab):
-    """Distribution over cells of each product x method central soil and of
-    the pooled ensemble median, for Ksat, the Green-Ampt suction and field
-    capacity."""
-    fig = new_figure(7.5)
-    zone_mask = result.zone_raster > 0
-    short = {"SoilGrids 2.0": "SG", "OpenLandMap-soildb": "OLM"}
-    mshort = {"SR2006": "S&R", "TOTH2015": "Tóth"}
-    for i, code in enumerate(("ksat", "psi_f", "theta_fc"), start=1):
-        ax = fig.add_subplot(1, 3, i)
-        data, names = [], []
-        for p in result.products:
-            by = result.central.get(p.name, {}).get(lab, {}).get("by_method", {})
-            for mcode, vals in by.items():
-                if code not in vals:
-                    continue
-                v = vals[code][zone_mask]
-                v = v[np.isfinite(v)]
-                if not v.size:
-                    continue
-                data.append(v)
-                names.append(f"{short.get(p.name, p.name)}\n{mshort.get(mcode, mcode)}")
-        v = result.stats[code][lab][1][zone_mask]
-        data.append(v[np.isfinite(v)])
-        names.append("Pooled")
-        data = [d if d.size else np.array([np.nan]) for d in data]
-        ax.boxplot(data, showfliers=False, widths=0.5, medianprops={"color": C_ORANGE})
-        ax.set_xticks(range(1, len(names) + 1))
-        ax.set_xticklabels(names)
-        prm = PARAMETER_BY_CODE[code]
-        if prm.log:
-            ax.set_yscale("log")
-            allv = np.concatenate(
-                [x[np.isfinite(x) & (x > 0)] for x in data] or [np.array([1.0])]
-            )
-            if allv.size:
-                _log_ticks(ax.yaxis, np.percentile(allv, 1), np.percentile(allv, 99))
-        ax.set_ylabel(f"{code} ({prm.units})")
-        ax.tick_params(axis="x", labelsize=6)
-        style_axes(ax)
-    fig.tight_layout()
-    return png(fig)
-
-
-def _variance_bars(result, zone_index, lab):
-    fig = new_figure(6.0)
-    ax = fig.add_subplot(1, 1, 1)
-    per = result.variance.get(zone_index, {}).get(lab, {})
-    codes = [p.code for p in PARAMETERS if p.code in per]
-    colours = {
-        "input": C_BLUE,
-        "product": C_ORANGE,
-        "method": C_AQUA,
-        "interaction": "#999999",
-    }
-    left = np.zeros(len(codes))
-    for part in VARIANCE_PARTS:
-        vals = []
-        for code in codes:
-            tot = per[code].get("total", 0.0)
-            vals.append(per[code].get(part, 0.0) / tot if tot > 0 else 0.0)
-        vals = np.array(vals)
-        ax.barh(codes, vals, left=left, color=colours[part], label=part)
-        left += vals
-    ax.set_xlim(0, 1)
-    ax.set_xlabel("Share of variance")
-    ax.invert_yaxis()
-    ax.legend(
-        fontsize=7, frameon=False, ncol=4, loc="lower center", bbox_to_anchor=(0.5, 1.0)
-    )
-    style_axes(ax)
-    fig.tight_layout()
-    return png(fig)
+_continuous_maps = figures.continuous_maps
+_categorical_maps = figures.categorical_maps
+_texture_triangle = figures.texture_triangle
+_scatter_panels = figures.scatter_panels
+_profiles = figures.profiles
+_box_by_product = figures.box_by_member
+_variance_bars = figures.variance_bars
 
 
 # ----------------------------------------------------------------------
 # Report
 # ----------------------------------------------------------------------
+
+CONF_TEXT = {
+    "High": "the 90 % range is within about a factor 2 (Ksat, suctions) or "
+    "±15 % (water contents), and products and methods agree",
+    "Medium": "the range is within about a factor 4 or ±30 %, and products and "
+    "methods differ moderately",
+    "Low": "the range is wider, or products and methods disagree strongly",
+}
+
+
+def _fmt_design(code, v) -> str:
+    prm = PARAMETER_BY_CODE[code]
+    return _sig(v, 3) if prm.log else _f(v, prm.decimals)
+
+
+MAX_DESIGN_FIGURES = 6
+
+
+PROPER_NAMES = ("Green-Ampt", "Brooks-Corey", "van Genuchten", "Ksat")
+
+
+def _lower_first(name: str) -> str:
+    """Lower-case a label's first letter mid-sentence, except proper names
+    and acronyms."""
+    if name.startswith(PROPER_NAMES) or name[1:2].isupper():
+        return name
+    return name[0].lower() + name[1:]
+
+
+def _join(items, word="and") -> str:
+    items = list(items)
+    if len(items) <= 1:
+        return "".join(items)
+    return ", ".join(items[:-1]) + f" {word} " + items[-1]
+
+
+def _design_section(d, result, notes) -> None:
+    """Candidate design parameters with confidence, recommendations,
+    limitations and risks (section 8)."""
+    from .design import ACTION_TEXT, EFFECTIVE_K_FACTOR, SOURCE_TEXT
+
+    rows = result.design_rows
+    d.heading("8. Candidate design parameters", 2)
+    d.para(
+        "The table gives one candidate value per zone, layer and parameter for "
+        "the engineer to confirm. Ksat and the Green-Ampt suction are areal "
+        "geometric means of the cell medians (they are log-normally "
+        "distributed); water contents are arithmetic means. The sensitivity "
+        "range aggregates the cell P5 and P95 maps in the same way, i.e. as if "
+        "the whole zone sat at its lower or upper bound together - a wide, "
+        "deliberately cautious range for model sensitivity runs. The product x "
+        "method range shows the spread between the individual ensemble "
+        "members (each product's central soil run through each method). The "
+        "values are estimates from global soil maps and published methods; "
+        "they are not prescribed by any design standard."
+    )
+    if not rows:
+        d.para("No candidate values could be computed.")
+        return
+    for zone in result.zone_names:
+        zrows = [r for r in rows if r["Zone"] == zone]
+        if not zrows:
+            continue
+        d.caption("Table", f"{zone}: candidate design parameters")
+        table, groups = [], []
+        for lab in [lab for lab, _, _ in result.settings.layers]:
+            lrows = [r for r in zrows if r["Layer"] == lab]
+            if not lrows:
+                continue
+            groups.append(len(table))
+            table.append([f"Layer {lab}", "", "", "", "", ""])
+            for r in lrows:
+                code = r["Parameter"]
+                table.append(
+                    [
+                        f"{figures.SYMBOL.get(code, code)} ({r['Units']})",
+                        _fmt_design(code, r["Candidate value"]),
+                        f"{_fmt_design(code, r['Sensitivity low (P5)'])} - "
+                        f"{_fmt_design(code, r['Sensitivity high (P95)'])}",
+                        f"{_fmt_design(code, r['Product x method min'])} - "
+                        f"{_fmt_design(code, r['Product x method max'])}",
+                        r["Confidence"],
+                        f"{r['Main uncertainty source']} ({r['Share of variance (%)']:.0f} %)",
+                    ]
+                )
+        d.table(
+            [
+                "Parameter",
+                "Candidate",
+                "Sensitivity range (P5-P95)",
+                "Product x method range",
+                "Confidence",
+                "Main uncertainty source",
+            ],
+            table,
+            widths_cm=[3.0, 2.0, 3.2, 3.0, 1.9, 2.9],
+            group_rows=groups,
+        )
+        ks = [
+            r
+            for r in zrows
+            if r["Parameter"] == "ksat" and "Effective K (0.5 Ksat)" in r
+        ]
+        if ks:
+            d.para(
+                "Effective conductivity for Green-Ampt models that use a wetted-zone "
+                f"K (about {EFFECTIVE_K_FACTOR:g} x Ksat; Bouwer, 1966): "
+                + "; ".join(
+                    f"{r['Layer']} {_sig(r['Effective K (0.5 Ksat)'], 3)} mm/h"
+                    for r in ks
+                )
+                + ". Use either Ksat or the effective K, as the model expects - not both."
+            )
+        if result.zone_names.index(zone) < MAX_DESIGN_FIGURES:
+            try:
+                d.picture(
+                    figures.design_forest(result, zone),
+                    f"Candidate design values for {zone}: candidate (diamond, "
+                    "coloured by confidence), sensitivity range (line) and each "
+                    "product x method member",
+                )
+            except Exception as exc:  # noqa: BLE001
+                notes.append(f"Design figure for {zone} could not be drawn ({exc}).")
+    if len(result.zone_names) > MAX_DESIGN_FIGURES:
+        d.para(
+            f"Design figures are drawn for the first {MAX_DESIGN_FIGURES} zones; "
+            "all zones are in the tables and in rsp_design_parameters.csv."
+        )
+    d.heading("8.1 Confidence", 3)
+    d.para(
+        "Each candidate is rated High, Medium or Low from two numbers: the "
+        "width of its sensitivity range and the spread between the ensemble "
+        "members. For Ksat and the suctions the range is measured as the factor "
+        "U = √(P95/P5) and the spread as the ratio of the largest to the smallest "
+        "member; for water contents both are measured relative to the candidate."
+    )
+    d.table(
+        ["Confidence", "Meaning"],
+        [[k, v] for k, v in CONF_TEXT.items()],
+        widths_cm=[2.5, 13.5],
+    )
+    counts = {lvl: sum(1 for r in rows if r["Confidence"] == lvl) for lvl in CONF_TEXT}
+    d.para(
+        f"Of {len(rows)} candidate values, {counts['High']} are rated High, "
+        f"{counts['Medium']} Medium and {counts['Low']} Low."
+    )
+
+    d.heading("8.2 Recommendations", 3)
+    by_param = {}
+    for r in rows:
+        by_param.setdefault(r["Parameter"], []).append(r)
+    groups = {}  # (levels, source) -> parameter names, in table order
+    for code, prs in by_param.items():
+        levels = tuple(
+            sorted({r["Confidence"] for r in prs}, key=["High", "Medium", "Low"].index)
+        )
+        sources = {}
+        for r in prs:
+            src = r["Main uncertainty source"]
+            sources[src] = sources.get(src, 0) + 1
+        source = max(sources, key=sources.get)
+        key = ("High",) if levels == ("High",) else (levels, source)
+        groups.setdefault(key, []).append(PARAMETER_BY_CODE[code].label)
+    for key, names in groups.items():
+        listed = _join([names[0]] + [_lower_first(n) for n in names[1:]])
+        if key == ("High",):
+            d.bullet(f"{listed}: high confidence; use the candidate values.")
+            continue
+        levels, source = key
+        verb = "is" if len(names) == 1 else "are"
+        d.bullet(
+            f"{listed} {verb} rated {_join([lvl.lower() for lvl in levels], 'or')}, "
+            f"mainly because of {SOURCE_TEXT[source]}. Run the model at both "
+            f"sensitivity bounds; the range is best reduced by {ACTION_TEXT[source]}."
+        )
+    d.bullet(
+        "Choose between products and methods deliberately when their values "
+        "differ (product x method range); state the choice and the reason in "
+        "the design report."
+    )
+    d.bullet(
+        "Where the design standard prescribes loss parameters (for example the "
+        "ARR Data Hub losses in Australia, or the infiltration approach of the "
+        "governing South African manual), use those; report these values as "
+        "supporting evidence or for sensitivity testing."
+    )
+    d.bullet(
+        "Confirm Ksat with infiltration tests (double-ring or tension "
+        "infiltrometer) at representative sites before final design, and "
+        "calibrate on observed runoff events where records exist."
+    )
+
+    d.heading("8.3 Limitations of the candidate values", 3)
+    for text in (
+        "Zone values average over the soils inside each zone; a zone with "
+        "contrasting soils needs subdivision or the cell rasters.",
+        "Texture-based methods describe the soil matrix. Macropores, root "
+        "channels and cracks raise field infiltration; crusting, compaction and "
+        "sealing lower it. Neither is represented.",
+        "Built-up land is filled from older or neighbouring predictions and "
+        "does not describe sealed surfaces or fill material.",
+        "The initial water content (antecedent moisture) is not part of these "
+        "values; the Green-Ampt moisture deficit must be set in the model.",
+        "The confidence rating describes the spread of the available data and "
+        "methods, not their accuracy: a narrow range can still be biased.",
+    ):
+        d.bullet(text)
+
+    d.heading("8.4 Risks", 3)
+    for text in (
+        "Flood estimation: taking Ksat from the upper end of the range lowers "
+        "runoff and can under-design drainage. For flood estimation, test the "
+        "lower bound too.",
+        "Infiltration and retention design (soakaways, infiltration basins, "
+        "on-site retention): taking Ksat from the upper end of the range "
+        "over-estimates disposal capacity. Base such designs on site tests.",
+        "Product choice: the two soil products can describe different soils "
+        "(see section 4.5); picking one without checking can bias every "
+        "parameter in the same direction.",
+        "Method choice: the methods can differ by a factor of several in the "
+        "Green-Ampt suction; a single method hides this spread.",
+        "Scale: a 30 m or 250 m map value is not a point measurement; field "
+        "tests at a few points will scatter widely around it.",
+    ):
+        d.bullet(text)
 
 
 def _short_source(text: str) -> str:
@@ -650,6 +512,22 @@ def write_report(result, path: str) -> None:
             f"The texture class holds in at least 80 % of the draws in "
             f"{_pct(t['Texture confidence 1 (%)'])} % of cells."
         )
+    cand = [
+        r
+        for r in result.design_rows
+        if r["Layer"] == top
+        and r["Zone"] == result.zone_names[0]
+        and r["Parameter"] in ("ksat", "psi_f")
+    ]
+    if cand:
+        d.label("Candidate design values")
+        for r in cand:
+            d.bullet(
+                f"{r['Label']} ({top}, {r['Zone']}): {_fmt_design(r['Parameter'], r['Candidate value'])} "
+                f"{r['Units']} (sensitivity range {_fmt_design(r['Parameter'], r['Sensitivity low (P5)'])}-"
+                f"{_fmt_design(r['Parameter'], r['Sensitivity high (P95)'])}); confidence "
+                f"{r['Confidence'].lower()}. See section 8."
+            )
     d.label("Main caveats")
     d.bullet(
         "Pedotransfer functions describe the soil matrix only. Soil structure, "
@@ -745,7 +623,7 @@ def write_report(result, path: str) -> None:
             d.para(p.run["Citation"], bold_lead=f"{p.name}:")
     if any(p.water_source for p in products):
         d.para(
-            "Mapped water contents used only for the checks in section 8: "
+            "Mapped water contents used only for the checks in section 9: "
             + "; ".join(p.water_source for p in products if p.water_source)
             + "."
         )
@@ -1075,7 +953,7 @@ def write_report(result, path: str) -> None:
     d.para(
         "Green-Ampt parameters tabulated per USDA texture class (as reproduced "
         "in Chow et al., 1988, Table 4.3.1) are compared with the tool's "
-        "medians in section 8. They are class means of a large US data set, "
+        "medians in section 9. They are class means of a large US data set, "
         "not an ensemble member. The tabulated K is a Green-Ampt hydraulic "
         "conductivity, roughly half of the saturated conductivity, and the "
         "table has no Silt class."
@@ -1296,8 +1174,10 @@ def write_report(result, path: str) -> None:
     )
 
     # 8. Checks -------------------------------------------------------------
-    d.heading("8. Checks", 2)
-    d.heading("8.1 Mapped water contents", 3)
+    _design_section(d, result, notes)
+
+    d.heading("9. Checks", 2)
+    d.heading("9.1 Mapped water contents", 3)
     if result.checks:
         d.para(
             "The pedotransfer estimates of field capacity and wilting point are "
@@ -1353,7 +1233,7 @@ def write_report(result, path: str) -> None:
             "wv0033/wv1500 or the OpenLandMap 250 m water content), so this "
             "check was not made."
         )
-    d.heading("8.2 Rawls, Brakensiek & Miller (1983)", 3)
+    d.heading("9.2 Rawls, Brakensiek & Miller (1983)", 3)
     d.caption(
         "Table", "Tool medians against the class values of the dominant texture class"
     )
@@ -1394,7 +1274,7 @@ def write_report(result, path: str) -> None:
     )
 
     # 9. Limitations ----------------------------------------------------------
-    d.heading("9. Limitations", 2)
+    d.heading("10. Limitations", 2)
     for text in (
         "Soil structure and macropores are not represented by texture-based "
         "methods; field infiltration can differ by an order of magnitude.",
@@ -1415,7 +1295,7 @@ def write_report(result, path: str) -> None:
         d.bullet(text)
 
     # 10. References --------------------------------------------------------
-    d.heading("10. References", 2)
+    d.heading("11. References", 2)
     for ref in REFERENCES:
         d.para(ref)
 

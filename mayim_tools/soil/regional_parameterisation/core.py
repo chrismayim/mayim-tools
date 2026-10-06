@@ -29,6 +29,7 @@ from mayim_tools.soil._common.export import (
 from mayim_tools.soil._common.grid import TargetGrid, make_grid
 from mayim_tools.soil._common.stats import _r
 
+from . import design as design_mod
 from . import fill as fill_mod
 from . import inputs as inp
 from .ptf import METHOD_BY_CODE, active_parameters, rawls_1983, saxton_rawls, toth2015
@@ -47,7 +48,7 @@ from .uncertainty import (
 )
 
 TOOL_NAME = "Regional soil parameterisation"
-TOOL_VERSION = "0.6.0"
+TOOL_VERSION = "0.6.1"
 CHUNK_CELLS = 1024
 MAX_CELLS_DEFAULT = 2_000_000  # ~1800 km2 at 30 m; about 6 GB of memory
 SAMPLE_POINTS = 3000  # cells kept for scatter plots in the report
@@ -58,6 +59,7 @@ CLASS_FILE = "rsp_texture_class.tif"
 QUALITY_FILE = "rsp_quality.tif"
 DIFF_FILE = "rsp_product_difference.tif"
 ZONES_CSV = "rsp_zone_summary.csv"
+DESIGN_CSV = "rsp_design_parameters.csv"
 METADATA_CSV = "rsp_metadata.csv"
 REPORT_FILE = "regional_soil_parameterisation_report.docx"
 LAYER_FILE = "rsp_layers.qlr"
@@ -166,6 +168,7 @@ class RunResult:
     variance: dict = field(default_factory=dict)  # zone -> layer -> param -> parts
     zone_rows: list = field(default_factory=list)
     zone_texture: list = field(default_factory=list)
+    design_rows: list = field(default_factory=list)
     reference_rows: list = field(default_factory=list)
     checks: list = field(default_factory=list)
     check_samples: dict = field(default_factory=dict)
@@ -411,6 +414,7 @@ def run(
     progress_fn(0.85)
 
     _zone_summary(result)
+    result.design_rows = design_mod.design_rows(result, SHORT)
     _reference_check(result)
     _water_checks(result)
     if len(result.products) == 2:
@@ -1038,6 +1042,24 @@ def _write_tables(result: RunResult) -> None:
                 ]
             )
     result.files.append((path, "Zone summary per layer and parameter"))
+    if result.design_rows:
+        path = os.path.join(result.settings.out_dir, DESIGN_CSV)
+        dcols = []
+        for row in result.design_rows:
+            dcols += [k for k in row if k not in dcols]
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(dcols)
+            for row in result.design_rows:
+                w.writerow(
+                    [
+                        v if isinstance(v, str) else _fmt(v)
+                        for v in (row.get(c, "") for c in dcols)
+                    ]
+                )
+        result.files.append(
+            (path, "Candidate design parameters (central value, range, confidence)")
+        )
 
 
 def _section(title, rows):

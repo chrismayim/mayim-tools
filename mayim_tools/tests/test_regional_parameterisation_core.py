@@ -763,3 +763,102 @@ def test_end_to_end_methods(tmp_path, folders):
     s.mc.methods = ()
     with pytest.raises(SoilDataError, match="at least one method"):
         core.run(s)
+
+
+# ----------------------------------------------------------------------
+# Candidate design parameters (v0.6.1)
+# ----------------------------------------------------------------------
+from mayim_tools.soil.regional_parameterisation import design as dmod  # noqa: E402
+
+
+def test_design_areal_means():
+    v = np.array([1.0, 10.0, 100.0, np.nan, 0.0])
+    assert dmod.areal(v, log=True) == pytest.approx(10.0)
+    assert dmod.areal(np.array([0.2, 0.4, np.nan]), log=False) == pytest.approx(0.3)
+    assert math.isnan(dmod.areal(np.array([np.nan]), log=True))
+
+
+@pytest.mark.parametrize(
+    "code, args, expected",
+    [
+        ("ksat", (10.0, 5.0, 20.0, 8.0, 12.0), "High"),  # U = 2, R = 1.5
+        ("ksat", (10.0, 3.0, 40.0, 5.0, 15.0), "Medium"),  # U = 3.65, R = 3
+        ("ksat", (10.0, 3.0, 40.0, 2.0, 15.0), "Low"),  # R = 7.5
+        ("ksat", (10.0, 0.5, 70.0, 8.0, 12.0), "Low"),  # U = 11.8
+        ("theta_s", (0.40, 0.36, 0.44, 0.39, 0.42), "High"),  # h = 0.10, s = 0.075
+        ("theta_s", (0.40, 0.30, 0.50, 0.37, 0.45), "Medium"),  # h = 0.25, s = 0.2
+        ("theta_fc", (0.20, 0.05, 0.40, 0.15, 0.25), "Low"),  # h = 0.875
+        ("ksat", (math.nan, 1.0, 2.0, 1.0, 1.0), "Low"),
+    ],
+)
+def test_design_confidence_rules(code, args, expected):
+    assert dmod.confidence(code, *args) == expected
+
+
+def test_design_confidence_single_member():
+    # one member: no spread information, the range alone decides
+    assert dmod.confidence("ksat", 10.0, 5.0, 20.0, 10.0, 10.0) == "High"
+    assert dmod.confidence("ksat", 10.0, 5.0, 20.0, math.nan, math.nan) == "High"
+
+
+def test_design_recommendation_text():
+    assert "candidate value" in dmod.recommendation("High", "input")
+    assert "sensitivity" in dmod.recommendation("Medium", "method")
+    assert dmod.recommendation("Low", "input").startswith("Indicative only")
+
+
+def test_end_to_end_design_rows(tmp_path, folders):
+    import csv
+
+    from mayim_tools.soil.regional_parameterisation import core
+
+    r = _run(tmp_path, folders)
+    rows = r.design_rows
+    assert rows
+    n_layers = len({row["Layer"] for row in rows})
+    params = {row["Parameter"] for row in rows}
+    assert params <= set(dmod.DESIGN_PARAMS)
+    assert len(rows) == len(r.zone_names) * n_layers * len(params)
+    for row in rows:
+        assert row["Confidence"] in ("High", "Medium", "Low")
+        lo, c, hi = (
+            row["Sensitivity low (P5)"],
+            row["Candidate value"],
+            row["Sensitivity high (P95)"],
+        )
+        assert lo <= c <= hi
+        assert row["Main uncertainty source"] in (
+            "input",
+            "product",
+            "method",
+            "interaction",
+        )
+        assert 0.0 <= row["Share of variance (%)"] <= 100.0
+        members = [v for k, v in row.items() if k.startswith("Member ")]
+        assert members and min(members) == row["Product x method min"]
+        if row["Parameter"] == "ksat":
+            assert row["Effective K (0.5 Ksat)"] == pytest.approx(0.5 * c)
+            assert row["Aggregation"] == "geometric mean"
+    path = os.path.join(str(tmp_path), core.DESIGN_CSV)
+    with open(path, newline="", encoding="utf-8") as fh:
+        assert len(list(csv.DictReader(fh))) == len(rows)
+
+
+def test_figure_log_ticks_and_diverging_scale():
+    pytest.importorskip("matplotlib")
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from mayim_tools.soil.regional_parameterisation import figures
+
+    fig, ax = plt.subplots()
+    for lo, hi in ((60.0, 92.0), (8.0, 16.0), (0.5, 70.0), (0.002, 0.004)):
+        ax.set_xscale("log")
+        figures._log_axis(ax.xaxis, lo, hi)
+        ticks = ax.xaxis.get_major_locator()()
+        assert len(ticks) >= 2
+        assert all(lo * 0.999 <= t <= hi * 1.001 for t in ticks)
+    plt.close(fig)
+    assert "RdBu_r" in figures.DIVERGING
