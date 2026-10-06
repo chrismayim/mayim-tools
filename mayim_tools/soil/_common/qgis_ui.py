@@ -56,7 +56,8 @@ LOAD_ALL, LOAD_MAIN, LOAD_NONE = 0, 1, 2
 @dataclass
 class OutputLayer:
     """A raster to load and/or list in the run's .qlr layer file.
-    ``classes`` (value, label) gives a categorised (paletted) style on band 1;
+    ``classes`` (value, label[, colour]) gives a categorised (paletted) style
+    on band 1 (colour defaults to a stable colour per value);
     otherwise band 1 is shown as stretched single-band grey."""
 
     path: str
@@ -79,8 +80,10 @@ def apply_style(layer, out: OutputLayer) -> None:
         from mayim_tools.soil._common.export import class_colour
 
         classes = [
-            QgsPalettedRasterRenderer.Class(value, QColor(class_colour(value)), label)
-            for value, label in out.classes
+            QgsPalettedRasterRenderer.Class(
+                c[0], QColor(c[2] if len(c) > 2 else class_colour(c[0])), c[1]
+            )
+            for c in out.classes
         ]
         layer.setRenderer(QgsPalettedRasterRenderer(layer.dataProvider(), 1, classes))
     else:

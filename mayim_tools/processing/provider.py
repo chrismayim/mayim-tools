@@ -69,6 +69,9 @@ from mayim_tools.rainfall.persiann_extract.persiann_extract_algorithm import (
 from mayim_tools.rainfall.storm_library.storm_library_algorithm import (
     AdjustToDdfAlgorithm,
 )
+from mayim_tools.soil.hydrologic_soil_groups.hydrologic_soil_groups_algorithm import (  # noqa: E501
+    HydrologicSoilGroupsAlgorithm,
+)
 from mayim_tools.soil.openlandmap_extract.openlandmap_extract_algorithm import (
     OpenLandMapExtractAlgorithm,
 )
@@ -122,3 +125,4 @@ class MayimToolsProvider(QgsProcessingProvider):
         self.addAlgorithm(SoilGridsExtractAlgorithm())
         self.addAlgorithm(OpenLandMapExtractAlgorithm())
         self.addAlgorithm(RegionalSoilParameterisationAlgorithm())
+        self.addAlgorithm(HydrologicSoilGroupsAlgorithm())
