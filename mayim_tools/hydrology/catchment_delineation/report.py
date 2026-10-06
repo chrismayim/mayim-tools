@@ -13,7 +13,7 @@ from collections.abc import Sequence
 
 import numpy as np
 
-from mayim_tools.hydrology._common.docx_report import (
+from mayim_tools._common.docx_report import (
     C_AQUA,
     C_BLUE,
     C_INK,
@@ -21,10 +21,10 @@ from mayim_tools.hydrology._common.docx_report import (
     C_ORANGE,
     format_value,
 )
-from mayim_tools.hydrology._common.docx_report import Doc as _Doc
-from mayim_tools.hydrology._common.docx_report import new_figure as _new_figure
-from mayim_tools.hydrology._common.docx_report import png as _png
-from mayim_tools.hydrology._common.docx_report import style_axes as _style_axes
+from mayim_tools._common.docx_report import Doc as _Doc
+from mayim_tools._common.docx_report import new_figure as _new_figure
+from mayim_tools._common.docx_report import png as _png
+from mayim_tools._common.docx_report import style_axes as _style_axes
 
 from .core import CatchmentResult
 from .description import REFERENCES, describe_catchment

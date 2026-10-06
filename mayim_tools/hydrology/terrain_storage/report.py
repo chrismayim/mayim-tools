@@ -15,7 +15,7 @@ from collections.abc import Sequence
 
 import numpy as np
 
-from mayim_tools.hydrology._common.docx_report import (
+from mayim_tools._common.docx_report import (
     C_AQUA,
     C_BLUE,
     C_INK,
