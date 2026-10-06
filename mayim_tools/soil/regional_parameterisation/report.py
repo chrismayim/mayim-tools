@@ -182,6 +182,77 @@ def _fmt_design(code, v) -> str:
 MAX_DESIGN_FIGURES = 6
 
 
+def _plain_confidence_text(result) -> str:
+    """Plain-language explanation of the confidence rating for readers
+    without a soils or statistics background; follows the run settings."""
+    n_prod = len(result.products)
+    n_meth = len(result.settings.mc.methods)
+    draws = result.settings.mc.draws
+    sources = []
+    if n_prod > 1:
+        sources.append("two different soil maps")
+    if n_meth > 1:
+        sources.append("two different published calculation methods")
+    if sources:
+        using = " It also uses " + " and ".join(sources) + "."
+    else:
+        using = ""
+    agree = []
+    if n_prod > 1:
+        agree.append("the two maps")
+    if n_meth > 1:
+        agree.append("the two methods")
+    if agree:
+        second = (
+            f" Second, do {' and '.join(agree)} roughly agree when each is used "
+            "on its own?"
+        )
+        test = "If the range is narrow and they agree closely"
+        medium = "If both are moderate"
+    else:
+        second = ""
+        test = "If the range is narrow"
+        medium = "If it is moderate"
+    causes = ["the soil maps themselves"]
+    if n_prod > 1:
+        causes.append("the disagreement between the two maps")
+    if n_meth > 1:
+        causes.append("the choice of method")
+    cause_text = (
+        ", ".join(causes[:-1]) + " or " + causes[-1] if len(causes) > 1 else causes[0]
+    )
+    if len(causes) > 1:
+        source_text = (
+            f"The tool also reports which part of the uncertainty is largest: "
+            f"{cause_text}."
+        )
+    else:
+        source_text = (
+            "With one map and one method, all of this uncertainty comes from "
+            "the soil map itself."
+        )
+    return (
+        "The soil maps used here are estimates, and each comes with a range of "
+        "plausible values rather than a single exact number. So instead of "
+        "calculating each soil parameter once, the tool calculates it "
+        f"{draws} times for every map cell. Each time it picks slightly "
+        "different but realistic soil properties from within the ranges the "
+        f"maps give.{using} This produces a spread of possible answers for "
+        "every location. The value in the middle of that spread is the "
+        '"candidate value". The low and high ends, leaving out the most '
+        'extreme 5 % on each side, are the "sensitivity range". Confidence is '
+        "then judged with simple questions. First, how wide is that range? For "
+        "example, is the highest likely value of the water infiltration rate "
+        "less than about four times the lowest, or more than a hundred times?"
+        f"{second} {test}, the value is rated High. {medium}, Medium. "
+        f"Otherwise, Low. {source_text} That shows the best way to improve the "
+        "estimate, such as soil sampling or infiltration tests on site. A Low "
+        "rating does not mean the value is wrong. It means the available "
+        "information cannot pin it down, so the value should be tested over "
+        "its whole range or checked in the field."
+    )
+
+
 PROPER_NAMES = ("Green-Ampt", "Brooks-Corey", "van Genuchten", "Ksat")
 
 
@@ -582,10 +653,13 @@ def write_report(result, path: str) -> None:
         "parameters needed for infiltration and soil-water modelling: water "
         "contents at saturation, field capacity (33 kPa) and wilting point "
         "(1500 kPa), plant-available water, saturated hydraulic conductivity "
-        "(Ksat), Brooks-Corey retention parameters and the Green-Ampt "
-        "wetting-front suction. Every value is reported as a median with a "
-        "90 % range (P5-P95), and the sources of uncertainty are separated."
+        "(Ksat), Brooks-Corey and van Genuchten retention parameters and the "
+        "Green-Ampt wetting-front suction. Every value is reported as a median "
+        "with a 90 % range (P5-P95), and the sources of uncertainty are "
+        "separated."
     )
+    d.heading("How confidence is judged", 3)
+    d.para(_plain_confidence_text(result))
     d.para(
         "The tool does not assign hydrologic soil groups or curve numbers and "
         "does not set initial moisture conditions; those are separate steps "

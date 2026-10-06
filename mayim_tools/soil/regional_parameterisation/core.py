@@ -48,7 +48,7 @@ from .uncertainty import (
 )
 
 TOOL_NAME = "Regional soil parameterisation"
-TOOL_VERSION = "0.6.1"
+TOOL_VERSION = "0.6.2"
 CHUNK_CELLS = 1024
 MAX_CELLS_DEFAULT = 2_000_000  # ~1800 km2 at 30 m; about 6 GB of memory
 SAMPLE_POINTS = 3000  # cells kept for scatter plots in the report
