@@ -18,6 +18,7 @@ from mayim_tools._common.docx_report import (
 
 from . import figures
 from . import fill as fill_mod
+from .core import pair_label, product_pairs
 from .ptf import (
     METHOD_BY_CODE,
     PARAMETER_BY_CODE,
@@ -515,8 +516,19 @@ def _product_medians_table(d, result, lab) -> None:
     d.table(["Parameter"] + [c for c, _ in cols] + ["Pooled P50"], rows)
 
 
-SHORT_PRODUCT = {"SoilGrids 2.0": "SoilGrids", "OpenLandMap-soildb": "OpenLandMap"}
-SHORT_CODE = {"SoilGrids 2.0": "SG", "OpenLandMap-soildb": "OLM"}
+SHORT_PRODUCT = {
+    "SoilGrids 2.0": "SoilGrids",
+    "OpenLandMap-soildb": "OpenLandMap",
+    "iSDAsoil": "iSDAsoil",
+}
+SHORT_CODE = {"SoilGrids 2.0": "SG", "OpenLandMap-soildb": "OLM", "iSDAsoil": "iSDA"}
+
+
+def _and(items) -> str:
+    items = list(items)
+    if len(items) <= 2:
+        return " and ".join(items)
+    return ", ".join(items[:-1]) + " and " + items[-1]
 
 
 def _figure(d, builder, caption, notes):
@@ -536,7 +548,8 @@ def write_report(result, path: str) -> None:
     top = labs[0] if labs else s.layers[0][0]
     products = result.products
     names = [p.name for p in products]
-    both = len(products) == 2
+    both = len(products) >= 2
+    has_isda = "iSDAsoil" in names
     methods = [METHOD_BY_CODE[m] for m in mc.methods]
     area = float((result.zone_raster > 0).sum()) * result.cell_area_km2
 
@@ -548,8 +561,8 @@ def write_report(result, path: str) -> None:
         "This report documents hydraulic soil parameters estimated for "
         f"{len(result.zone_names)} zone{'s' if len(result.zone_names) != 1 else ''} "
         f"covering {_f(area, 1)} km2, for the depth layers "
-        f"{', '.join(labs)}. The inputs are global soil maps from "
-        f"{' and '.join(names)}, harmonised to these layers on a "
+        f"{', '.join(labs)}. The inputs are soil maps from "
+        f"{_and(names)}, harmonised to these layers on a "
         f"{_f(g.res, 0) if g.res >= 1 else _sig(g.res)} (map units) grid. Parameters were "
         f"estimated with {', '.join(m.name for m in methods)} and their "
         f"uncertainty was propagated by Monte Carlo simulation ({mc.draws} draws "
@@ -614,9 +627,9 @@ def write_report(result, path: str) -> None:
     for c in result.comparison:
         if c["Layer"] == top:
             d.bullet(
-                f"The two products disagree ({top}): mean clay difference "
-                f"OpenLandMap - SoilGrids {_f(c['Mean clay difference OLM - SG (%)'], 1)} %, "
-                f"sand {_f(c['Mean sand difference OLM - SG (%)'], 1)} %; same texture "
+                f"Products {c['Pair']} ({top}): mean clay difference "
+                f"{_f(c['Mean clay difference B - A (%)'], 1)} %, sand "
+                f"{_f(c['Mean sand difference B - A (%)'], 1)} %; same texture "
                 f"class in {_pct(c['Texture class agreement (%)'])} % of cells. The "
                 "disagreement is part of the reported uncertainty."
             )
@@ -760,8 +773,9 @@ def write_report(result, path: str) -> None:
     d.para(
         "All inputs are averaged to the target layers. Interval products "
         "(SoilGrids 2.0: 0-5, 5-15, 15-30, 30-60, 60-100, 100-200 cm; "
-        "OpenLandMap: 0-30, 30-60, 60-100 cm) are combined by thickness "
-        "weighting:"
+        "OpenLandMap: 0-30, 30-60, 60-100 cm"
+        + ("; iSDAsoil: 0-20, 20-50 cm" if has_isda else "")
+        + ") are combined by thickness weighting:"
     )
     d.para(
         "x(L) = Σ w_i x_i,   w_i = overlap of interval i with layer L / thickness of L"
@@ -773,6 +787,13 @@ def write_report(result, path: str) -> None:
         "layer:"
     )
     d.para("x(L) = Σ (z_k+1 - z_k)(x_k + x_k+1) / 2 / (bottom - top)")
+    if has_isda:
+        d.para(
+            "iSDAsoil is mapped to 50 cm only. Its 20-50 cm value stands in for "
+            "50-60 cm in the 30-60 cm layer, and it takes no part in the 60-100 "
+            "cm layer, which rests on the other product(s). It is not gap-filled "
+            "there, so it never enters that layer as a copy of another product."
+        )
     d.para(
         "Quantiles (SoilGrids Q0.05, Q0.95; OpenLandMap P16, P84) are averaged "
         "in the same way. This treats the intervals as fully correlated with "
@@ -782,7 +803,8 @@ def write_report(result, path: str) -> None:
     d.heading("4.2 Texture systems", 3)
     d.para(
         "The pedotransfer functions use USDA particle-size limits (clay < 2 "
-        "µm, silt 2-50 µm, sand 50 µm-2 mm), as do SoilGrids. OpenLandMap uses "
+        "µm, silt 2-50 µm, sand 50 µm-2 mm), as do SoilGrids and iSDAsoil. "
+        "OpenLandMap uses "
         "ISO 11277 limits (silt 2-63 µm). OpenLandMap texture is converted by "
         "log-linear interpolation of the cumulative particle-size "
         "distribution between 2 and 63 µm (Nemes et al., 1999; Minasny & "
@@ -820,23 +842,23 @@ def write_report(result, path: str) -> None:
     fill_notes = [n for p in products for n in p.notes]
     for n in fill_notes:
         d.bullet(n)
-    if both:
+    if both and result.comparison:
         d.heading("4.5 Product comparison", 3)
         d.para(
-            "Both products were supplied and are used as equal ensemble members. "
-            "They are compared on their central soils (USDA limits) where both "
-            "have their own prediction."
+            "The products are used as equal ensemble members. Each pair is "
+            "compared on the central soils (USDA limits) where both have their "
+            "own prediction; differences are the second product minus the first."
         )
-        sg, olm = names
         hdr = [
+            "Pair (B - A)",
             "Layer",
             "Cells",
-            "Clay SG (%)",
-            "Clay OLM (%)",
-            "Sand SG (%)",
-            "Sand OLM (%)",
+            "Clay A (%)",
+            "Clay B (%)",
+            "Sand A (%)",
+            "Sand B (%)",
             "Same class (%)",
-            "Ksat ratio OLM/SG",
+            "Ksat ratio B/A",
             "Ksat differs > x4 (%)",
         ]
         d.caption("Table", "Product comparison (medians over cells)")
@@ -844,70 +866,81 @@ def write_report(result, path: str) -> None:
             hdr,
             [
                 [
+                    c["Pair"],
                     c["Layer"],
                     str(c["Cells"]),
-                    _f(c["Clay SG (%)"], 1),
-                    _f(c["Clay OLM (%)"], 1),
-                    _f(c["Sand SG (%)"], 1),
-                    _f(c["Sand OLM (%)"], 1),
+                    _f(c["Clay A (%)"], 1),
+                    _f(c["Clay B (%)"], 1),
+                    _f(c["Sand A (%)"], 1),
+                    _f(c["Sand B (%)"], 1),
                     _pct(c["Texture class agreement (%)"]),
-                    _sig(c["Median Ksat ratio OLM / SG"], 2),
+                    _sig(c["Median Ksat ratio B / A"], 2),
                     _pct(c["Ksat differs by more than x4 (%)"]),
                 ]
                 for c in result.comparison
             ],
         )
-        if top in result.central.get(sg, {}):
-            a, b = result.central[sg][top], result.central[olm][top]
+        for a_name, b_name in product_pairs(result):
+            label = pair_label(a_name, b_name)
+            sa, sb = SHORT_PRODUCT[a_name], SHORT_PRODUCT[b_name]
+            ca = SHORT_CODE[a_name]
+            cb = SHORT_CODE[b_name]
+            if top not in result.central.get(
+                a_name, {}
+            ) or top not in result.central.get(b_name, {}):
+                continue
+            a, b = result.central[a_name][top], result.central[b_name][top]
             _figure(
                 d,
-                lambda: _continuous_maps(
+                lambda a=a, b=b, ca=ca, cb=cb: _continuous_maps(
                     result,
                     [
-                        (b["clay"] - a["clay"], "Clay OLM - SG", "RdBu_r", False, "%"),
-                        (b["sand"] - a["sand"], "Sand OLM - SG", "RdBu_r", False, "%"),
+                        (
+                            b["clay"] - a["clay"],
+                            f"Clay {cb} - {ca}",
+                            "RdBu_r",
+                            False,
+                            "%",
+                        ),
+                        (
+                            b["sand"] - a["sand"],
+                            f"Sand {cb} - {ca}",
+                            "RdBu_r",
+                            False,
+                            "%",
+                        ),
                         (
                             np.log10(np.maximum(b["ksat"], 1e-6))
                             - np.log10(np.maximum(a["ksat"], 1e-6)),
-                            "log10 Ksat OLM/SG",
+                            f"log10 Ksat {cb}/{ca}",
                             "RdBu_r",
                             False,
                             "-",
                         ),
                     ],
                 ),
-                f"Product differences, {top} (central soils, USDA limits)",
+                f"Product differences {label}, {top} (central soils, USDA limits)",
                 notes,
             )
-        smp = result.comparison_samples.get(top)
-        if smp:
-            _figure(
-                d,
-                lambda: _scatter_panels(
-                    [
-                        (
-                            *smp["clay"],
-                            "Clay SoilGrids (%)",
-                            "Clay OpenLandMap (%)",
-                            False,
-                        ),
-                        (
-                            *smp["sand"],
-                            "Sand SoilGrids (%)",
-                            "Sand OpenLandMap (%)",
-                            False,
-                        ),
-                        (
-                            *smp["ksat"],
-                            "Ksat SoilGrids (mm/h)",
-                            "Ksat OpenLandMap (mm/h)",
-                            True,
-                        ),
-                    ]
-                ),
-                f"Cell-by-cell product comparison, {top} (sample of cells)",
-                notes,
-            )
+            smp = result.comparison_samples.get((label, top))
+            if smp:
+                _figure(
+                    d,
+                    lambda smp=smp, sa=sa, sb=sb: _scatter_panels(
+                        [
+                            (*smp["clay"], f"Clay {sa} (%)", f"Clay {sb} (%)", False),
+                            (*smp["sand"], f"Sand {sa} (%)", f"Sand {sb} (%)", False),
+                            (
+                                *smp["ksat"],
+                                f"Ksat {sa} (mm/h)",
+                                f"Ksat {sb} (mm/h)",
+                                True,
+                            ),
+                        ]
+                    ),
+                    f"Cell-by-cell comparison {label}, {top} (sample of cells)",
+                    notes,
+                )
 
     # 5. Methods ------------------------------------------------------------
     d.heading("5. Methods", 2)
@@ -993,8 +1026,10 @@ def write_report(result, path: str) -> None:
             "capacity is θ at 33 kPa here (HiHydroSoil publishes pF2, about 10 "
             "kPa, which gives wetter values), and the 0-30 cm Ksat is computed "
             "from layer-averaged inputs (HiHydroSoil averages the depth values "
-            "harmonically). Ksat needs CEC, which only SoilGrids provides; "
-            "with both products the OpenLandMap member uses the SoilGrids CEC. "
+            "harmonically). Ksat needs CEC at pH 7, which only SoilGrids "
+            "provides; the OpenLandMap and iSDAsoil members use the SoilGrids "
+            "CEC when its folder is given (iSDAsoil maps effective CEC, which is "
+            "not used). "
             "Calibration region: Europe. Applied elsewhere, the functions "
             "extrapolate, and their spread against the other method is part of "
             "the reported uncertainty."
@@ -1073,6 +1108,16 @@ def write_report(result, path: str) -> None:
         "T(Q0.05)) / 1.645 and σ_hi = (T(Q0.95) - T(Q0.5)) / 1.645 (a split "
         "normal). For OpenLandMap the centre is the 30 m mean and the 120 m "
         "68 % interval gives σ = (T(P84) - T(P16)) / (2 x 0.994) on both sides."
+        + (
+            " For iSDAsoil the centre is the 30 m mean and the published standard "
+            "deviation gives a 90 % interval mean ∓ 1.645 sd (for organic carbon "
+            "and stone content in ln(1 + x)), converted as for SoilGrids. That "
+            "standard deviation is the spread of the model's learners, not a "
+            "calibrated prediction interval, and is likely narrower than the "
+            "true error."
+            if has_isda
+            else ""
+        )
     )
     d.para(
         "Monte Carlo: in each cell, each product contributes "

@@ -37,7 +37,7 @@ def test_provider_registers_seven_algorithms() -> None:
     provider = loaded_provider()
 
     algorithms = provider.algorithms()
-    assert len(algorithms) == 25
+    assert len(algorithms) == 26
 
     by_name = {algorithm.name(): algorithm for algorithm in algorithms}
 
@@ -67,6 +67,7 @@ def test_provider_registers_seven_algorithms() -> None:
         "openlandmap_soils_extract",
         "regional_soil_parameterisation",
         "hydrologic_soil_groups",
+        "isda_extract",
     }
 
     expected = {
@@ -187,6 +188,11 @@ def test_provider_registers_seven_algorithms() -> None:
         ),
         "regional_soil_parameterisation": (
             "Regional soil parameterisation",
+            "Soil Tools",
+            "soil_tools",
+        ),
+        "isda_extract": (
+            "Extract: iSDAsoil (Africa)",
             "Soil Tools",
             "soil_tools",
         ),

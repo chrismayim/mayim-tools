@@ -154,19 +154,20 @@ def _native_window(gdal, ds, grid: TargetGrid, pad: int = 2, strict: bool = Fals
     return x0, y0, x1 - x0, y1 - y0
 
 
-def gdal_read_grid(source, grid: TargetGrid, with_scale: bool = False):
+def gdal_read_grid(source, grid: TargetGrid, with_scale: bool = False, band: int = 1):
     """Warp a (remote) raster - one path or a list of tiles - onto ``grid``
     with nearest neighbour. Float64 with NaN for nodata / outside coverage.
     Raw stored values (no scale applied). With ``with_scale`` returns
     (array, scale, offset) from the band metadata (None if not set).
+    ``band`` selects the band of a multi-band source (default 1).
 
     Thread-safe: the native block is downloaded without the lock; the
     window calculation and the in-memory warp run under PROJ_LOCK."""
     gdal = _gdal()
     src, mem = _open_source(gdal, source)
     try:
-        band = src.GetRasterBand(1)
-        scale, offset = band.GetScale(), band.GetOffset()
+        band_obj = src.GetRasterBand(band)
+        scale, offset = band_obj.GetScale(), band_obj.GetOffset()
 
         def result(arr):
             return (arr, scale, offset) if with_scale else arr
@@ -177,8 +178,8 @@ def gdal_read_grid(source, grid: TargetGrid, with_scale: bool = False):
         if window is None:
             return result(out)
         x0, y0, w, h = window
-        nodata = band.GetNoDataValue()
-        block = band.ReadAsArray(x0, y0, w, h).astype(np.float32)  # network I/O
+        nodata = band_obj.GetNoDataValue()
+        block = band_obj.ReadAsArray(x0, y0, w, h).astype(np.float32)  # network I/O
         if nodata is not None:
             block[block == nodata] = np.nan
         gt = src.GetGeoTransform()
@@ -223,7 +224,10 @@ def gdal_read_grid(source, grid: TargetGrid, with_scale: bool = False):
 
 
 def gdal_sample_points(
-    source, lonlats: Sequence[tuple[float, float]], with_scale: bool = False
+    source,
+    lonlats: Sequence[tuple[float, float]],
+    with_scale: bool = False,
+    band: int = 1,
 ):
     """Nearest-cell values of a (remote) raster - one path or a list of
     tiles - at lon/lat points. One window read when the points fit in
@@ -234,8 +238,8 @@ def gdal_sample_points(
     ds, mem = _open_source(gdal, source)
     try:
         inv = gdal.InvGeoTransform(ds.GetGeoTransform())
-        band = ds.GetRasterBand(1)
-        nodata = band.GetNoDataValue()
+        band_obj = ds.GetRasterBand(band)
+        nodata = band_obj.GetNoDataValue()
         cols, rows = ds.RasterXSize, ds.RasterYSize
         pix = []
         with PROJ_LOCK:
@@ -257,7 +261,11 @@ def gdal_sample_points(
             if (x1 - x0 + 1) <= WINDOW_LIMIT_CELLS and (
                 y1 - y0 + 1
             ) <= WINDOW_LIMIT_CELLS:
-                window = (x0, y0, band.ReadAsArray(x0, y0, x1 - x0 + 1, y1 - y0 + 1))
+                window = (
+                    x0,
+                    y0,
+                    band_obj.ReadAsArray(x0, y0, x1 - x0 + 1, y1 - y0 + 1),
+                )
         values: list[float] = []
         for px, py in pix:
             if not (0 <= px < cols and 0 <= py < rows):
@@ -267,12 +275,12 @@ def gdal_sample_points(
                 wx0, wy0, arr = window
                 v = float(arr[py - wy0, px - wx0])
             else:
-                v = float(band.ReadAsArray(px, py, 1, 1)[0, 0])
+                v = float(band_obj.ReadAsArray(px, py, 1, 1)[0, 0])
             if (nodata is not None and v == nodata) or math.isnan(v):
                 v = math.nan
             values.append(v)
         if with_scale:
-            return values, band.GetScale(), band.GetOffset()
+            return values, band_obj.GetScale(), band_obj.GetOffset()
         return values
     finally:
         ds = None

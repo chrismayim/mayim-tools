@@ -36,7 +36,7 @@ from . import neh630, scs_sa
 from . import probability as prob_mod
 
 TOOL_NAME = "Hydrologic soil groups"
-TOOL_VERSION = "0.1.0"
+TOOL_VERSION = "0.2.0"
 
 LAYERS = ("0-30cm", "30-60cm", "60-100cm")
 TAGS = ("P05", "P50", "P95")
@@ -52,7 +52,11 @@ METHODS = {
 }
 METHOD_SHORT = {"NEH630": "neh630", "SCSSA": "scssa"}
 
+ISDA_BEDROCK_MEAN = "isda_bedrock_mean.tif"
+ISDA_BEDROCK_SD = "isda_bedrock_sd.tif"
+
 BEDROCK_SOURCES = {
+    "ISDA": "iSDAsoil: depth to bedrock (mean and standard deviation; Africa)",
     "BDRICM": "SoilGrids 2017: depth to R horizon (BDRICM, censored at 200 cm)",
     "BDTICM": "SoilGrids 2017: absolute depth to bedrock (BDTICM)",
     "raster": "User raster (depth in m)",
@@ -105,6 +109,7 @@ class RunSettings:
     methods: tuple = ("NEH630", "SCSSA")
     bedrock_source: str = "BDRICM"
     sg_folder: str = ""
+    isda_folder: str = ""
     bedrock_raster: str = ""
     bedrock_constant_m: float = 2.0
     water_source: str = "none"
@@ -136,6 +141,8 @@ class RunResult:
     mask: np.ndarray | None = None
     ksat: dict = field(default_factory=dict)  # tag -> layer -> array
     impermeable_cm: np.ndarray | None = None
+    impermeable_sd: np.ndarray | None = None  # cm (iSDAsoil)
+    p_shallow: np.ndarray | None = None  # P(impermeable layer < 50 cm)
     water_cm: np.ndarray | None = None
     case: np.ndarray | None = None
     texture: np.ndarray | None = None  # NEH typical-texture group (0 none)
@@ -307,6 +314,19 @@ def _depth_layer(
             raise SoilDataError(f"{what} raster not found: {raster}")
         arr = read_band_to_grid(raster, grid) * 100.0
         return arr, f"User raster {os.path.basename(raster)} (m)", notes
+    if source == "ISDA":
+        mean_path = os.path.join(folder or "", ISDA_BEDROCK_MEAN)
+        if not folder or not os.path.isfile(mean_path):
+            raise SoilDataError(
+                f"{ISDA_BEDROCK_MEAN} not found in the iSDAsoil folder ({folder}). "
+                "Run 'Extract: iSDAsoil (Africa)' with 'bedrock' selected, or choose "
+                "another source for the depth to an impermeable layer."
+            )
+        notes.append(
+            "iSDAsoil depth to bedrock: 200 means 200 cm or deeper; exposed "
+            "bedrock is masked (no data) in the product."
+        )
+        return read_band_to_grid(mean_path, grid), BEDROCK_SOURCES[source], notes
     if source in ("BDRICM", "BDTICM"):
         path = os.path.join(folder or "", BEDROCK_FILE)
         if not folder or not os.path.isfile(path):
@@ -422,6 +442,47 @@ def _scssa(result: RunResult) -> MethodResult:
     return MethodResult("SCSSA", prob, rec, conf, conf_class(conf), at, steps)
 
 
+def depth_class_probability(mean_cm, sd_cm, limits) -> np.ndarray:
+    """Probability that a normally distributed depth (mean, sd) lies in the
+    same class as its mean, for class limits such as (50, 100)."""
+    m = np.asarray(mean_cm, dtype=float)
+    sd = np.asarray(sd_cm, dtype=float)
+    edges = (-np.inf,) + tuple(limits) + (np.inf,)
+    out = np.ones(m.shape)
+    ok = np.isfinite(m) & np.isfinite(sd) & (sd > 0)
+    for lo, hi in zip(edges[:-1], edges[1:], strict=True):
+        sel = ok & (m >= lo) & (m < hi)
+        if not sel.any():
+            continue
+        z_hi = (hi - m[sel]) / sd[sel] if np.isfinite(hi) else np.inf
+        z_lo = (lo - m[sel]) / sd[sel] if np.isfinite(lo) else -np.inf
+        out[sel] = prob_mod._phi(np.asarray(z_hi)) - prob_mod._phi(np.asarray(z_lo))
+    return out
+
+
+def _bedrock_uncertainty(result: RunResult, mr: MethodResult) -> None:
+    """Scale the confidence by the probability that the impermeable layer lies
+    in the same depth class as its mapped mean (another class is counted as
+    another group - slightly cautious)."""
+    if result.impermeable_sd is None:
+        return
+    mean, sd = result.impermeable_cm, result.impermeable_sd
+    if result.p_shallow is None:
+        z = (50.0 - mean) / np.where(sd > 0, sd, np.nan)
+        p = prob_mod._phi(
+            np.where(np.isfinite(z), z, np.where(mean < 50, np.inf, -np.inf))
+        )
+        result.p_shallow = np.where(np.isfinite(mean), p, np.nan)
+    if mr.code == "NEH630":
+        factor = depth_class_probability(mean, sd, (50.0, 100.0))
+    elif result.settings.sa_adjust_shallow:
+        factor = depth_class_probability(mean, sd, (scs_sa.ADJUST_SHALLOW_CM,))
+    else:
+        return
+    mr.confidence = mr.confidence * factor
+    mr.conf_class = conf_class(mr.confidence)
+
+
 def _apply_mask(mr: MethodResult, mask: np.ndarray) -> None:
     out = ~mask
     mr.prob[:, out] = np.nan
@@ -469,7 +530,11 @@ def run(
 
     imp, imp_desc, notes = _depth_layer(
         settings.bedrock_source,
-        settings.sg_folder,
+        (
+            settings.isda_folder
+            if settings.bedrock_source == "ISDA"
+            else settings.sg_folder
+        ),
         settings.bedrock_raster,
         settings.bedrock_constant_m,
         grid,
@@ -518,6 +583,19 @@ def run(
     imp = np.where(np.isfinite(imp), imp, DEEP_CM)
     wt = np.where(np.isfinite(wt), wt, DEEP_CM)
     result.impermeable_cm = np.where(valid, imp, np.nan)
+    if settings.bedrock_source == "ISDA":
+        sd_path = os.path.join(settings.isda_folder, ISDA_BEDROCK_SD)
+        if os.path.isfile(sd_path):
+            sd = read_band_to_grid(sd_path, grid)
+            result.impermeable_sd = np.where(valid & np.isfinite(sd), sd, np.nan)
+            result.input_notes.append(
+                "Bedrock-depth uncertainty: iSDAsoil standard deviation (normal "
+                "distribution around the mapped mean)."
+            )
+        else:
+            result.input_notes.append(
+                f"{ISDA_BEDROCK_SD} not found: bedrock depth used without uncertainty."
+            )
     result.water_cm = np.where(valid, wt, np.nan)
     result.case = np.where(valid, neh630.case_of(imp, wt), 0).astype(np.int16)
 
@@ -531,6 +609,7 @@ def run(
     progress_fn(0.3, "Classifying")
     for m in settings.methods:
         mr = _neh(result) if m == "NEH630" else _scssa(result)
+        _bedrock_uncertainty(result, mr)
         _apply_mask(mr, valid)
         result.methods[m] = mr
         log_fn(f"{METHODS[m]}: classified.")
@@ -627,6 +706,10 @@ def _zone_summary(result: RunResult) -> None:
                 row["Impermeable layer < 50 cm (%)"] = 100.0 * float(
                     (result.impermeable_cm[zm] < 50).mean()
                 )
+                if result.p_shallow is not None:
+                    row["Mean P(impermeable layer < 50 cm) (%)"] = 100.0 * float(
+                        np.nanmean(result.p_shallow[zm])
+                    )
                 row["Water table < 60 cm (%)"] = 100.0 * float(
                     (result.water_cm[zm] < 60).mean()
                 )
@@ -770,6 +853,16 @@ def _write_rasters(result: RunResult, write_fn) -> None:
             f32(np.where(result.water_cm >= DEEP_CM, np.nan, result.water_cm)),
         ),
         ("neh630_table_case (code)", codes(result.case)),
+    ]
+    if result.p_shallow is not None:
+        bands += [
+            ("depth_to_impermeable_layer_sd (cm)", f32(result.impermeable_sd)),
+            (
+                "probability_impermeable_layer_lt_50cm (%)",
+                f32(100.0 * result.p_shallow),
+            ),
+        ]
+    bands += [
         ("ksat_least_transmissive_0-50cm_P50 (mm/h)", f32(q["0-50cm"])),
         ("ksat_least_transmissive_0-100cm_P50 (mm/h)", f32(q["0-100cm"])),
     ]

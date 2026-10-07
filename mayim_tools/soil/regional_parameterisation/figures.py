@@ -32,8 +32,10 @@ C_OUTSIDE = "#f0f0f0"
 DIVERGING = {"RdBu_r", "RdBu", "PuOr", "BrBG", "coolwarm"}
 METHOD_COLOURS = {"SR2006": C_BLUE, "TOTH2015": C_AQUA}
 METHOD_SHORT = {"SR2006": "S&R", "TOTH2015": "Tóth"}
-PRODUCT_SHORT = {"SoilGrids 2.0": "SG", "OpenLandMap-soildb": "OLM"}
-PRODUCT_MARKERS = {"SoilGrids 2.0": "o", "OpenLandMap-soildb": "s"}
+PRODUCT_SHORT = {"SoilGrids 2.0": "SG", "OpenLandMap-soildb": "OLM", "iSDAsoil": "iSDA"}
+PRODUCT_MARKERS = {"SoilGrids 2.0": "o", "OpenLandMap-soildb": "s", "iSDAsoil": "^"}
+PRODUCT_COLOURS = ("#2a78d6", "#eb6834", "#8e44ad")
+SHORT_MARKER = {PRODUCT_SHORT[k]: v for k, v in PRODUCT_MARKERS.items()}
 PART_COLOURS = {
     "input": C_BLUE,
     "product": C_ORANGE,
@@ -441,7 +443,7 @@ def texture_triangle(result, lab):
         ax.plot(tri[:, 0], tri[:, 1], color=C_INK, linewidth=0.8, zorder=4)
         rng = np.random.default_rng(3)
         zone = result.zone_raster.ravel() > 0
-        for p, colour in zip(result.products, (C_BLUE, C_ORANGE), strict=False):
+        for p, colour in zip(result.products, PRODUCT_COLOURS, strict=False):
             c = result.central.get(p.name, {}).get(lab)
             if not c:
                 continue
@@ -828,7 +830,7 @@ def design_forest(result, zone):
                     (k2[7:], v2) for k2, v2 in r.items() if k2.startswith("Member ")
                 ):
                     prod, meth = name.split(" ", 1)
-                    marker = "o" if prod == "SG" else "s"
+                    marker = SHORT_MARKER.get(prod, "o")
                     ax.plot(
                         v,
                         j + 0.22,
@@ -880,24 +882,18 @@ def design_forest(result, zone):
                 Line2D(
                     [], [], color=C_INK_2, lw=1.0, label="Sensitivity range (P5-P95)"
                 ),
+            ]
+            + [
                 Line2D(
                     [],
                     [],
-                    marker="o",
+                    marker=PRODUCT_MARKERS.get(p.name, "o"),
                     ls="none",
                     color="#7f7f7f",
                     ms=3.2,
-                    label="SoilGrids member",
-                ),
-                Line2D(
-                    [],
-                    [],
-                    marker="s",
-                    ls="none",
-                    color="#7f7f7f",
-                    ms=3.2,
-                    label="OpenLandMap member",
-                ),
+                    label=f"{p.name.split('-')[0].replace(' 2.0', '')} member",
+                )
+                for p in result.products
             ]
             + [
                 Line2D(

@@ -54,6 +54,7 @@ class RegionalSoilParameterisationAlgorithm(QgsProcessingAlgorithm):
     METHODS = "METHODS"
     SG_FOLDER = "SG_FOLDER"
     OLM_FOLDER = "OLM_FOLDER"
+    ISDA_FOLDER = "ISDA_FOLDER"
     ZONES = "ZONES"
     ZONE_FIELD = "ZONE_FIELD"
     RESOLUTION = "RESOLUTION"
@@ -99,8 +100,9 @@ class RegionalSoilParameterisationAlgorithm(QgsProcessingAlgorithm):
             f"Regional soil parameterisation (version {core.TOOL_VERSION})\n"
             "\n"
             "PURPOSE:\tEstimates hydraulic soil parameters for any area from the "
-            "outputs of 'Extract: SoilGrids 2.0' and/or 'Extract: OpenLandMap "
-            "Soils': water content at saturation, field capacity (33 kPa) and "
+            "outputs of 'Extract: SoilGrids 2.0', 'Extract: OpenLandMap Soils' "
+            "and/or 'Extract: iSDAsoil (Africa)': water content at saturation, "
+            "field capacity (33 kPa) and "
             "wilting point (1500 kPa), plant-available water, saturated "
             "hydraulic conductivity (Ksat), Brooks-Corey and van Genuchten "
             "parameters and the Green-Ampt wetting-front suction - each as a "
@@ -108,10 +110,11 @@ class RegionalSoilParameterisationAlgorithm(QgsProcessingAlgorithm):
             "90 % range (P05-P95). A detailed Word report documents the data, "
             "methods, uncertainty and checks.\n"
             "\n"
-            "INPUTS:\tGive the SoilGrids folder, the OpenLandMap folder, or both "
-            "(both is best: each product is an ensemble member, their "
-            "disagreement is reported and included in the uncertainty, and each "
-            "fills the other's gaps). Needed in the folders: sand, silt, clay and "
+            "INPUTS:\tGive one, two or three product folders (more is better: "
+            "each product is an ensemble member, their disagreement is reported "
+            "and included in the uncertainty, and each fills the others' gaps). "
+            "iSDAsoil (Africa only) is mapped to 50 cm: it is used for 0-30 and "
+            "30-60 cm, not 60-100 cm. Needed in the folders: sand, silt, clay and "
             "SOC; bulk density is needed by Tóth et al., and pH and CEC by its "
             "Ksat (CEC: SoilGrids only); coarse fragments (SoilGrids) are used by "
             "the optional gravel correction; mapped water contents (SoilGrids wv0033/"
@@ -120,7 +123,7 @@ class RegionalSoilParameterisationAlgorithm(QgsProcessingAlgorithm):
             "depths cover the target layers.\n"
             "\n"
             f"METHOD:\t(1) Harmonise to {layers} (thickness-weighted; ISO texture "
-            "converted to USDA limits). (2) Fill gaps: other product, then "
+            "converted to USDA limits). (2) Fill gaps: other product(s), then "
             "SoilGrids 2017 means, then neighbours. (3-4) Monte Carlo: each cell "
             "draws inputs from the products' own uncertainty (texture sampled as "
             "a composition so every draw sums to 100 %) and runs every method "
@@ -137,7 +140,7 @@ class RegionalSoilParameterisationAlgorithm(QgsProcessingAlgorithm):
             "layer - select bands by description), harmonised inputs, USDA "
             "texture class, quality raster (Ksat uncertainty factor and class, texture "
             "confidence, validity flags, input "
-            "source), product difference (both products), zone summary CSV, "
+            "source), product differences (each pair of products), zone summary CSV, "
             "metadata CSV, Word report and one .qlr layer file that reloads every "
             "output styled.\n"
             "\n"
@@ -161,6 +164,14 @@ class RegionalSoilParameterisationAlgorithm(QgsProcessingAlgorithm):
             QgsProcessingParameterFile(
                 self.OLM_FOLDER,
                 "OpenLandMap output folder (from Extract: OpenLandMap Soils)",
+                behavior=folder,
+                optional=True,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterFile(
+                self.ISDA_FOLDER,
+                "iSDAsoil output folder (from Extract: iSDAsoil (Africa))",
                 behavior=folder,
                 optional=True,
             )
@@ -312,6 +323,7 @@ class RegionalSoilParameterisationAlgorithm(QgsProcessingAlgorithm):
         Path(out_dir).mkdir(parents=True, exist_ok=True)
         sg = self.parameterAsFile(parameters, self.SG_FOLDER, context)
         olm = self.parameterAsFile(parameters, self.OLM_FOLDER, context)
+        isda = self.parameterAsFile(parameters, self.ISDA_FOLDER, context)
         chosen = self.parameterAsEnums(parameters, self.METHODS, context)
         if not chosen:
             raise QgsProcessingException("Select at least one method.")
@@ -327,6 +339,7 @@ class RegionalSoilParameterisationAlgorithm(QgsProcessingAlgorithm):
             out_dir=out_dir,
             sg_folder=sg,
             olm_folder=olm,
+            isda_folder=isda,
             resolution=self.parameterAsDouble(parameters, self.RESOLUTION, context),
             fill_radius_m=self.parameterAsDouble(parameters, self.FILL_RADIUS, context),
             mc=mc,
@@ -335,11 +348,11 @@ class RegionalSoilParameterisationAlgorithm(QgsProcessingAlgorithm):
             write_report=self.parameterAsBoolean(parameters, self.REPORT, context),
         )
         try:
-            folders = [f for f in (sg, olm) if f]
+            folders = [f for f in (sg, olm, isda) if f]
             if not folders:
                 raise SoilDataError(
-                    "Give the SoilGrids output folder, the OpenLandMap output "
-                    "folder, or both."
+                    "Give at least one product folder: SoilGrids, OpenLandMap "
+                    "or iSDAsoil."
                 )
             grid = core.processing_grid(folders, settings.resolution)
             settings.zones = self._zones(parameters, context, grid, feedback)

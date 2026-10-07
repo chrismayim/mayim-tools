@@ -11,6 +11,8 @@ into a calculation. Recognised descriptions:
     OpenLandMap         clay_0-30cm_mean_30m_2020-2022 (%)
                         clay_0-30cm_p16_120m_2020-2022 (%)
     OpenLandMap water   field_capacity_33kPa_30cm_250m_1950-2017 (vol %)
+    iSDAsoil            clay_0-20cm_mean_30m_isda (%)
+                        clay_0-20cm_sd_30m_isda (%)   soc ... (ln(1+g/kg))
 
 Each input variable becomes a per-cell distribution (``Dist``): a centre and
 lower / upper standard deviations in a transform space (log for texture,
@@ -21,7 +23,14 @@ organic carbon; linear for bulk density and coarse fragments):
     OpenLandMap     centre = 30 m mean; sigma = (T(P84) - T(P16)) / (2 x 0.994)
                     on both sides (68 % interval, 120 m)
 
-so the two products' uncertainty is expressed on the same footing.
+    iSDAsoil        centre = 30 m mean; the published standard deviation
+                    gives a 90 % interval mean -/+ 1.645 sd (for organic
+                    carbon and stone content in ln(1 + x)), converted like
+                    the SoilGrids quantiles
+
+so the products' uncertainty is expressed on the same footing. iSDAsoil is
+mapped for 0-20 and 20-50 cm only: its 20-50 cm value stands in for
+50-60 cm (30-60 cm layer) and it takes no part in the 60-100 cm layer.
 """
 
 from __future__ import annotations
@@ -39,6 +48,8 @@ from mayim_tools.soil._common.grid import TargetGrid
 PRODUCT_SG = "SoilGrids 2.0"
 PRODUCT_OLM = "OpenLandMap-soildb"
 PRODUCT_SG2017 = "SoilGrids 2017"
+PRODUCT_ISDA = "iSDAsoil"
+ISDA_EXTEND_CM = 10  # deepest iSDA interval may stand in this far below 50 cm
 
 TARGET_LAYERS: tuple[tuple[str, int, int], ...] = (
     ("0-30cm", 0, 30),
@@ -83,6 +94,10 @@ _OLM_RE = re.compile(
 _WATER_RE = re.compile(
     r"^(?P<name>field_capacity_33kPa|wilting_point_1500kPa)_(?P<pt>\d+)cm_250m_"
     r"(?P<period>[\d-]+) \((?P<units>.*)\)$"
+)
+_ISDA_RE = re.compile(
+    r"^(?P<var>[a-z0-9]+)_(?P<top>\d+)-(?P<bot>\d+)cm_(?P<stat>mean|sd)_30m_isda "
+    r"\((?P<units>.*)\)$"
 )
 WATER_CODES = {"field_capacity_33kPa": "fc", "wilting_point_1500kPa": "wp"}
 SG_WATER_CODES = {"wv0033": "fc", "wv1500": "wp"}
@@ -142,6 +157,17 @@ def parse_description(desc: str) -> dict | None:
             period=m["period"],
             units=m["units"],
         )
+    m = _ISDA_RE.match(desc)
+    if m:
+        return dict(
+            kind="isda",
+            var=m["var"],
+            top=int(m["top"]),
+            bottom=int(m["bot"]),
+            stat=m["stat"],
+            period="2001-2017",
+            units=m["units"],
+        )
     m = _WATER_RE.match(desc)
     if m:
         return dict(
@@ -195,12 +221,18 @@ def detect_product(refs: list[BandRef]) -> str | None:
         return PRODUCT_SG
     if "olm" in kinds:
         return PRODUCT_OLM
+    if "isda" in kinds:
+        return PRODUCT_ISDA
     return None
 
 
 def read_run_metadata(folder: str) -> dict[str, str]:
     """'# Run' section of an extraction metadata CSV (Item -> Value)."""
-    for name in ("soilgrids_metadata.csv", "openlandmap_metadata.csv"):
+    for name in (
+        "soilgrids_metadata.csv",
+        "openlandmap_metadata.csv",
+        "isda_metadata.csv",
+    ):
         path = os.path.join(folder, name)
         if os.path.isfile(path):
             break
@@ -540,6 +572,80 @@ def _olm_inputs(refs, read, layers, notes, periods_used) -> dict:
     return out
 
 
+def dist_from_mean_sd(var, mean, sd=None, log1p_sd=False) -> Dist:
+    """iSDAsoil: mean centre, 90 % interval mean -/+ 1.645 sd (sd of
+    ln(1 + x) for the log-stored properties), then as SoilGrids."""
+    centre = np.asarray(mean, dtype=np.float64)
+    if sd is None:
+        return dist_from_quantiles(var, centre)
+    sd = np.asarray(sd, dtype=np.float64)
+    if log1p_sd:
+        t = np.log1p(np.maximum(centre, 0.0))
+        q05 = np.expm1(t - Z90 * sd)
+        q95 = np.expm1(t + Z90 * sd)
+    else:
+        q05 = centre - Z90 * sd
+        q95 = centre + Z90 * sd
+    lo = VARIABLE_SPACE[var][2]
+    q05 = np.maximum(q05, lo)
+    return dist_from_quantiles(var, centre, q05, q95)
+
+
+def _isda_inputs(refs, read, layers, notes) -> dict:
+    """iSDAsoil 0-20 / 20-50 cm -> target layers. The 20-50 cm value stands
+    in for up to ISDA_EXTEND_CM below 50 cm; deeper layers are skipped."""
+    out: dict[str, dict[str, Dist]] = {lab: {} for lab, _, _ in layers}
+    by: dict[tuple[str, str], dict[tuple[int, int], BandRef]] = {}
+    for r in refs:
+        if r.kind == "isda":
+            by.setdefault((r.var, r.stat), {})[(r.top, r.bottom)] = r
+    extended = set()
+    for var in INPUT_VARIABLES:
+        if (var, "mean") not in by:
+            if var != "cec":  # iSDA has effective CEC only
+                notes.append(f"iSDAsoil: {var} not in the folder.")
+            continue
+        log1p_sd = any(
+            r.units.startswith("ln(1+") for r in by.get((var, "sd"), {}).values()
+        )
+        for lab, top, bottom in layers:
+            stats = {}
+            for stat in ("mean", "sd"):
+                bands = by.get((var, stat))
+                if not bands:
+                    continue
+                vals = {k: read(ref) for k, ref in bands.items()}
+                deepest = max(vals)
+                if deepest[1] < bottom <= deepest[1] + ISDA_EXTEND_CM:
+                    vals[(deepest[0], bottom)] = vals.pop(deepest)
+                    extended.add(lab)
+                arr = intervals_to_layer(vals, top, bottom)
+                if arr is not None:
+                    stats[stat] = arr
+            if "mean" not in stats:
+                continue
+            if "sd" not in stats:
+                notes.append(
+                    f"iSDAsoil: {var} {lab} has no standard deviation - no input "
+                    "uncertainty for this variable."
+                )
+            out[lab][var] = dist_from_mean_sd(
+                var, stats["mean"], stats.get("sd"), log1p_sd
+            )
+    for lab in sorted(extended):
+        notes.append(
+            f"iSDAsoil {lab}: the 20-50 cm value stands in for the part of the "
+            "layer below 50 cm."
+        )
+    skipped = [lab for lab, _, _ in layers if not out[lab]]
+    if skipped:
+        notes.append(
+            f"iSDAsoil is mapped to 50 cm only: no iSDAsoil member for "
+            f"{', '.join(skipped)}."
+        )
+    return out
+
+
 def _water(refs, read, layers, kind_codes, product, out_notes) -> tuple[dict, str]:
     """Mapped water contents (vol %) -> m3/m3 per target layer."""
     out: dict[str, dict[str, np.ndarray]] = {lab: {} for lab, _, _ in layers}
@@ -587,9 +693,10 @@ def load_product(
     product = detect_product(refs)
     if product is None:
         raise SoilDataError(
-            f"No SoilGrids or OpenLandMap layers were recognised in {folder}. "
-            "Point the tool at the output folder of 'Extract: SoilGrids 2.0' or "
-            "'Extract: OpenLandMap Soils'."
+            f"No SoilGrids, OpenLandMap or iSDAsoil layers were recognised in "
+            f"{folder}. Point the tool at the output folder of 'Extract: "
+            "SoilGrids 2.0', 'Extract: OpenLandMap Soils' or 'Extract: iSDAsoil "
+            "(Africa)'."
         )
     if expected and product != expected:
         raise SoilDataError(
@@ -605,6 +712,16 @@ def load_product(
         p.water, p.water_source = _water(
             refs, reader, layers, SG_WATER_CODES, product, notes
         )
+    elif product == PRODUCT_ISDA:
+        p = ProductInputs(
+            product,
+            folder,
+            "USDA",
+            "90 % (mean -/+ 1.645 sd, 30 m; 0-50 cm only)",
+            notes=notes,
+        )
+        p.layers = _isda_inputs(refs, reader, layers, notes)
+        p.periods = {"all": "2001-2017"}
     else:
         p = ProductInputs(
             product,
@@ -633,8 +750,8 @@ def reference_grid(folders: list[str], describe_fn=band_descriptions) -> TargetG
     best = None
     for folder in folders:
         for ref in scan_folder(folder, describe_fn):
-            if ref.var == "clay" and ref.kind in ("sg", "olm"):
-                if ref.kind == "olm" and not ref.stat.startswith("mean"):
+            if ref.var == "clay" and ref.kind in ("sg", "olm", "isda"):
+                if ref.kind in ("olm", "isda") and not ref.stat.startswith("mean"):
                     continue
                 g = grid_of(ref.path)
                 if best is None or g.res < best.res:
@@ -642,8 +759,9 @@ def reference_grid(folders: list[str], describe_fn=band_descriptions) -> TargetG
                 break
     if best is None:
         raise SoilDataError(
-            "No SoilGrids or OpenLandMap clay layer was recognised in the input "
-            "folder(s). Point the tool at the output folder of 'Extract: "
-            "SoilGrids 2.0' or 'Extract: OpenLandMap Soils'."
+            "No SoilGrids, OpenLandMap or iSDAsoil clay layer was recognised in "
+            "the input folder(s). Point the tool at the output folder of 'Extract: "
+            "SoilGrids 2.0', 'Extract: OpenLandMap Soils' or 'Extract: iSDAsoil "
+            "(Africa)'."
         )
     return best

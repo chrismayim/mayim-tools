@@ -318,3 +318,68 @@ def test_errors(tmp_path, regional):
         _run(tmp_path, folder, bedrock_source="BDRICM", sg_folder=str(tmp_path))
     with pytest.raises(SoilDataError):
         _run(tmp_path, folder, methods=())
+
+
+# ----------------------------------------------------------------------
+# iSDAsoil depth to bedrock with uncertainty
+# ----------------------------------------------------------------------
+
+
+def test_depth_class_probability():
+    p = core.depth_class_probability(
+        np.array([70.0, 30.0, 300.0, 70.0]),
+        np.array([30.0, 10.0, 50.0, np.nan]),
+        (50.0, 100.0),
+    )
+    nd = NormalDist()
+    assert p[0] == pytest.approx(nd.cdf(1.0) - nd.cdf(-2 / 3), abs=1e-6)
+    assert p[1] == pytest.approx(nd.cdf(2.0), abs=1e-6)
+    assert p[2] == pytest.approx(1 - nd.cdf(-4.0), abs=1e-6)
+    assert p[3] == 1.0  # no sd: no extra uncertainty
+
+
+def _write_isda_bedrock(folder, grid, mean, sd):
+    from mayim_tools.soil._common.export import write_multiband_geotiff
+
+    os.makedirs(folder, exist_ok=True)
+    shape = (grid.height, grid.width)
+    write_multiband_geotiff(
+        os.path.join(folder, "isda_bedrock_mean.tif"),
+        grid,
+        [("bedrock_0-200cm_mean_30m_isda (cm)", np.full(shape, mean))],
+        "cm",
+    )
+    write_multiband_geotiff(
+        os.path.join(folder, "isda_bedrock_sd.tif"),
+        grid,
+        [("bedrock_0-200cm_sd_30m_isda (cm)", np.full(shape, sd))],
+        "cm",
+    )
+
+
+def test_end_to_end_isda_bedrock(tmp_path, regional):
+    folder, grid = regional
+    isda = str(tmp_path / "isda")
+    _write_isda_bedrock(isda, grid, 70.0, 30.0)
+    base = _run(
+        tmp_path / "a", folder, bedrock_source="constant", bedrock_constant_m=0.7
+    )
+    r = _run(tmp_path / "b", folder, bedrock_source="ISDA", isda_folder=isda)
+    nd = NormalDist()
+    factor = nd.cdf(1.0) - nd.cdf(-2 / 3)
+    for m in ("NEH630", "SCSSA"):
+        a = base.methods[m]
+        b = r.methods[m]
+        assert np.array_equal(a.recommended, b.recommended)
+    a, b = base.methods["NEH630"], r.methods["NEH630"]
+    assert b.confidence[5, 2] == pytest.approx(a.confidence[5, 2] * factor, rel=1e-6)
+    sa_factor = 1 - nd.cdf(-2 / 3)  # SCS-SA: same side of 50 cm
+    a, b = base.methods["SCSSA"], r.methods["SCSSA"]
+    assert b.confidence[5, 2] == pytest.approx(a.confidence[5, 2] * sa_factor, rel=1e-6)
+    assert np.nanmax(r.p_shallow) == pytest.approx(nd.cdf(-2 / 3), abs=1e-6)
+    row = r.zone_rows[0]
+    assert row["Mean P(impermeable layer < 50 cm) (%)"] == pytest.approx(
+        100 * nd.cdf(-2 / 3), abs=0.01
+    )
+    with pytest.raises(SoilDataError):
+        _run(tmp_path / "c", folder, bedrock_source="ISDA", isda_folder=str(tmp_path))

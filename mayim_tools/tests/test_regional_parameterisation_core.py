@@ -613,7 +613,7 @@ def test_wrong_folder_and_missing_inputs(tmp_path, folders):
         _run(tmp_path, folders, sg="", olm="")
     empty = tmp_path / "empty"
     empty.mkdir()
-    with pytest.raises(SoilDataError, match="No SoilGrids or OpenLandMap"):
+    with pytest.raises(SoilDataError, match="No SoilGrids, OpenLandMap or iSDAsoil"):
         _run(tmp_path, folders, sg=str(empty), olm="")
 
 
@@ -862,3 +862,106 @@ def test_figure_log_ticks_and_diverging_scale():
         assert all(lo * 0.999 <= t <= hi * 1.001 for t in ticks)
     plt.close(fig)
     assert "RdBu_r" in figures.DIVERGING
+
+
+# ----------------------------------------------------------------------
+# iSDAsoil as a third product
+# ----------------------------------------------------------------------
+
+
+def _write_isda(base, sg_dir):
+    from osgeo import gdal
+
+    from mayim_tools.soil._common.export import write_multiband_geotiff
+    from mayim_tools.soil.regional_parameterisation.inputs import grid_of
+
+    g = grid_of(os.path.join(sg_dir, "soilgrids_clay_Q0.50.tif"))
+    g30 = type(g)(g.xmin, g.ymin, g.xmax, g.ymax, 30.0, g.crs_wkt)
+    folder = os.path.join(base, "isda")
+    os.makedirs(folder, exist_ok=True)
+    spec = {
+        # var: (mean, sd, units, sd units)
+        "sand": (55.0, 8.0, "%", "%"),
+        "silt": (18.0, 4.0, "%", "%"),
+        "clay": (27.0, 6.0, "%", "%"),
+        "soc": (9.0, 0.3, "g/kg", "ln(1+g/kg)"),
+        "bdod": (1.38, 0.08, "g/cm3", "g/cm3"),
+        "phh2o": (6.2, 0.4, "pH", "pH"),
+        "cfvo": (6.0, 0.5, "vol %", "ln(1+vol %)"),
+    }
+    yy, xx = np.mgrid[0 : g30.height, 0 : g30.width]
+    for var, (m, sd, u, su) in spec.items():
+        for stat, val, units in (("mean", m, u), ("sd", sd, su)):
+            bands = []
+            for d in ("0-20cm", "20-50cm"):
+                arr = val * (1 + 0.05 * np.sin(xx / 5.0)) * np.ones_like(xx, float)
+                bands.append((f"{var}_{d}_{stat}_30m_isda ({units})", arr))
+            write_multiband_geotiff(
+                os.path.join(folder, f"isda_{var}_{stat}.tif"), g30, bands, units
+            )
+    gdal.UseExceptions()
+    with open(os.path.join(folder, "isda_metadata.csv"), "w", encoding="utf-8") as fh:
+        fh.write("# Run\nItem,Value\nTool,Extract: iSDAsoil (Africa)\n\n")
+    return folder
+
+
+@pytest.fixture(scope="module")
+def isda_folder(tmp_path_factory, folders):
+    return _write_isda(str(tmp_path_factory.mktemp("isda")), folders[0])
+
+
+def test_dist_from_mean_sd():
+    d = inp.dist_from_mean_sd("clay", np.array([30.0]), np.array([5.0]))
+    q05 = inp.from_space("clay", np.log(30.0) - inp.Z90 * d.sig_lo)
+    q95 = inp.from_space("clay", np.log(30.0) + inp.Z90 * d.sig_hi)
+    assert q05[0] == pytest.approx(30 - 1.645 * 5, rel=1e-3)
+    assert q95[0] == pytest.approx(30 + 1.645 * 5, rel=1e-3)
+    d = inp.dist_from_mean_sd("soc", np.array([9.0]), np.array([0.3]), log1p_sd=True)
+    q95 = np.exp(np.log(9.0) + inp.Z90 * d.sig_hi)
+    assert q95[0] == pytest.approx(np.expm1(np.log1p(9.0) + 1.645 * 0.3), rel=1e-3)
+    assert (
+        inp.parse_description("soc_20-50cm_sd_30m_isda (ln(1+g/kg))")["kind"] == "isda"
+    )
+
+
+def test_isda_layers_and_notes(isda_folder):
+    from mayim_tools.soil.regional_parameterisation.inputs import grid_of
+
+    g = grid_of(os.path.join(isda_folder, "isda_clay_mean.tif"))
+    p = inp.load_product(isda_folder, inp.BandReader(g), expected=inp.PRODUCT_ISDA)
+    assert p.texture_system == "USDA"
+    assert set(p.layers["0-30cm"]) >= {"sand", "silt", "clay", "soc", "bdod", "phh2o"}
+    assert "clay" in p.layers["30-60cm"]
+    assert not p.layers["60-100cm"]
+    assert any("stands in" in n for n in p.notes)
+    assert any("no iSDAsoil member for 60-100cm" in n for n in p.notes)
+    # 0-30 cm = (20 x 0-20 + 10 x 20-50) / 30 of nearly constant fields
+    assert np.nanmedian(p.layers["0-30cm"]["clay"].centre) == pytest.approx(
+        27.0, rel=0.06
+    )
+
+
+def test_end_to_end_three_products(tmp_path, folders, isda_folder):
+    r = _run(tmp_path, folders, isda_folder=isda_folder, report=True)
+    assert [p.name for p in r.products] == [
+        inp.PRODUCT_SG,
+        inp.PRODUCT_OLM,
+        inp.PRODUCT_ISDA,
+    ]
+    pairs = {c["Pair"] for c in r.comparison}
+    assert pairs == {"OLM - SG", "iSDA - SG", "iSDA - OLM"}
+    assert not any(
+        c["Layer"] == "60-100cm" and "iSDA" in c["Pair"] for c in r.comparison
+    )
+    members = {k for row in r.design_rows for k in row if k.startswith("Member iSDA")}
+    assert members
+    deep = [row for row in r.design_rows if row["Layer"] == "60-100cm"]
+    assert deep and not any(k.startswith("Member iSDA") for row in deep for k in row)
+    assert r.report_path and os.path.getsize(r.report_path) > 20000
+
+
+def test_end_to_end_isda_only(tmp_path, folders, isda_folder):
+    r = _run(tmp_path, folders, sg="", olm="", isda_folder=isda_folder)
+    assert set(r.texture_class) == {"0-30cm", "30-60cm"}
+    assert any("60-100cm" in w for w in r.warnings)
+    assert np.isfinite(r.stats["ksat"]["0-30cm"][1]).any()

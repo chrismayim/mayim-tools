@@ -5,7 +5,8 @@ bare surfaces; OpenLandMap leaves deserts and permanent ice unmapped. Each
 product's missing cells are filled, per variable and depth layer, in this
 order (agreed design):
 
-    1. the other product (texture converted between USDA and ISO limits)
+    1. the other product(s), in order of preference (texture converted
+       between USDA and ISO limits)
     2. SoilGrids 2017 means (built-up land is mapped there); the
        uncertainty is the median uncertainty of the layer's own cells
     3. nearest valid neighbours within a search radius (inverse-distance
@@ -27,7 +28,7 @@ SOURCE_OTHER = 2
 SOURCE_SG2017 = 3
 SOURCE_NEIGHBOUR = 4
 FILL_TEXT = {
-    2: "the other product",
+    2: "the other product(s)",
     3: "SoilGrids 2017",
     4: "neighbouring cells",
 }
@@ -74,11 +75,11 @@ def _from_other(
 
 
 def _sg2017_values(
-    target: ProductInputs, other: ProductInputs | None, lab: str, var: str
+    target: ProductInputs, others, lab: str, var: str
 ) -> np.ndarray | None:
-    """SoilGrids 2017 layer means for ``var`` from either folder, with
+    """SoilGrids 2017 layer means for ``var`` from any folder, with
     texture converted from USDA to ISO limits for an ISO product."""
-    for p in (target, other):
+    for p in (target, *others):
         if p is None:
             continue
         vals = p.sg2017.get(lab, {})
@@ -121,14 +122,21 @@ def neighbour_fill(arr: np.ndarray, max_cells: float) -> np.ndarray:
 
 def fill_product(
     target: ProductInputs,
-    other: ProductInputs | None,
+    other,
     radius_cells: float,
     layers,
     fill_fn=neighbour_fill,
 ) -> dict[str, np.ndarray]:
     """Fill ``target`` in place; returns the source raster per layer
-    (SOURCE_* codes, judged from clay). Counts of filled cells are added
-    to ``target.notes``."""
+    (SOURCE_* codes, judged from clay). ``other`` is one product, a list of
+    products in order of preference, or None. Counts of filled cells are
+    added to ``target.notes``."""
+    if other is None:
+        others = []
+    elif isinstance(other, (list, tuple)):
+        others = [o for o in other if o is not None]
+    else:
+        others = [other]
     sources: dict[str, np.ndarray] = {}
     for lab, _, _ in layers:
         dists = target.layers.get(lab, {})
@@ -139,11 +147,11 @@ def fill_product(
             src = np.where(np.isfinite(d.centre), SOURCE_OWN, SOURCE_NONE)
             src = src.astype(np.int16)
             steps = []
-            if other is not None:
-                o = _from_other(target, other, lab, var)
+            for oth in others:
+                o = _from_other(target, oth, lab, var)
                 if o is not None:
                     steps.append((SOURCE_OTHER, o.centre, o.sig_lo, o.sig_hi))
-            s17 = _sg2017_values(target, other, lab, var)
+            s17 = _sg2017_values(target, others, lab, var)
             if s17 is not None:
                 lo = np.full(s17.shape, _typical(d.sig_lo))
                 hi = np.full(s17.shape, _typical(d.sig_hi))

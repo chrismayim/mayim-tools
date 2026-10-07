@@ -48,7 +48,7 @@ from .uncertainty import (
 )
 
 TOOL_NAME = "Regional soil parameterisation"
-TOOL_VERSION = "0.6.2"
+TOOL_VERSION = "0.7.0"
 CHUNK_CELLS = 1024
 MAX_CELLS_DEFAULT = 2_000_000  # ~1800 km2 at 30 m; about 6 GB of memory
 SAMPLE_POINTS = 3000  # cells kept for scatter plots in the report
@@ -126,7 +126,7 @@ INPUT_BANDS = (
     ("bulk_density", "g/cm3"),
     ("gravel", "vol %"),
 )
-SHORT = {inp.PRODUCT_SG: "SG", inp.PRODUCT_OLM: "OLM"}
+SHORT = {inp.PRODUCT_SG: "SG", inp.PRODUCT_OLM: "OLM", inp.PRODUCT_ISDA: "iSDA"}
 
 
 @dataclass
@@ -134,6 +134,7 @@ class RunSettings:
     out_dir: str
     sg_folder: str = ""
     olm_folder: str = ""
+    isda_folder: str = ""
     resolution: float = 0.0  # 0 = the finest product grid
     layers: tuple = inp.TARGET_LAYERS
     fill_radius_m: float = 1000.0
@@ -300,12 +301,13 @@ def run(
     folders = [
         (inp.PRODUCT_SG, settings.sg_folder),
         (inp.PRODUCT_OLM, settings.olm_folder),
+        (inp.PRODUCT_ISDA, settings.isda_folder),
     ]
     folders = [(name, f) for name, f in folders if f]
     if not folders:
         raise SoilDataError(
-            "Give the output folder of 'Extract: SoilGrids 2.0', of 'Extract: "
-            "OpenLandMap Soils', or both."
+            "Give the output folder of 'Extract: SoilGrids 2.0', 'Extract: "
+            "OpenLandMap Soils' and/or 'Extract: iSDAsoil (Africa)'."
         )
     unknown = [m for m in settings.mc.methods if m not in METHOD_BY_CODE]
     if unknown:
@@ -361,7 +363,7 @@ def run(
         others = [o for j, o in enumerate(originals) if j != i]
         n_before = len(p.notes)
         result.sources[p.name] = fill_mod.fill_product(
-            p, others[0] if others else None, radius_cells, settings.layers
+            p, others, radius_cells, settings.layers
         )
         for note in p.notes[n_before:]:
             log_fn(f"  {note}")
@@ -417,7 +419,7 @@ def run(
     result.design_rows = design_mod.design_rows(result, SHORT)
     _reference_check(result)
     _water_checks(result)
-    if len(result.products) == 2:
+    if len(result.products) >= 2:
         _product_comparison(result)
     _write_rasters(result, write_fn)
     _write_tables(result)
@@ -837,58 +839,76 @@ def _water_checks(result: RunResult) -> None:
                 )
 
 
+def product_pairs(result) -> list[tuple[str, str]]:
+    """Product pairs (a, b) in input order; differences are b - a."""
+    names = [p.name for p in result.products]
+    return [(a, b) for i, a in enumerate(names) for b in names[i + 1 :]]
+
+
+def pair_label(a: str, b: str) -> str:
+    return f"{SHORT[b]} - {SHORT[a]}"
+
+
 def _product_comparison(result: RunResult) -> None:
-    """Both products: central texture (USDA limits) and Saxton & Rawls Ksat,
-    on cells where both products have their OWN values (not filled)."""
-    sg, olm = (p.name for p in result.products)
+    """Every pair of products: central texture (USDA limits) and Ksat (first
+    method), on cells where both have their OWN values (not filled)."""
     rng = np.random.default_rng(1)
-    for lab, _, _ in result.settings.layers:
-        if lab not in result.central.get(sg, {}) or lab not in result.central.get(
-            olm, {}
-        ):
-            continue
-        a, b = result.central[sg][lab], result.central[olm][lab]
-        own = (
-            (result.sources[sg].get(lab) == fill_mod.SOURCE_OWN)
-            & (result.sources[olm].get(lab) == fill_mod.SOURCE_OWN)
-            & (result.zone_raster > 0)
-        )
-        ok = own & np.isfinite(a["clay"]) & np.isfinite(b["clay"])
-        if ok.sum() < 3:
-            continue
-        ca = usda_class(a["sand"][ok], a["silt"][ok], a["clay"][ok])
-        cb = usda_class(b["sand"][ok], b["silt"][ok], b["clay"][ok])
-        with np.errstate(invalid="ignore", divide="ignore"):
-            ratio = b["ksat"][ok] / a["ksat"][ok]
-        result.comparison.append(
-            {
-                "Layer": lab,
-                "Cells": int(ok.sum()),
-                f"Clay {SHORT[sg]} (%)": float(np.median(a["clay"][ok])),
-                f"Clay {SHORT[olm]} (%)": float(np.median(b["clay"][ok])),
-                f"Sand {SHORT[sg]} (%)": float(np.median(a["sand"][ok])),
-                f"Sand {SHORT[olm]} (%)": float(np.median(b["sand"][ok])),
-                "Mean clay difference OLM - SG (%)": float(
-                    np.mean(b["clay"][ok] - a["clay"][ok])
-                ),
-                "Mean sand difference OLM - SG (%)": float(
-                    np.mean(b["sand"][ok] - a["sand"][ok])
-                ),
-                "Texture class agreement (%)": float(100.0 * np.mean(ca == cb)),
-                "Ksat differs by more than x4 (%)": float(
-                    100.0 * np.mean((ratio > 4) | (ratio < 0.25))
-                ),
-                "Median Ksat ratio OLM / SG": float(np.nanmedian(ratio)),
+    for a_name, b_name in product_pairs(result):
+        label = pair_label(a_name, b_name)
+        for lab, _, _ in result.settings.layers:
+            if lab not in result.central.get(
+                a_name, {}
+            ) or lab not in result.central.get(b_name, {}):
+                continue
+            sa = result.sources[a_name].get(lab)
+            sb = result.sources[b_name].get(lab)
+            if sa is None or sb is None:
+                continue
+            a, b = result.central[a_name][lab], result.central[b_name][lab]
+            own = (
+                (sa == fill_mod.SOURCE_OWN)
+                & (sb == fill_mod.SOURCE_OWN)
+                & (result.zone_raster > 0)
+            )
+            ok = own & np.isfinite(a["clay"]) & np.isfinite(b["clay"])
+            if ok.sum() < 3:
+                continue
+            ca = usda_class(a["sand"][ok], a["silt"][ok], a["clay"][ok])
+            cb = usda_class(b["sand"][ok], b["silt"][ok], b["clay"][ok])
+            with np.errstate(invalid="ignore", divide="ignore"):
+                ratio = b["ksat"][ok] / a["ksat"][ok]
+            result.comparison.append(
+                {
+                    "Pair": label,
+                    "Product A": a_name,
+                    "Product B": b_name,
+                    "Layer": lab,
+                    "Cells": int(ok.sum()),
+                    "Clay A (%)": float(np.median(a["clay"][ok])),
+                    "Clay B (%)": float(np.median(b["clay"][ok])),
+                    "Sand A (%)": float(np.median(a["sand"][ok])),
+                    "Sand B (%)": float(np.median(b["sand"][ok])),
+                    "Mean clay difference B - A (%)": float(
+                        np.mean(b["clay"][ok] - a["clay"][ok])
+                    ),
+                    "Mean sand difference B - A (%)": float(
+                        np.mean(b["sand"][ok] - a["sand"][ok])
+                    ),
+                    "Texture class agreement (%)": float(100.0 * np.mean(ca == cb)),
+                    "Ksat differs by more than x4 (%)": float(
+                        100.0 * np.mean((ratio > 4) | (ratio < 0.25))
+                    ),
+                    "Median Ksat ratio B / A": float(np.nanmedian(ratio)),
+                }
+            )
+            pick = np.flatnonzero(ok.ravel())
+            if pick.size > SAMPLE_POINTS:
+                pick = rng.choice(pick, SAMPLE_POINTS, replace=False)
+            result.comparison_samples[(label, lab)] = {
+                "clay": (a["clay"].ravel()[pick], b["clay"].ravel()[pick]),
+                "sand": (a["sand"].ravel()[pick], b["sand"].ravel()[pick]),
+                "ksat": (a["ksat"].ravel()[pick], b["ksat"].ravel()[pick]),
             }
-        )
-        pick = np.flatnonzero(ok.ravel())
-        if pick.size > SAMPLE_POINTS:
-            pick = rng.choice(pick, SAMPLE_POINTS, replace=False)
-        result.comparison_samples[lab] = {
-            "clay": (a["clay"].ravel()[pick], b["clay"].ravel()[pick]),
-            "sand": (a["sand"].ravel()[pick], b["sand"].ravel()[pick]),
-            "ksat": (a["ksat"].ravel()[pick], b["ksat"].ravel()[pick]),
-        }
 
 
 # ----------------------------------------------------------------------
@@ -983,23 +1003,31 @@ def _write_rasters(result: RunResult, write_fn) -> None:
         (path, "Ksat uncertainty, texture confidence, validity flags, input sources")
     )
 
-    if len(result.products) == 2:
-        sg, olm = (p.name for p in result.products)
+    if len(result.products) >= 2:
         bands = []
-        for lab in labs:
-            a, b = result.central[sg][lab], result.central[olm][lab]
-            bands.append((f"clay_{lab}_OLM-SG (%)", b["clay"] - a["clay"]))
-            bands.append((f"sand_{lab}_OLM-SG (%)", b["sand"] - a["sand"]))
-            with np.errstate(invalid="ignore", divide="ignore"):
-                bands.append(
-                    (
-                        f"ksat_{lab}_log10_OLM/SG (-)",
-                        np.log10(b["ksat"]) - np.log10(a["ksat"]),
+        for a_name, b_name in product_pairs(result):
+            tag = f"{SHORT[b_name]}-{SHORT[a_name]}"
+            for lab in labs:
+                if lab not in result.central.get(a_name, {}) or lab not in (
+                    result.central.get(b_name, {})
+                ):
+                    continue
+                a, b = result.central[a_name][lab], result.central[b_name][lab]
+                bands.append((f"clay_{lab}_{tag} (%)", b["clay"] - a["clay"]))
+                bands.append((f"sand_{lab}_{tag} (%)", b["sand"] - a["sand"]))
+                with np.errstate(invalid="ignore", divide="ignore"):
+                    bands.append(
+                        (
+                            f"ksat_{lab}_log10_{SHORT[b_name]}/{SHORT[a_name]} (-)",
+                            np.log10(b["ksat"]) - np.log10(a["ksat"]),
+                        )
                     )
-                )
-        path = os.path.join(out, DIFF_FILE)
-        write_fn(path, grid, bands, "", src, TOOL_VERSION)
-        result.files.append((path, "Product difference (central soils, USDA limits)"))
+        if bands:
+            path = os.path.join(out, DIFF_FILE)
+            write_fn(path, grid, bands, "", src, TOOL_VERSION)
+            result.files.append(
+                (path, "Product differences per pair (central soils, USDA limits)")
+            )
 
 
 def _fmt(v, nd=4):

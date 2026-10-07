@@ -24,6 +24,12 @@ REPORT_FILE = "hydrologic_soil_groups_report.docx"
 METHOD_TITLE = {"NEH630": "NEH 630", "SCSSA": "SCS-SA"}
 
 REFERENCES = [
+    "Hengl, T., Miller, M.A.E., Krizan, J., et al. (2021). African soil properties "
+    "and nutrients mapped at 30 m spatial resolution using two-scale ensemble "
+    "machine learning. Scientific Reports 11: 6130.",
+    "Miller, M.A.E., Shepherd, K.D., Kisitu, B. and Collinson, J. (2021). iSDAsoil: "
+    "the first continent-scale soil property map at 30 m resolution provides a soil "
+    "information revolution for Africa. PLOS Biology 19(11): e3001441.",
     "Bouwer, H. (1986). Intake rate: cylinder infiltrometer. In: Klute, A. (ed.), "
     "Methods of Soil Analysis, Part 1, 2nd edition. Agronomy Monograph 9, ASA-SSSA, "
     "Madison, 825-844.",
@@ -191,6 +197,15 @@ def write_report(result) -> str:
             "uncertainty estimate and is used as mapped; it describes bedrock "
             "only, not hardpans, duripans or other restrictive layers."
         )
+    if s.bedrock_source == "ISDA":
+        d.para(
+            "Depth to bedrock from iSDAsoil (Hengl et al., 2021; Miller et al., "
+            "2021): 30 m mean and standard deviation, Africa only; 200 cm means "
+            "200 cm or deeper, and exposed bedrock is masked in the product. "
+            "The groups follow the mapped mean depth; the confidence also "
+            "includes the chance that bedrock lies in another depth class "
+            "(Section 4.3)."
+        )
     if s.water_source == "none":
         d.para(
             "No reliable global map of the water table exists and none was given: "
@@ -297,6 +312,17 @@ def write_report(result) -> str:
         "median Ksat, matching the candidate values of Regional soil "
         "parameterisation; its confidence is the probability of that group."
     )
+    if result.p_shallow is not None:
+        d.para(
+            "With iSDAsoil bedrock depth, the depth is described by a normal "
+            "distribution (mapped mean and standard deviation). The confidence is "
+            "multiplied by the probability that bedrock lies in the same depth "
+            "class as the mean - shallower than 50 cm, 50-100 cm or deeper than "
+            "100 cm for NEH 630; shallower or deeper than 50 cm for the SCS-SA "
+            "shallow-phase adjustment. Another class is counted as another group, "
+            "which is slightly cautious. The probability of bedrock within 50 cm "
+            "is mapped in hsg_conditions.tif."
+        )
     d.caption("Table", "Confidence classes")
     d.table(
         ["Class", "Meaning"],

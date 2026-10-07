@@ -36,7 +36,7 @@ from mayim_tools.soil._common.errors import SoilDataError
 from . import core
 
 METHOD_CODES = ["NEH630", "SCSSA"]
-BEDROCK_CODES = ["BDRICM", "BDTICM", "raster", "constant", "none"]
+BEDROCK_CODES = ["BDRICM", "BDTICM", "ISDA", "raster", "constant", "none"]
 WATER_CODES = ["none", "raster", "constant"]
 
 
@@ -52,6 +52,7 @@ class HydrologicSoilGroupsAlgorithm(QgsProcessingAlgorithm):
     METHODS = "METHODS"
     BEDROCK_SOURCE = "BEDROCK_SOURCE"
     SG_FOLDER = "SG_FOLDER"
+    ISDA_FOLDER = "ISDA_FOLDER"
     BEDROCK_RASTER = "BEDROCK_RASTER"
     BEDROCK_CONSTANT = "BEDROCK_CONSTANT"
     WATER_SOURCE = "WATER_SOURCE"
@@ -129,6 +130,9 @@ class HydrologicSoilGroupsAlgorithm(QgsProcessingAlgorithm):
             "rsp_inputs_P50.tif for an NEH 630 texture cross-check). Depth to an "
             "impermeable layer: SoilGrids 2017 depth to bedrock (run 'Extract: "
             "SoilGrids 2.0' with the depth-to-bedrock layer and give its folder), "
+            "iSDAsoil depth to bedrock with its standard deviation (Africa; the "
+            "confidence then includes the chance that bedrock lies in another "
+            "depth class), "
             "a raster in metres, a constant, or none (> 100 cm). Depth to the "
             "water table: a raster in metres, a constant, or none (> 100 cm; no "
             "global map is reliable enough). Optional zones (sub-catchments).\n"
@@ -172,6 +176,14 @@ class HydrologicSoilGroupsAlgorithm(QgsProcessingAlgorithm):
             QgsProcessingParameterFile(
                 self.SG_FOLDER,
                 "SoilGrids output folder with the depth-to-bedrock layer",
+                behavior=_folder_behavior(),
+                optional=True,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterFile(
+                self.ISDA_FOLDER,
+                "iSDAsoil output folder with the depth-to-bedrock layer (Africa)",
                 behavior=_folder_behavior(),
                 optional=True,
             )
@@ -312,6 +324,7 @@ class HydrologicSoilGroupsAlgorithm(QgsProcessingAlgorithm):
                 self.parameterAsEnum(parameters, self.BEDROCK_SOURCE, context)
             ],
             sg_folder=self.parameterAsFile(parameters, self.SG_FOLDER, context),
+            isda_folder=self.parameterAsFile(parameters, self.ISDA_FOLDER, context),
             bedrock_raster=self._raster_path(parameters, self.BEDROCK_RASTER, context),
             bedrock_constant_m=self.parameterAsDouble(
                 parameters, self.BEDROCK_CONSTANT, context

@@ -72,6 +72,7 @@ from mayim_tools.rainfall.storm_library.storm_library_algorithm import (
 from mayim_tools.soil.hydrologic_soil_groups.hydrologic_soil_groups_algorithm import (  # noqa: E501
     HydrologicSoilGroupsAlgorithm,
 )
+from mayim_tools.soil.isda_extract.isda_extract_algorithm import IsdaExtractAlgorithm
 from mayim_tools.soil.openlandmap_extract.openlandmap_extract_algorithm import (
     OpenLandMapExtractAlgorithm,
 )
@@ -124,5 +125,6 @@ class MayimToolsProvider(QgsProcessingProvider):
         self.addAlgorithm(stream_network_algo.StreamNetworkAlgorithm())
         self.addAlgorithm(SoilGridsExtractAlgorithm())
         self.addAlgorithm(OpenLandMapExtractAlgorithm())
+        self.addAlgorithm(IsdaExtractAlgorithm())
         self.addAlgorithm(RegionalSoilParameterisationAlgorithm())
         self.addAlgorithm(HydrologicSoilGroupsAlgorithm())
