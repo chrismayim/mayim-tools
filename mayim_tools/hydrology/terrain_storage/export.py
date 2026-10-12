@@ -1,4 +1,4 @@
-"""Table writers for the terrain storage tool (no QGIS dependency)."""
+"""Table writers for DEM depression stage-storage (no QGIS dependency)."""
 
 from __future__ import annotations
 
@@ -17,12 +17,18 @@ TABLE_FIELDS = [
     "inc_vol_m3",
     "wet_cells",
 ]
+RANGE_FIELDS = ["area_low_m2", "volume_low_m3", "area_high_m2", "volume_high_m3"]
 
 
 def write_stage_table_csv(path: str, results: Sequence[StorageResult]) -> None:
-    """Long format: one row per storage area per stage."""
+    """Long format: one row per storage area per stage. When the bed was
+    estimated below a surveyed water surface, the low and high estimates
+    add area/volume columns (central = the main columns)."""
+    fields = ["storage_id", *TABLE_FIELDS]
+    if any(r.range_tables for r in results):
+        fields += RANGE_FIELDS
     with open(path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["storage_id", *TABLE_FIELDS])
+        writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
         for r in results:
             for row in r.table:

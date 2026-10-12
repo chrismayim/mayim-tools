@@ -37,7 +37,7 @@ def test_provider_registers_seven_algorithms() -> None:
     provider = loaded_provider()
 
     algorithms = provider.algorithms()
-    assert len(algorithms) == 28
+    assert len(algorithms) == 30
 
     by_name = {algorithm.name(): algorithm for algorithm in algorithms}
 
@@ -70,6 +70,8 @@ def test_provider_registers_seven_algorithms() -> None:
         "isda_extract",
         "land_cover_extract",
         "curve_numbers",
+        "dem_hydro_processing",
+        "sanral_peak_flows",
     }
 
     expected = {
@@ -212,6 +214,16 @@ def test_provider_registers_seven_algorithms() -> None:
             "Curve numbers",
             "Land Cover Tools",
             "land_cover_tools",
+        ),
+        "dem_hydro_processing": (
+            "DEM Hydrological Processing",
+            "Hydrological Tools",
+            "hydrological_tools",
+        ),
+        "sanral_peak_flows": (
+            "SANRAL Deterministic Peak Flows",
+            "Hydrological Tools",
+            "hydrological_tools",
         ),
     }
 

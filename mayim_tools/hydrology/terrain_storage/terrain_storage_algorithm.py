@@ -1,12 +1,16 @@
 """Processing Toolbox algorithm "DEM depression stage-storage": DEM +
 storage-area polygon(s) in -> stage-area-volume table, HEC-RAS / HEC-HMS
 elevation-volume table, water-surface polygons, top-stage depth raster,
-spill points and a Word report out. (Package name terrain_storage kept.)
+spill points and a Word report out. Optionally (DEM surface is a water
+surface) the bed below the surveyed water is estimated first - see
+bathymetry.py - and the curve runs from the estimated bed. (Package name
+terrain_storage kept.)
 
 Thin wrapper - all real logic lives in core.py (zero QGIS dependency,
 independently testable; see tests/test_terrain_storage_core.py).
 """
 
+import math
 from datetime import datetime
 from pathlib import Path
 
@@ -27,6 +31,7 @@ from qgis.core import (
     QgsProcessingException,
     QgsProcessingFeedback,
     QgsProcessingLayerPostProcessorInterface,
+    QgsProcessingParameterBoolean,
     QgsProcessingParameterEnum,
     QgsProcessingParameterFeatureSink,
     QgsProcessingParameterFeatureSource,
@@ -42,14 +47,23 @@ from qgis.core import (
 from qgis.PyQt.QtCore import QMetaType
 from qgis.PyQt.QtGui import QIcon
 
-from mayim_tools.hydrology._common.grid_polygons import rings_to_multipolygon_wkt
+from mayim_tools.hydrology._common.grid_polygons import (
+    group_polygons,
+    ring_to_map,
+    rings_to_multipolygon_wkt,
+    simplify_ring,
+    trace_rings,
+)
 
+from .bathymetry import DEFAULT_FLAT_TOL_M, write_bed_dem
+from .bathymetry_export import write_bathymetry_summary_csv, write_profile_csv
 from .core import (
     DEFAULT_DEPTH_NODATA,
     StorageArea,
     StorageError,
     check_geotransform,
     compute_storage,
+    compute_storage_with_bed,
     mosaic_depths,
     polygon_window,
     raster_info,
@@ -60,7 +74,7 @@ from .core import (
 from .export import write_hec_table, write_stage_table_csv
 from .report import write_report_docx
 
-TOOL_VERSION = "0.2.0"
+TOOL_VERSION = "0.3.0"
 
 MODE_OPTIONS = [
     "Connected to the lowest point (pool fills over ridges in turn)",
@@ -98,6 +112,39 @@ SPILL_FIELDS = [
     ("cell_m", _D, "DEM cell size, m"),
     ("x_floor", _D, "lowest cell centre X"),
     ("y_floor", _D, "lowest cell centre Y"),
+    ("z_survey", _D, "bed estimate: water level at the time of survey, m"),
+    ("bed_basis", _S, "bed estimate: user / valley / slope+hypsometry / slope"),
+    ("ws_ha", _D, "bed estimate: surveyed water-surface area, ha"),
+    ("vws_lo", _D, "bed estimate: volume below the surveyed water - low, m3"),
+    ("vws_c", _D, "bed estimate: volume below the surveyed water - central, m3"),
+    ("vws_hi", _D, "bed estimate: volume below the surveyed water - high, m3"),
+    ("vol_lo", _D, "bed estimate: storage volume at z_top - low, m3"),
+    ("vol_hi", _D, "bed estimate: storage volume at z_top - high, m3"),
+]
+
+SURVEY_FIELDS = [
+    ("storage_id", _S, ""),
+    ("src_fid", _I, ""),
+    ("water_lvl", _D, ""),
+    ("water_ha", _D, ""),
+    ("basis", _S, ""),
+    ("dmax_lo", _D, ""),
+    ("dmax_c", _D, ""),
+    ("dmax_hi", _D, ""),
+    ("dmean_lo", _D, ""),
+    ("dmean_c", _D, ""),
+    ("dmean_hi", _D, ""),
+    ("vol_lo", _D, ""),
+    ("vol_c", _D, ""),
+    ("vol_hi", _D, ""),
+    ("d_slope", _D, ""),
+    ("d_hyps", _D, ""),
+    ("d_valley", _D, ""),
+    ("d_user", _D, ""),
+    ("slope_pc", _D, ""),
+    ("shape_n", _D, ""),
+    ("hl_depth", _D, ""),
+    ("hl_vol_m3", _D, ""),
 ]
 
 FLOOR_FIELDS = [
@@ -259,6 +306,20 @@ class DemDepressionStageStorageAlgorithm(QgsProcessingAlgorithm):
     OUTPUT_DEPTH = "OUTPUT_DEPTH"
     OUTPUT_SPILL = "OUTPUT_SPILL"
     OUTPUT_DOCX = "OUTPUT_DOCX"
+    ESTIMATE_BED = "ESTIMATE_BED"
+    CENTRELINES = "CENTRELINES"
+    DEPTH_FIELD = "DEPTH_FIELD"
+    FLAT_TOL = "FLAT_TOL"
+    WATER_LEVEL = "WATER_LEVEL"
+    SHORE_BUFFER = "SHORE_BUFFER"
+    REACH = "REACH"
+    HYDROLAKES = "HYDROLAKES"
+    OUTPUT_BED_DEM = "OUTPUT_BED_DEM"
+    OUTPUT_BED_DEM_LOW = "OUTPUT_BED_DEM_LOW"
+    OUTPUT_BED_DEM_HIGH = "OUTPUT_BED_DEM_HIGH"
+    OUTPUT_SURVEY_WATER = "OUTPUT_SURVEY_WATER"
+    OUTPUT_BED_TABLE = "OUTPUT_BED_TABLE"
+    OUTPUT_PROFILE = "OUTPUT_PROFILE"
 
     def icon(self):
         return QIcon(
@@ -348,6 +409,23 @@ class DemDepressionStageStorageAlgorithm(QgsProcessingAlgorithm):
             "area-capacity, stage-storage, stage-area, depth-area and depth-"
             "volume curves, depth distribution). It needs python-docx (and "
             "matplotlib for figures) in QGIS's Python.\n"
+            "\n"
+            "BED BELOW A WATER SURFACE:\tTick 'DEM surface is a water surface' "
+            "when the DEM shows the water of a pan, pond or dam as surveyed (LiDAR, "
+            "photogrammetry and radar do not see the bed). The bed below the "
+            "flat water surface is then estimated as LOW / CENTRAL / HIGH and "
+            "written into the DEM before the curve is computed, so the table, "
+            "contours and report start at the estimated bed; low and high "
+            "volumes are added to the table. Methods: shoreline slope "
+            "(Hollister et al., 2011; usually an upper bound for pans), "
+            "hypsometry of the dry ground above the water (after Heathcote et "
+            "al., 2015) and, with a stream centreline for a built dam, the river "
+            "bed upstream of the water and below the wall (V-shaped valley). A "
+            "known maximum depth field overrides them (+-20%). The settings are "
+            "under Advanced parameters. Outputs: DEMs with the estimated bed "
+            "(central, low, high), the surveyed water surface with all "
+            "estimates, a bed-estimate summary CSV and a centreline profile CSV. "
+            "It is an estimate for storage modelling, not a survey.\n"
             "\n"
             "SPILL POINT ATTRIBUTES:\n" + glossary
         )
@@ -439,6 +517,65 @@ class DemDepressionStageStorageAlgorithm(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
+            QgsProcessingParameterBoolean(
+                self.ESTIMATE_BED,
+                "DEM surface is a water surface: estimate the bed below it",
+                defaultValue=False,
+            )
+        )
+        advanced = [
+            QgsProcessingParameterFeatureSource(
+                self.CENTRELINES,
+                "Bed estimate: stream centreline(s) for built dams (optional)",
+                types=[QgsProcessing.SourceType.TypeVectorLine],
+                optional=True,
+            ),
+            QgsProcessingParameterField(
+                self.DEPTH_FIELD,
+                "Bed estimate: known maximum depth field (optional; m below the "
+                "water level)",
+                parentLayerParameterName=self.STORAGE,
+                type=Qgis.ProcessingFieldParameterDataType.Numeric,
+                optional=True,
+            ),
+            QgsProcessingParameterNumber(
+                self.FLAT_TOL,
+                "Bed estimate: flat-water tolerance (m)",
+                type=QgsProcessingParameterNumber.Type.Double,
+                minValue=0.001,
+                defaultValue=DEFAULT_FLAT_TOL_M,
+            ),
+            QgsProcessingParameterNumber(
+                self.WATER_LEVEL,
+                "Bed estimate: water level (m; blank = detect the flat water)",
+                type=QgsProcessingParameterNumber.Type.Double,
+                optional=True,
+            ),
+            QgsProcessingParameterNumber(
+                self.SHORE_BUFFER,
+                "Bed estimate: shore slope buffer (m; 0 = automatic)",
+                type=QgsProcessingParameterNumber.Type.Double,
+                minValue=0.0,
+                defaultValue=0.0,
+            ),
+            QgsProcessingParameterNumber(
+                self.REACH,
+                "Bed estimate: centreline reach outside the water (m; 0 = automatic)",
+                type=QgsProcessingParameterNumber.Type.Double,
+                minValue=0.0,
+                defaultValue=0.0,
+            ),
+            QgsProcessingParameterFeatureSource(
+                self.HYDROLAKES,
+                "Bed estimate: HydroLAKES polygons for a check (optional)",
+                types=[QgsProcessing.SourceType.TypeVectorPolygon],
+                optional=True,
+            ),
+        ]
+        for param in advanced:
+            param.setFlags(param.flags() | Qgis.ProcessingParameterFlag.Advanced)
+            self.addParameter(param)
+        self.addParameter(
             QgsProcessingParameterFileDestination(
                 self.OUTPUT_TABLE,
                 "Stage-area-volume table (CSV)",
@@ -492,6 +629,57 @@ class DemDepressionStageStorageAlgorithm(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
+            QgsProcessingParameterRasterDestination(
+                self.OUTPUT_BED_DEM,
+                "Bed estimate: DEM with estimated bed (central)",
+                optional=True,
+                createByDefault=False,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterRasterDestination(
+                self.OUTPUT_BED_DEM_LOW,
+                "Bed estimate: DEM with estimated bed (low - shallow)",
+                optional=True,
+                createByDefault=False,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterRasterDestination(
+                self.OUTPUT_BED_DEM_HIGH,
+                "Bed estimate: DEM with estimated bed (high - deep)",
+                optional=True,
+                createByDefault=False,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterFeatureSink(
+                self.OUTPUT_SURVEY_WATER,
+                "Bed estimate: surveyed water surface with estimates",
+                type=QgsProcessing.SourceType.TypeVectorPolygon,
+                optional=True,
+                createByDefault=False,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterFileDestination(
+                self.OUTPUT_BED_TABLE,
+                "Bed estimate: summary (CSV)",
+                fileFilter="CSV files (*.csv)",
+                optional=True,
+                createByDefault=False,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterFileDestination(
+                self.OUTPUT_PROFILE,
+                "Bed estimate: centreline profiles (CSV)",
+                fileFilter="CSV files (*.csv)",
+                optional=True,
+                createByDefault=False,
+            )
+        )
+        self.addParameter(
             QgsProcessingParameterFileDestination(
                 self.OUTPUT_DOCX,
                 "Stage-storage report (Word)",
@@ -503,13 +691,17 @@ class DemDepressionStageStorageAlgorithm(QgsProcessingAlgorithm):
 
     # ------------------------------------------------------------------
 
-    def _read_areas(self, source, id_field, stage_field, crs, context, feedback):
+    def _read_areas(
+        self, source, id_field, stage_field, crs, context, feedback, depth_field=None
+    ):
+        """Storage polygons as (StorageArea, geometry, maximum stage), plus a
+        dict id(StorageArea) -> known maximum depth (bed estimate)."""
         transform = None
         if source.sourceCrs() != crs:
             transform = QgsCoordinateTransform(
                 source.sourceCrs(), crs, context.transformContext()
             )
-        areas = []
+        areas, depths = [], {}
         for feature in source.getFeatures():
             geom = QgsGeometry(feature.geometry())
             if geom.isNull() or geom.isEmpty():
@@ -534,8 +726,11 @@ class DemDepressionStageStorageAlgorithm(QgsProcessingAlgorithm):
             stage = None
             if stage_field and not _is_null(feature[stage_field]):
                 stage = float(feature[stage_field])
-            areas.append((StorageArea(name, polygons, int(feature.id())), geom, stage))
-        return areas
+            area = StorageArea(name, polygons, int(feature.id()))
+            areas.append((area, geom, stage))
+            if depth_field:
+                depths[id(area)] = feature[depth_field]
+        return areas, depths
 
     def processAlgorithm(
         self, parameters, context: QgsProcessingContext, feedback: QgsProcessingFeedback
@@ -576,7 +771,13 @@ class DemDepressionStageStorageAlgorithm(QgsProcessingAlgorithm):
         depth_path = self.parameterAsOutputLayer(parameters, self.OUTPUT_DEPTH, context)
         docx_path = self.parameterAsFileOutput(parameters, self.OUTPUT_DOCX, context)
 
-        areas = self._read_areas(source, id_field, stage_field, crs, context, feedback)
+        estimate_bed = self.parameterAsBoolean(parameters, self.ESTIMATE_BED, context)
+        depth_field = self.parameterAsString(parameters, self.DEPTH_FIELD, context)
+        bed = self._bed_settings(parameters, context, crs, feedback, estimate_bed)
+
+        areas, area_depths = self._read_areas(
+            source, id_field, stage_field, crs, context, feedback, depth_field
+        )
         if not areas:
             raise QgsProcessingException("The storage-area layer has no polygons.")
 
@@ -596,7 +797,15 @@ class DemDepressionStageStorageAlgorithm(QgsProcessingAlgorithm):
                 return {}
             feedback.setProgress(int(100 * i / len(areas)))
             feedback.setProgressText(f"Storage '{area.storage_id}'")
-            window = polygon_window(area.polygons, gt, shape)
+            pad = 1
+            lines, lake = [], None
+            if estimate_bed:
+                lines = [pts for lg, pts in bed["lines"] if lg.intersects(geom)]
+                cell = min(abs(gt[1]), abs(gt[5]))
+                reach = bed["reach_m"] or max(20.0 * cell, 200.0)
+                pad = 3 + (math.ceil(reach / cell) if lines else 0)
+                lake = self._match_hydrolake(bed["lakes"], geom)
+            window = polygon_window(area.polygons, gt, shape, pad=pad)
             if window is None:
                 failures.append(f"Storage '{area.storage_id}': outside the DEM.")
                 feedback.pushWarning(f"Skipped - {failures[-1]}")
@@ -604,13 +813,7 @@ class DemDepressionStageStorageAlgorithm(QgsProcessingAlgorithm):
             max_stage = field_stage if field_stage is not None else global_max
             try:
                 dem = read_window(dem_layer.source(), window)
-                result = compute_storage(
-                    dem,
-                    nodata,
-                    window_geotransform(gt, window[0], window[1]),
-                    window,
-                    area,
-                    interval,
+                storage_kwargs = dict(
                     max_stage=max_stage,
                     mode=mode,
                     supersample=supersample,
@@ -619,6 +822,31 @@ class DemDepressionStageStorageAlgorithm(QgsProcessingAlgorithm):
                     contour_smoothing=smoothing,
                     is_canceled=feedback.isCanceled,
                 )
+                window_gt = window_geotransform(gt, window[0], window[1])
+                if estimate_bed:
+                    known = None
+                    if depth_field and not _is_null(area_depths.get(id(area))):
+                        known = float(area_depths[id(area)])
+                    result = compute_storage_with_bed(
+                        dem,
+                        nodata,
+                        window_gt,
+                        window,
+                        area,
+                        interval,
+                        centrelines=lines,
+                        known_max_depth=known,
+                        flat_tol=bed["flat_tol"],
+                        water_level=bed["water_level"],
+                        buffer_m=bed["buffer_m"],
+                        reach_m=bed["reach_m"],
+                        hydrolakes=lake,
+                        **storage_kwargs,
+                    )
+                else:
+                    result = compute_storage(
+                        dem, nodata, window_gt, window, area, interval, **storage_kwargs
+                    )
             except StorageError as e:
                 failures.append(str(e))
                 feedback.pushWarning(f"Skipped - {e}")
@@ -633,8 +861,17 @@ class DemDepressionStageStorageAlgorithm(QgsProcessingAlgorithm):
             feedback.pushInfo(
                 f"{result.storage_id}: floor {a['z_floor']:.3f} m, spill {spill}, "
                 f"top {a['z_top']:.3f} m ({a['top_src']}), "
-                f"{a['vol_m3']:,.1f} m3 over {a['area_ha']:.4f} ha"
+                f"{a['vol_m3']:.1f} m3 over {a['area_ha']:.4f} ha"
             )
+            if result.bathymetry is not None:
+                ba = result.bathymetry.attributes
+                feedback.pushInfo(
+                    f"  bed estimate ({ba['basis']}): water level "
+                    f"{ba['water_lvl']:.3f} m, maximum depth {ba['dmax_lo']:.2f} / "
+                    f"{ba['dmax_c']:.2f} / {ba['dmax_hi']:.2f} m, volume below the "
+                    f"water {ba['vol_lo']:.0f} / {ba['vol_c']:.0f} / "
+                    f"{ba['vol_hi']:.0f} m3 (low / central / high)"
+                )
             results.append(result)
             geoms[id(result)] = geom
 
@@ -672,6 +909,13 @@ class DemDepressionStageStorageAlgorithm(QgsProcessingAlgorithm):
         if floor_id is not None:
             outputs[self.OUTPUT_FLOOR] = floor_id
             self._register_style(context, floor_id, STYLE_FLOOR)
+        bathys = [r.bathymetry for r in results if r.bathymetry is not None]
+        if bathys:
+            outputs.update(
+                self._write_bed_outputs(
+                    parameters, context, dem_layer, bathys, geoms, results, crs
+                )
+            )
 
         if depth_path:
             merged = mosaic_depths(results, DEFAULT_DEPTH_NODATA)
@@ -721,6 +965,17 @@ class DemDepressionStageStorageAlgorithm(QgsProcessingAlgorithm):
                     else (None if global_max is None else f"{global_max:g} m")
                 ),
                 "mode": mode,
+                "bed_estimate": (
+                    {
+                        "flat_tol": bed["flat_tol"],
+                        "water_level": bed["water_level"],
+                        "centrelines": bool(bed["lines"]),
+                        "depth_field": depth_field or None,
+                        "hydrolakes": bool(bed["lakes"]),
+                    }
+                    if estimate_bed
+                    else None
+                ),
                 "coverage": COVERAGE_OPTIONS[
                     self.parameterAsEnum(parameters, self.COVERAGE, context)
                 ],
@@ -734,6 +989,12 @@ class DemDepressionStageStorageAlgorithm(QgsProcessingAlgorithm):
                         (self.OUTPUT_DEPTH, "Depth at top stage"),
                         (self.OUTPUT_SPILL, "Spill points"),
                         (self.OUTPUT_FLOOR, "Floor points"),
+                        (self.OUTPUT_BED_DEM, "DEM with estimated bed (central)"),
+                        (self.OUTPUT_BED_DEM_LOW, "DEM with estimated bed (low)"),
+                        (self.OUTPUT_BED_DEM_HIGH, "DEM with estimated bed (high)"),
+                        (self.OUTPUT_SURVEY_WATER, "Surveyed water surface"),
+                        (self.OUTPUT_BED_TABLE, "Bed estimate summary (CSV)"),
+                        (self.OUTPUT_PROFILE, "Centreline profiles (CSV)"),
                     )
                     if outputs.get(key)
                 ]
@@ -826,6 +1087,153 @@ class DemDepressionStageStorageAlgorithm(QgsProcessingAlgorithm):
                 feat["length_m"] = round(geom.length(), 2)
                 sink.addFeature(feat, QgsFeatureSink.Flag.FastInsert)
         return dest_id
+
+    # -- bed estimate ----------------------------------------------------
+
+    def _transform(self, source, crs, context):
+        if source is None or source.sourceCrs() == crs:
+            return None
+        return QgsCoordinateTransform(
+            source.sourceCrs(), crs, context.transformContext()
+        )
+
+    def _bed_settings(self, parameters, context, crs, feedback, enabled):
+        settings = {"lines": [], "lakes": []}
+        raw_wl = parameters.get(self.WATER_LEVEL)
+        settings["water_level"] = (
+            None
+            if _is_null(raw_wl)
+            else self.parameterAsDouble(parameters, self.WATER_LEVEL, context)
+        )
+        settings["flat_tol"] = self.parameterAsDouble(
+            parameters, self.FLAT_TOL, context
+        )
+        settings["buffer_m"] = (
+            self.parameterAsDouble(parameters, self.SHORE_BUFFER, context) or None
+        )
+        settings["reach_m"] = (
+            self.parameterAsDouble(parameters, self.REACH, context) or None
+        )
+        if not enabled:
+            return settings
+        lines_src = self.parameterAsSource(parameters, self.CENTRELINES, context)
+        if lines_src is not None:
+            transform = self._transform(lines_src, crs, context)
+            for feature in lines_src.getFeatures():
+                geom = QgsGeometry(feature.geometry())
+                if geom.isNull() or geom.isEmpty():
+                    continue
+                if transform is not None:
+                    geom.transform(transform)
+                geom.convertToStraightSegment()
+                parts = (
+                    geom.asMultiPolyline()
+                    if geom.isMultipart()
+                    else [geom.asPolyline()]
+                )
+                for part in parts:
+                    if len(part) >= 2:
+                        settings["lines"].append(
+                            (
+                                QgsGeometry.fromPolylineXY(part),
+                                [(pt.x(), pt.y()) for pt in part],
+                            )
+                        )
+        lakes_src = self.parameterAsSource(parameters, self.HYDROLAKES, context)
+        if lakes_src is not None:
+            names = lakes_src.fields().names()
+            missing = [n for n in ("Depth_avg", "Vol_total") if n not in names]
+            if missing:
+                feedback.pushWarning(
+                    "HydroLAKES layer has no field(s) "
+                    + ", ".join(missing)
+                    + " - the HydroLAKES check is skipped."
+                )
+            else:
+                transform = self._transform(lakes_src, crs, context)
+                for feature in lakes_src.getFeatures():
+                    geom = QgsGeometry(feature.geometry())
+                    if geom.isNull() or geom.isEmpty():
+                        continue
+                    if transform is not None:
+                        geom.transform(transform)
+                    settings["lakes"].append(
+                        (geom, feature["Depth_avg"], feature["Vol_total"])
+                    )
+        return settings
+
+    @staticmethod
+    def _match_hydrolake(lakes, geom):
+        best = None
+        for lake_geom, depth, vol in lakes:
+            if lake_geom.intersects(geom):
+                overlap = lake_geom.intersection(geom).area()
+                if best is None or overlap > best[0]:
+                    best = (overlap, depth, vol)
+        if best is None:
+            return None
+        _, depth, vol = best
+        return {
+            "depth_avg_m": None if _is_null(depth) else float(depth),
+            # HydroLAKES Vol_total is in million m3
+            "volume_m3": None if _is_null(vol) else float(vol) * 1e6,
+        }
+
+    def _write_bed_outputs(
+        self, parameters, context, dem_layer, bathys, geoms, results, crs
+    ):
+        outputs = {}
+        for key, scenario in (
+            (self.OUTPUT_BED_DEM, "central"),
+            (self.OUTPUT_BED_DEM_LOW, "low"),
+            (self.OUTPUT_BED_DEM_HIGH, "high"),
+        ):
+            path = self.parameterAsOutputLayer(parameters, key, context)
+            if path:
+                write_bed_dem(dem_layer.source(), path, bathys, scenario)
+                outputs[key] = path
+        sink, dest_id = self.parameterAsSink(
+            parameters,
+            self.OUTPUT_SURVEY_WATER,
+            context,
+            _fields(SURVEY_FIELDS),
+            Qgis.WkbType.MultiPolygon,
+            crs,
+        )
+        if sink is not None:
+            for r in results:
+                b = r.bathymetry
+                if b is None:
+                    continue
+                polys = group_polygons(trace_rings(b.water_mask))
+                polys_map = [
+                    [ring_to_map(simplify_ring(ring), b.window_gt) for ring in poly]
+                    for poly in polys
+                ]
+                geom = QgsGeometry.fromWkt(rings_to_multipolygon_wkt(polys_map))
+                geom = geom.makeValid().intersection(geoms[id(r)])
+                if QgsWkbTypes.flatType(geom.wkbType()) not in (
+                    Qgis.WkbType.Polygon,
+                    Qgis.WkbType.MultiPolygon,
+                ):
+                    geom.convertGeometryCollectionToSubclass(Qgis.GeometryType.Polygon)
+                geom.convertToMultiType()
+                feat = QgsFeature(_fields(SURVEY_FIELDS))
+                feat.setGeometry(geom)
+                for name, _, _ in SURVEY_FIELDS:
+                    value = b.attributes.get(name)
+                    feat[name] = float(value) if isinstance(value, float) else value
+                sink.addFeature(feat, QgsFeatureSink.Flag.FastInsert)
+            outputs[self.OUTPUT_SURVEY_WATER] = dest_id
+        table = self.parameterAsFileOutput(parameters, self.OUTPUT_BED_TABLE, context)
+        if table:
+            write_bathymetry_summary_csv(table, bathys)
+            outputs[self.OUTPUT_BED_TABLE] = table
+        profile = self.parameterAsFileOutput(parameters, self.OUTPUT_PROFILE, context)
+        if profile:
+            write_profile_csv(profile, bathys)
+            outputs[self.OUTPUT_PROFILE] = profile
+        return outputs
 
     def _register_style(self, context, dest_id, style_filename, **options):
         """Attaches a saved QML style to an output layer via a post-processor

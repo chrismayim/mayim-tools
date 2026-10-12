@@ -103,6 +103,18 @@ REFERENCES = [
     "Technical Reference Manual (reservoir routing).",
 ]
 
+BED_REFERENCES = [
+    "Heathcote, A.J., del Giorgio, P.A., Prairie, Y.T. & Brickman, D. (2015). "
+    "Predicting bathymetric features of lakes from the topography of their "
+    "surrounding landscape. Canadian Journal of Fisheries and Aquatic Sciences, "
+    "72(5), 643-650.",
+    "Hollister, J.W., Milstead, W.B. & Urrutia, M.A. (2011). Predicting maximum "
+    "lake depth from surrounding topography. PLoS ONE, 6(9), e25764.",
+    "Messager, M.L., Lehner, B., Grill, G., Nedeva, I. & Schmitt, O. (2016). "
+    "Estimating the volume and age of water stored in global lakes using a "
+    "geo-statistical approach. Nature Communications, 7, 13603.",
+]
+
 MODE_TEXT = {
     "connected": "connected to the lowest point",
     "all": "all cells below the stage (level pool)",
@@ -265,6 +277,81 @@ def figure_plan(r: StorageResult) -> io.BytesIO | None:
     return png(fig)
 
 
+def _range_band(ax, r: StorageResult, scale: float) -> None:
+    """Shades the low-high volume range of an estimated bed and marks the
+    surveyed water level."""
+    if not r.range_tables or r.bathymetry is None:
+        return
+    h = np.array([row["stage_m"] for row in r.table], dtype=float)
+    lo = np.array([row.get("volume_low_m3", np.nan) for row in r.table], dtype=float)
+    hi = np.array([row.get("volume_high_m3", np.nan) for row in r.table], dtype=float)
+    if np.isfinite(lo).any() and np.isfinite(hi).any():
+        ax.fill_betweenx(
+            h,
+            np.nan_to_num(lo) / scale,
+            np.nan_to_num(hi) / scale,
+            color=C_BLUE,
+            alpha=0.15,
+            linewidth=0,
+            label="Bed estimate: low - high",
+        )
+    ax.axhline(
+        r.bathymetry.water_level,
+        color=C_INK_2,
+        linewidth=0.8,
+        linestyle="--",
+        label=f"Surveyed water level {r.bathymetry.water_level:.2f} m",
+    )
+
+
+def figure_bed_profile(r: StorageResult) -> io.BytesIO | None:
+    """DEM and estimated bed along the stream centreline (built dams)."""
+    b = r.bathymetry
+    if b is None or not b.profile:
+        return None
+    x = np.array([row["from_entry_m"] for row in b.profile], dtype=float)
+    order = np.argsort(x)
+    x = x[order]
+
+    def col(key):
+        return np.array(
+            [np.nan if row.get(key) is None else row[key] for row in b.profile],
+            dtype=float,
+        )[order]
+
+    fig = new_figure(7.5)
+    ax = fig.add_subplot(1, 1, 1)
+    ax.fill_between(
+        x,
+        col("bed_low"),
+        col("bed_high"),
+        color=C_BLUE,
+        alpha=0.15,
+        linewidth=0,
+        label="Estimated bed: low - high",
+    )
+    ax.plot(x, col("dem_z"), color=C_INK, linewidth=1.0, label="DEM")
+    ax.plot(
+        x,
+        col("bed_central"),
+        color=C_BLUE,
+        linewidth=1.6,
+        label="Estimated bed (central)",
+    )
+    ax.axhline(
+        b.water_level,
+        color=C_INK_2,
+        linewidth=0.8,
+        linestyle="--",
+        label=f"Surveyed water level {b.water_level:.2f} m",
+    )
+    ax.set_xlabel("Distance downstream from where the river enters the water (m)")
+    ax.set_ylabel("Elevation (m)")
+    style_axes(ax)
+    ax.legend(fontsize=7, frameon=False, loc="best")
+    return png(fig)
+
+
 def figure_elevation_area_capacity(r: StorageResult) -> io.BytesIO:
     """Classic reservoir chart: stage on y, volume on the bottom x axis and
     area on a reversed top x axis."""
@@ -274,6 +361,7 @@ def figure_elevation_area_capacity(r: StorageResult) -> io.BytesIO:
     fig = new_figure(9.0)
     ax = fig.add_subplot(1, 1, 1)
     ax.plot(vol / vs, h, color=C_BLUE, linewidth=1.8, label="Storage volume")
+    _range_band(ax, r, vs)
     ax.set_xlabel(vlabel)
     ax.set_ylabel("Stage (m)")
     ax.set_xlim(left=0)
@@ -324,12 +412,15 @@ def figure_stage_storage(r: StorageResult) -> io.BytesIO:
     vs, vlabel = _vol_scale(vol.max())
     fig = new_figure(7.5)
     ax = fig.add_subplot(1, 1, 1)
-    ax.plot(vol / vs, h, color=C_BLUE, linewidth=1.8)
+    ax.plot(vol / vs, h, color=C_BLUE, linewidth=1.8, label="Storage volume")
+    _range_band(ax, r, vs)
     ax.set_xlabel(vlabel)
     ax.set_ylabel("Stage (m)")
     ax.set_xlim(left=0)
     ax.set_ylim(h.min(), h.max())
     style_axes(ax)
+    if r.bathymetry is not None:
+        ax.legend(fontsize=7, frameon=False, loc="lower right")
     return png(fig)
 
 
@@ -394,6 +485,110 @@ def figure_depth_distribution(r: StorageResult) -> io.BytesIO | None:
     ax.set_ylabel("Share of water-surface area (%)")
     style_axes(ax)
     return png(fig)
+
+
+# ---------------------------------------------------------------------------
+# Bed estimate section
+# ---------------------------------------------------------------------------
+
+BED_BASIS_TEXT = {
+    "user": "the known maximum depth supplied (low and high = 0.8 and 1.2 times)",
+    "valley": "the valley profile along the stream centreline (low and high = "
+    "the shallower and deeper of the bed at the wall from upstream and from "
+    "below the wall, at least 15% either side)",
+    "slope+hypsometry": "the shallower of the shoreline-slope and hypsometric "
+    "estimates (high = the deeper; low = half of central)",
+    "slope": "half of the shoreline-slope estimate, the only method available "
+    "(high = the full estimate; low = a quarter)",
+    "hypsometry": "the hypsometric estimate (low = half; high = 1.5 times)",
+}
+
+METHOD_ROWS = (
+    ("slope", "Shoreline slope (Hollister et al., 2011)"),
+    ("hypsometry", "Hypsometry above the water (after Heathcote et al., 2015)"),
+    ("valley", "Valley profile along the stream centreline"),
+)
+
+
+def _bed_section(d, r: StorageResult, include_figures: bool) -> None:
+    b = r.bathymetry
+    a = b.attributes
+    c = b.scenarios["central"]
+    d.label("Estimated bed below the surveyed water surface")
+    d.para(
+        f"The DEM shows a water surface at {b.water_level:.2f} m over "
+        f"{b.water_area_m2 / 1e4:.2f} ha. The bed below it was estimated, so the "
+        "stage-storage curve above starts at the estimated (central) bed. The "
+        f"central estimate is based on {BED_BASIS_TEXT.get(b.basis, b.basis)}: a "
+        f"maximum depth of {c['max_depth']:.2f} m below the water level and "
+        f"{c['volume_m3']:.0f} m³ below the surveyed water surface "
+        f"({b.scenarios['low']['volume_m3']:.0f} - "
+        f"{b.scenarios['high']['volume_m3']:.0f} m³ from low to high). This is an "
+        "estimate for storage modelling, not a survey."
+    )
+    rows = []
+    for key, label in METHOD_ROWS:
+        m = b.methods.get(key, {})
+        rows.append(
+            [
+                label,
+                format_value(m.get("max_depth"), "{:.2f}", 1),
+                m.get("status", "-"),
+            ]
+        )
+    d.caption("Table", f"Bed estimate methods, storage area {r.storage_id}")
+    d.table(["Method", "Maximum depth (m)", "Status"], rows, widths_cm=[8.0, 3.5, 4.5])
+    rows = [
+        [
+            name.capitalize(),
+            f"{sc['max_depth']:.2f}",
+            f"{sc['mean_depth']:.2f}",
+            f"{sc['volume_m3']:.0f}",
+            format_value(
+                (
+                    r.attributes.get("vol_lo" if name == "low" else "vol_hi")
+                    if name != "central"
+                    else r.attributes.get("vol_m3")
+                ),
+                "{:.0f}",
+                1,
+            ),
+        ]
+        for name, sc in b.scenarios.items()
+    ]
+    d.caption(
+        "Table",
+        f"Bed estimate range, storage area {r.storage_id} (depths below the "
+        "surveyed water level)",
+    )
+    d.table(
+        [
+            "Estimate",
+            "Max depth (m)",
+            "Mean depth (m)",
+            "Volume below water (m³)",
+            "Volume at top stage (m³)",
+        ],
+        rows,
+        widths_cm=[2.6, 2.8, 2.8, 4.0, 3.8],
+    )
+    extra = []
+    if a.get("slope_pc") is not None:
+        extra.append(f"median land slope around the shore {a['slope_pc']:.2f} %")
+    if b.methods.get("hypsometry", {}).get("n") is not None:
+        extra.append(f"hypsometric shape exponent n = {a['shape_n']:.2f}")
+    if a.get("hl_depth") is not None:
+        extra.append(f"HydroLAKES modelled mean depth {a['hl_depth']:.2f} m")
+    if extra:
+        d.para("Supporting values: " + "; ".join(extra) + ".")
+    if include_figures:
+        stream = figure_bed_profile(r)
+        if stream is not None:
+            d.picture(
+                stream,
+                f"Storage area {r.storage_id}: DEM and estimated bed along the "
+                "stream centreline",
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -512,6 +707,24 @@ def write_report_docx(
         d.numbered(step)
 
     # 3. Inputs -----------------------------------------------------------------
+    if any(r.bathymetry is not None for r in results):
+        d.para(
+            "Where the DEM surface was a water surface, the bed below the "
+            "surveyed water was estimated first and written into the DEM, and "
+            "the steps above were applied to that surface. The water surface is "
+            "the flat area at the bottom of the depression (within the flat-"
+            "water tolerance of the lowest cell). The bed depth below it is "
+            "estimated from the slope of the land around the shore carried "
+            "inwards (Hollister et al., 2011), from the area-elevation curve of "
+            "the dry ground above the water continued down to zero area (after "
+            "Heathcote et al., 2015) and, for a built dam with a stream "
+            "centreline, from the river bed upstream of the water and below the "
+            "wall, joined along the centreline with V-shaped banks. Without a "
+            "centreline, the bed follows the fitted area-elevation shape and is "
+            "deepest farthest from the shore. Low, central and high beds give the "
+            "range reported for each storage area."
+        )
+
     d.heading("3. Inputs and settings", 2)
     d.caption("Table", "Inputs and processing settings")
     d.table(
@@ -581,6 +794,8 @@ def write_report_docx(
             )
         d.caption("Table", f"Key results, storage area {r.storage_id}")
         d.table(["Quantity", "Value"], rows, widths_cm=[9.0, 7.0], group_rows=groups)
+        if r.bathymetry is not None:
+            _bed_section(d, r, include_figures)
 
         shown = report_rows(r.table)
         d.caption(
@@ -675,8 +890,9 @@ def write_report_docx(
         "small depressions and embankment crests.",
         "Remote-sensing DEMs (LiDAR, photogrammetry, radar) record the water "
         "surface of ponds and reservoirs, not the bed. Storage below the water "
-        "surface at the time of capture is not included; use a bathymetric "
-        "survey for it.",
+        "surface at the time of capture is not included unless the bed "
+        "estimate option is used (an estimate); a bathymetric survey is the "
+        "reliable source.",
         "The spill level is only as reliable as the storage polygon: draw it "
         "beyond the crest or embankment all the way round. A polygon that stops "
         "on the side slope gives a spill level that is too low.",
@@ -687,6 +903,17 @@ def write_report_docx(
         "edge is treated as a vertical wall, as for a proposed embankment.",
     ]:
         d.bullet(note)
+    if any(r.bathymetry is not None for r in results):
+        for note in [
+            "The bed below a surveyed water surface is ESTIMATED from the "
+            "surrounding terrain. Sediment-filled pans are usually flatter than "
+            "their banks suggest, and reservoirs silt up, so the valley method "
+            "gives the pre-impoundment bed (a deeper bound). Where the storage "
+            "below the water drives a design, a bathymetric survey is needed.",
+            "The low-high range expresses method uncertainty only; it is not a "
+            "statistical confidence interval.",
+        ]:
+            d.bullet(note)
     warnings = ctx.get("warnings", [])
     if warnings:
         d.para("Processing messages recorded during this run:")
@@ -695,7 +922,10 @@ def write_report_docx(
 
     # 8. References ----------------------------------------------------------------
     d.heading("8. References", 2)
-    for ref in REFERENCES:
+    refs = list(REFERENCES)
+    if any(r.bathymetry is not None for r in results):
+        refs += BED_REFERENCES
+    for ref in sorted(refs):
         d.para(ref)
 
     d.doc.save(path)

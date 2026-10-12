@@ -31,6 +31,12 @@ from mayim_tools.hydrology.d8_flow_accumulation.d8_flow_accumulation_algorithm i
 from mayim_tools.hydrology.d8_flow_direction.d8_flow_direction_algorithm import (
     D8FlowDirectionAlgorithm,
 )
+from mayim_tools.hydrology.dem_hydro_processing import (
+    dem_hydro_processing_algorithm as dem_hydro_processing_algo,
+)
+from mayim_tools.hydrology.sanral_peak_flows import (
+    sanral_peak_flows_algorithm as sanral_peak_flows_algo,
+)
 from mayim_tools.hydrology.stream_network import (
     stream_network_algorithm as stream_network_algo,
 )
@@ -136,3 +142,5 @@ class MayimToolsProvider(QgsProcessingProvider):
         self.addAlgorithm(HydrologicSoilGroupsAlgorithm())
         self.addAlgorithm(LandCoverExtractAlgorithm())
         self.addAlgorithm(CurveNumbersAlgorithm())
+        self.addAlgorithm(dem_hydro_processing_algo.DemHydroProcessingAlgorithm())
+        self.addAlgorithm(sanral_peak_flows_algo.SanralPeakFlowsAlgorithm())
