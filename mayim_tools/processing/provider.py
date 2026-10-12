@@ -37,6 +37,12 @@ from mayim_tools.hydrology.stream_network import (
 from mayim_tools.hydrology.terrain_storage.terrain_storage_algorithm import (
     DemDepressionStageStorageAlgorithm,
 )
+from mayim_tools.land_cover.curve_numbers.curve_numbers_algorithm import (
+    CurveNumbersAlgorithm,
+)
+from mayim_tools.land_cover.land_cover_extract.land_cover_extract_algorithm import (  # noqa: E501
+    LandCoverExtractAlgorithm,
+)
 from mayim_tools.rainfall.chirps.chirps_extract_algorithm import ChirpsExtractAlgorithm
 from mayim_tools.rainfall.cmorph_extract.cmorph_extract_algorithm import (
     CmorphExtractAlgorithm,
@@ -128,3 +134,5 @@ class MayimToolsProvider(QgsProcessingProvider):
         self.addAlgorithm(IsdaExtractAlgorithm())
         self.addAlgorithm(RegionalSoilParameterisationAlgorithm())
         self.addAlgorithm(HydrologicSoilGroupsAlgorithm())
+        self.addAlgorithm(LandCoverExtractAlgorithm())
+        self.addAlgorithm(CurveNumbersAlgorithm())

@@ -57,13 +57,15 @@ LOAD_ALL, LOAD_MAIN, LOAD_NONE = 0, 1, 2
 class OutputLayer:
     """A raster to load and/or list in the run's .qlr layer file.
     ``classes`` (value, label[, colour]) gives a categorised (paletted) style
-    on band 1 (colour defaults to a stable colour per value);
+    on band 1 (colour defaults to a stable colour per value); ``ramp``
+    [(value, colour, label)] gives a linear pseudo-colour style on band 1;
     otherwise band 1 is shown as stretched single-band grey."""
 
     path: str
     name: str
     main: bool = False
     classes: list = field(default_factory=list)
+    ramp: list = field(default_factory=list)
 
 
 def apply_style(layer, out: OutputLayer) -> None:
@@ -86,12 +88,43 @@ def apply_style(layer, out: OutputLayer) -> None:
             for c in out.classes
         ]
         layer.setRenderer(QgsPalettedRasterRenderer(layer.dataProvider(), 1, classes))
+    elif out.ramp and _apply_ramp(layer, out.ramp):
+        pass
     else:
         layer.setRenderer(QgsSingleBandGrayRenderer(layer.dataProvider(), 1))
         layer.setContrastEnhancement(
             QgsContrastEnhancement.ContrastEnhancementAlgorithm.StretchToMinimumMaximum
         )
     layer.triggerRepaint()
+
+
+def _apply_ramp(layer, ramp) -> bool:
+    """Linear pseudo-colour on band 1; False (caller falls back to grey) if
+    the QGIS API differs."""
+    try:
+        from qgis.core import (
+            QgsColorRampShader,
+            QgsRasterShader,
+            QgsSingleBandPseudoColorRenderer,
+        )
+        from qgis.PyQt.QtGui import QColor
+
+        crs = QgsColorRampShader()
+        try:
+            crs.setColorRampType(Qgis.ShaderInterpolationMethod.Linear)
+        except AttributeError:  # pragma: no cover - older QGIS
+            crs.setColorRampType(QgsColorRampShader.Interpolated)
+        crs.setColorRampItemList(
+            [QgsColorRampShader.ColorRampItem(v, QColor(c), lab) for v, c, lab in ramp]
+        )
+        shader = QgsRasterShader()
+        shader.setRasterShaderFunction(crs)
+        layer.setRenderer(
+            QgsSingleBandPseudoColorRenderer(layer.dataProvider(), 1, shader)
+        )
+        return True
+    except Exception:  # noqa: BLE001 - styling must never fail a run
+        return False
 
 
 class StylePostProcessor(QgsProcessingLayerPostProcessorInterface):

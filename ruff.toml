@@ -42,3 +42,5 @@ ignore = [
 "mayim_tools/hydrology/stream_network/export.py" = ["E501"]
 "mayim_tools/tests/test_storm_library_core.py" = ["E501"]
 "mayim_tools/tests/*" = ["F401", "F811"]
+"mayim_tools/land_cover/curve_numbers/**/*.py" = ["E501"]
+"mayim_tools/tests/test_curve_numbers_core.py" = ["E501"]

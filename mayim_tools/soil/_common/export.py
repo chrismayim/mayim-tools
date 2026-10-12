@@ -134,3 +134,54 @@ def metadata_path_for(
     if mode == "area":
         return output / folder_name
     return output.with_name(output.stem + "_metadata.csv")
+
+
+def write_class_geotiff(
+    path: str | Path,
+    grid: TargetGrid,
+    arr: np.ndarray,
+    description: str,
+    classes: list[tuple[int, str, str]],
+    nodata: int = 0,
+    metadata: dict | None = None,
+) -> None:
+    """One-band Byte GeoTIFF of class codes with an embedded colour table,
+    so any GIS shows the classes without a style file. Class names go in
+    the file's own metadata (CLASSES = "10=Tree cover;20=...") rather than
+    as GDAL category names, which would need a .aux.xml file beside it.
+    ``classes`` is [(code, name, '#rrggbb')]; codes must be 0-255."""
+    from osgeo import gdal
+
+    gdal.UseExceptions()
+    rows, cols = arr.shape
+    if rows != grid.height or cols != grid.width:
+        raise ValueError(
+            f"Array shape {arr.shape} does not match the grid "
+            f"{(grid.height, grid.width)}."
+        )
+    ds = gdal.GetDriverByName("GTiff").Create(
+        str(path),
+        cols,
+        rows,
+        1,
+        gdal.GDT_Byte,
+        options=["COMPRESS=DEFLATE", "PREDICTOR=2", "TILED=YES", "BIGTIFF=IF_SAFER"],
+    )
+    ds.SetGeoTransform(grid.geotransform)
+    ds.SetProjection(grid.crs_wkt)
+    for key, value in (metadata or {}).items():
+        ds.SetMetadataItem(key, str(value))
+    band = ds.GetRasterBand(1)
+    band.SetNoDataValue(nodata)
+    band.SetDescription(description)
+    ds.SetMetadataItem("CLASSES", ";".join(f"{c}={n}" for c, n, _ in classes))
+    ct = gdal.ColorTable()
+    for code, _name, colour in classes:
+        r, g, b = (int(colour[i : i + 2], 16) for i in (1, 3, 5))
+        ct.SetColorEntry(int(code), (r, g, b, 255))
+    ct.SetColorEntry(int(nodata), (0, 0, 0, 0))
+    band.SetRasterColorTable(ct)
+    band.SetRasterColorInterpretation(gdal.GCI_PaletteIndex)
+    band.WriteArray(arr.astype(np.uint8))
+    ds.FlushCache()
+    ds = None
