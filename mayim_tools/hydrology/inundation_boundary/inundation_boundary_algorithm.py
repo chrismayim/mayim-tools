@@ -42,6 +42,11 @@ from mayim_tools.hydrology._common.depression import (
     read_window,
     window_geotransform,
 )
+from mayim_tools.hydrology.terrain_storage.terrain_storage_algorithm import (
+    STYLE_DEPTH,
+    STYLES_DIR,
+    _StylePostProcessor,
+)
 
 from .core import (
     DEFAULT_MIN_CELLS,
@@ -125,7 +130,7 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
         return "inundation_boundary"
 
     def displayName(self):
-        return "Inundation boundary"
+        return "DEM inundation boundary"
 
     def group(self):
         return "Hydrological Tools"
@@ -136,7 +141,7 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
     def shortHelpString(self):
         glossary = "\n".join(f"  {n}: {d}" for n, _, d in POLYGON_FIELDS)
         return (
-            f"Inundation boundary (version {TOOL_VERSION})\n"
+            f"DEM inundation boundary (version {TOOL_VERSION})\n"
             "\n"
             "PURPOSE:\tThe extent of water standing at a given elevation "
             "(bathtub inundation) - for one level, or a range of levels at an "
@@ -278,6 +283,17 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
 
     # ------------------------------------------------------------------
 
+    def _register_style(self, context, dest_id, **options):
+        """Loads the stage-storage 'Depth at top stage' style onto the depth
+        raster (ramp stretched to this run's depths). The post-processor is
+        kept alive on self - Processing holds only a weak reference."""
+        if not dest_id or not context.willLoadLayerOnCompletion(dest_id):
+            return
+        details = context.layerToLoadOnCompletionDetails(dest_id)
+        processor = _StylePostProcessor(STYLES_DIR / STYLE_DEPTH, **options)
+        details.setPostProcessor(processor)
+        self._post_processors.append(processor)
+
     def _transform(self, source, crs, context):
         if source is None or source.sourceCrs() == crs:
             return None
@@ -331,6 +347,7 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
     def processAlgorithm(
         self, parameters, context: QgsProcessingContext, feedback: QgsProcessingFeedback
     ):
+        self._post_processors = []
         dem_layer = self.parameterAsRasterLayer(parameters, self.DEM, context)
         if dem_layer is None:
             raise QgsProcessingException("A DEM is required.")
@@ -499,6 +516,14 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
                 DEFAULT_NODATA,
             )
             outputs[self.OUTPUT_DEPTH] = depth_path
+            valid = result.depth[np.isfinite(result.depth)]
+            self._register_style(
+                context,
+                depth_path,
+                raster_range=(
+                    (float(valid.min()), float(valid.max())) if valid.size else None
+                ),
+            )
         table_path = self.parameterAsFileOutput(parameters, self.OUTPUT_TABLE, context)
         if table_path:
             write_summary_csv(table_path, result, geometry)
