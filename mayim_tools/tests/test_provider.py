@@ -37,7 +37,7 @@ def test_provider_registers_seven_algorithms() -> None:
     provider = loaded_provider()
 
     algorithms = provider.algorithms()
-    assert len(algorithms) == 30
+    assert len(algorithms) == 31
 
     by_name = {algorithm.name(): algorithm for algorithm in algorithms}
 
@@ -62,6 +62,7 @@ def test_provider_registers_seven_algorithms() -> None:
         "adjust_subdaily_to_ddf",
         "import_ras_2d_data",
         "dem_depression_stage_storage",
+        "inundation_boundary",
         "stream_network",
         "soilgrids_extract",
         "openlandmap_soils_extract",
@@ -222,6 +223,11 @@ def test_provider_registers_seven_algorithms() -> None:
         ),
         "sanral_peak_flows": (
             "SANRAL Deterministic Peak Flows",
+            "Hydrological Tools",
+            "hydrological_tools",
+        ),
+        "inundation_boundary": (
+            "Inundation boundary",
             "Hydrological Tools",
             "hydrological_tools",
         ),
