@@ -22,7 +22,6 @@ from mayim_tools.hydrology.inundation_boundary.core import (
     nest_rings,
     run_inundation,
     seed_cells,
-    water_levels,
 )
 from mayim_tools.hydrology.inundation_boundary.export import (
     SUMMARY_FIELDS,
@@ -59,37 +58,14 @@ def _two_pits(n=60):
 
 
 # ---------------------------------------------------------------------------
-# Levels
-# ---------------------------------------------------------------------------
-
-
-def test_single_level():
-    assert water_levels(101.25) == [101.25]
-    assert water_levels(101.25, 101.25, 0.5) == [101.25]
-
-
-def test_range_includes_end():
-    assert water_levels(100.0, 101.0, 0.25) == [100.0, 100.25, 100.5, 100.75, 101.0]
-    assert water_levels(100.0, 101.1, 0.5) == [100.0, 100.5, 101.0, 101.1]
-
-
-def test_range_reversed_and_errors():
-    assert water_levels(101.0, 100.0, 0.5) == [100.0, 100.5, 101.0]
-    with pytest.raises(InundationError):
-        water_levels(100.0, 101.0, 0.0)
-    with pytest.raises(InundationError):
-        water_levels(0.0, 10000.0, 0.001)
-
-
-# ---------------------------------------------------------------------------
-# Fill field and seeds
+# Modes and seeds
 # ---------------------------------------------------------------------------
 
 
 def test_all_mode_floods_both_pits():
     z = _two_pits()
-    res = run_inundation(z, -9999.0, GT, (0, 0, *z.shape), [9.0])
-    lv = res.levels[0]
+    res = run_inundation(z, -9999.0, GT, (0, 0, *z.shape), 9.0)
+    lv = res
     assert lv.wet_cells == 400
     assert lv.area_m2 == pytest.approx(400.0)
     assert lv.volume_m3 == pytest.approx(400.0)
@@ -101,9 +77,9 @@ def test_connected_mode_floods_only_seeded_pit():
     z = _two_pits()
     x, y = GT[0] + 15.5, GT[3] - 15.5  # inside the small pit
     res = run_inundation(
-        z, -9999.0, GT, (0, 0, *z.shape), [9.0], mode="connected", seeds=[(x, y)]
+        z, -9999.0, GT, (0, 0, *z.shape), 9.0, mode="connected", seeds=[(x, y)]
     )
-    lv = res.levels[0]
+    lv = res
     assert res.n_seeds == 1
     assert lv.wet_cells == 100
     assert len(lv.polygons) == 1
@@ -113,8 +89,8 @@ def test_connected_mode_floods_only_seeded_pit():
 def test_connected_mode_without_seed_uses_lowest_cell():
     z = _two_pits()
     z[40, 40] = 7.0  # the big pit holds the lowest cell
-    res = run_inundation(z, -9999.0, GT, (0, 0, *z.shape), [9.0], mode="connected")
-    assert res.levels[0].wet_cells == 300
+    res = run_inundation(z, -9999.0, GT, (0, 0, *z.shape), 9.0, mode="connected")
+    assert res.wet_cells == 300
     assert any("lowest cell" in w for w in res.warnings)
 
 
@@ -123,11 +99,11 @@ def test_connected_through_saddle_once_level_rises():
     z[20:30, 15] = 9.5  # channel joining the pits, sill at 9.5
     z[30, 15:31] = 9.5
     seed = (GT[0] + 15.5, GT[3] - 15.5)
-    low = run_inundation(
-        z, -9999.0, GT, (0, 0, *z.shape), [9.0, 9.75], mode="connected", seeds=[seed]
-    )
-    assert low.levels[0].wet_cells == 100
-    assert low.levels[1].wet_cells > 400  # both pits plus the channel
+    window = (0, 0, *z.shape)
+    low = run_inundation(z, -9999.0, GT, window, 9.0, mode="connected", seeds=[seed])
+    high = run_inundation(z, -9999.0, GT, window, 9.75, mode="connected", seeds=[seed])
+    assert low.wet_cells == 100
+    assert high.wet_cells > 400  # both pits plus the channel
 
 
 def test_seed_outside_domain_is_reported():
@@ -156,8 +132,8 @@ def test_fill_field_modes():
 def test_cone_contour_matches_analytic_circle():
     z, centre = _cone()
     level = 102.0  # radius 20 m
-    res = run_inundation(z, -9999.0, GT, (0, 0, *z.shape), [level], smoothing=3)
-    lv = res.levels[0]
+    res = run_inundation(z, -9999.0, GT, (0, 0, *z.shape), level, smoothing=3)
+    lv = res
     assert len(lv.lines) == 1 and len(lv.polygons) == 1
     ring = np.asarray(lv.lines[0])
     assert np.allclose(ring[0], ring[-1])
@@ -175,8 +151,8 @@ def test_island_becomes_hole():
     z = np.full((60, 60), 10.0)
     z[10:50, 10:50] = 5.0
     z[25:35, 25:35] = 12.0  # island
-    res = run_inundation(z, -9999.0, GT, (0, 0, *z.shape), [8.0])
-    lv = res.levels[0]
+    res = run_inundation(z, -9999.0, GT, (0, 0, *z.shape), 8.0)
+    lv = res
     assert len(lv.lines) == 2
     assert len(lv.polygons) == 1 and len(lv.polygons[0]) == 2
     outer, hole = lv.polygons[0]
@@ -234,10 +210,8 @@ def test_bounding_polygon_limits_and_closes_rings():
             ]
         ]
     ]
-    full = run_inundation(z, -9999.0, GT, (0, 0, *z.shape), [102.0]).levels[0]
-    half = run_inundation(
-        z, -9999.0, GT, (0, 0, *z.shape), [102.0], bounding=bound
-    ).levels[0]
+    full = run_inundation(z, -9999.0, GT, (0, 0, *z.shape), 102.0)
+    half = run_inundation(z, -9999.0, GT, (0, 0, *z.shape), 102.0, bounding=bound)
     assert half.area_m2 == pytest.approx(full.area_m2 / 2, rel=0.03)
     assert half.volume_m3 == pytest.approx(full.volume_m3 / 2, rel=0.03)
     # the ring is closed and extends at most a cell beyond the polygon edge
@@ -250,80 +224,78 @@ def test_bounding_off_dem_raises():
     z = _two_pits()
     bound = [[[(500, 500), (510, 500), (510, 510), (500, 510), (500, 500)]]]
     with pytest.raises(InundationError):
-        run_inundation(z, -9999.0, GT, (0, 0, *z.shape), [9.0], bounding=bound)
+        run_inundation(z, -9999.0, GT, (0, 0, *z.shape), 9.0, bounding=bound)
 
 
 def test_nodata_is_dry():
     z = _two_pits()
     z[12:18, 12:18] = -9999.0
-    lv = run_inundation(z, -9999.0, GT, (0, 0, *z.shape), [9.0]).levels[0]
+    lv = run_inundation(z, -9999.0, GT, (0, 0, *z.shape), 9.0)
     assert lv.wet_cells == 400 - 36
     assert len(lv.polygons) == 2
     assert len(lv.polygons[0]) + len(lv.polygons[1]) == 3  # NoData hole
 
 
 # ---------------------------------------------------------------------------
-# Range, warnings, depth raster, CSV
+# Warnings, rasters, CSV
 # ---------------------------------------------------------------------------
 
 
-def test_range_monotonic_and_depth_raster():
+def test_depth_and_water_surface_rasters():
     z, _ = _cone()
-    levels = water_levels(100.5, 103.0, 0.5)
-    res = run_inundation(z, -9999.0, GT, (0, 0, *z.shape), levels)
-    areas = [lv.area_m2 for lv in res.levels]
-    vols = [lv.volume_m3 for lv in res.levels]
-    assert areas == sorted(areas) and vols == sorted(vols)
-    assert res.depth_level == pytest.approx(103.0)
-    assert np.nanmax(res.depth) == pytest.approx(3.0, abs=0.01)
-    assert np.nansum(res.depth) * CELL * CELL == pytest.approx(vols[-1], rel=1e-6)
+    res = run_inundation(z, -9999.0, GT, (0, 0, *z.shape), 103.0)
+    depth, wse = res.depth, res.water_surface
+    assert np.nanmax(depth) == pytest.approx(3.0, abs=0.01)
+    assert np.nansum(depth) * CELL * CELL == pytest.approx(res.volume_m3, rel=1e-6)
+    assert np.nanmin(wse) == np.nanmax(wse) == pytest.approx(103.0)
+    assert np.array_equal(np.isfinite(wse), np.isfinite(depth))
+    assert res.mean_depth == pytest.approx(res.volume_m3 / res.area_m2)
+
+
+def test_level_must_be_finite():
+    z = _two_pits()
+    with pytest.raises(InundationError):
+        run_inundation(z, -9999.0, GT, (0, 0, *z.shape), float("nan"))
 
 
 def test_warnings_dry_and_overtopped():
     z = _two_pits()
-    res = run_inundation(z, -9999.0, GT, (0, 0, *z.shape), [7.0, 11.0])
-    assert res.levels[0].wet_cells == 0
-    assert any("nothing is inundated" in w for w in res.warnings)
-    assert any("at or above the highest ground" in w for w in res.warnings)
-
-
-def test_summary_csv(tmp_path):
-    z = _two_pits()
-    res = run_inundation(z, -9999.0, GT, (0, 0, *z.shape), [8.5, 9.0])
-    path = tmp_path / "summary.csv"
-    write_summary_csv(str(path), res, {9.0: (401.2, 80.4, 2)})
-    with open(path, encoding="utf-8") as f:
-        rows = list(csv.DictReader(f))
-    assert list(rows[0]) == SUMMARY_FIELDS
-    assert rows[0]["level_m"] == "8.500" and rows[0]["n_polygons"] == ""
-    assert rows[1]["volume_m3"] == "400.0"
-    assert rows[1]["mean_depth_m"] == "1.000"
-    assert rows[1]["n_polygons"] == "2"
-    assert "," not in rows[1]["area_m2"]  # no thousands separators
-
-
-def test_per_level_depth_and_water_surface():
-    z = _two_pits()
-    z[12, 12] = 7.5
-    res = run_inundation(z, -9999.0, GT, (0, 0, *z.shape), [8.5, 9.0])
-    d85, w85 = res.depth_at(8.5), res.water_surface_at(8.5)
-    assert np.nanmax(d85) == pytest.approx(1.0)
-    assert np.count_nonzero(np.isfinite(d85)) == 400
-    assert np.nanmin(w85) == np.nanmax(w85) == pytest.approx(8.5)
-    # water surface only where depth is defined
-    assert np.array_equal(np.isfinite(w85), np.isfinite(d85))
-    assert np.array_equal(res.depth_at(9.0), res.depth, equal_nan=True)
+    dry = run_inundation(z, -9999.0, GT, (0, 0, *z.shape), 7.0)
+    assert dry.wet_cells == 0 and dry.mean_depth is None
+    assert any("Nothing is inundated" in w for w in dry.warnings)
+    over = run_inundation(z, -9999.0, GT, (0, 0, *z.shape), 11.0)
+    assert any("at or above the highest ground" in w for w in over.warnings)
 
 
 def test_seed_above_level_is_explained():
     z = _two_pits()
     bank = (GT[0] + 5.5, GT[3] - 5.5)  # on the 10 m flat, not in a pit
     res = run_inundation(
-        z, -9999.0, GT, (0, 0, *z.shape), [9.0], mode="connected", seeds=[bank]
+        z, -9999.0, GT, (0, 0, *z.shape), 9.0, mode="connected", seeds=[bank]
     )
-    assert res.levels[0].wet_cells == 0
+    assert res.wet_cells == 0
     assert res.seed_ground == [10.0]
     assert any("ground at the seed point" in w for w in res.warnings)
+
+
+def test_summary_csv(tmp_path):
+    z = _two_pits()
+    res = run_inundation(z, -9999.0, GT, (0, 0, *z.shape), 9.0)
+    path = tmp_path / "summary.csv"
+    write_summary_csv(str(path), res, (401.2, 80.4, 2))
+    with open(path, encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert len(rows) == 1
+    row = rows[0]
+    assert list(row) == SUMMARY_FIELDS
+    assert row["level_m"] == "9.000"
+    assert row["volume_m3"] == "400.0"
+    assert row["mean_depth_m"] == "1.000"
+    assert row["n_polygons"] == "2"
+    assert "," not in row["area_m2"]  # no thousands separators
+    write_summary_csv(str(path), res)
+    with open(path, encoding="utf-8") as f:
+        assert next(csv.DictReader(f))["n_polygons"] == ""
 
 
 # ---------------------------------------------------------------------------
@@ -335,9 +307,9 @@ def test_depth_classes_sum_to_area():
     from mayim_tools.hydrology.inundation_boundary.report import depth_classes
 
     z, _ = _cone()
-    res = run_inundation(z, -9999.0, GT, (0, 0, *z.shape), [103.0])
-    classes = depth_classes(res.depth_at(103.0), 1.0, res.weights)
-    assert sum(c["area_m2"] for c in classes) == pytest.approx(res.levels[0].area_m2)
+    res = run_inundation(z, -9999.0, GT, (0, 0, *z.shape), 103.0)
+    classes = depth_classes(res.depth, 1.0, res.weights)
+    assert sum(c["area_m2"] for c in classes) == pytest.approx(res.area_m2)
     assert sum(c["pct"] for c in classes) == pytest.approx(100.0)
     assert classes[-1]["to_m"] >= 3.0 - 1e-9
 
@@ -353,27 +325,24 @@ def test_report_docx(tmp_path):
     cx, cy = _centre_xy(centre)
     bound = [[[(cx - 40, cy - 40), (cx + 40, cy - 40), (cx + 40, cy + 40),
                (cx - 40, cy + 40), (cx - 40, cy - 40)]]]  # fmt: skip
-    levels = water_levels(99.5, 103.0, 0.5)
     res = run_inundation(
-        z, -9999.0, GT, (0, 0, *z.shape), levels, bounding=bound,
+        z, -9999.0, GT, (0, 0, *z.shape), 103.0, bounding=bound,
         mode="connected", seeds=[(cx, cy)],
     )  # fmt: skip
-    geometry = {lv.level: (lv.area_m2, 100.0, len(lv.polygons)) for lv in res.levels}
     path = tmp_path / "report.docx"
     write_report_docx(
         str(path),
         res,
         {
             "tool": "DEM Inundation Boundary",
-            "version": "0.3.0",
+            "version": "0.4.0",
             "dem": {"path": "dem.tif", "crs": "EPSG:32735", "cell_x": 1, "cell_y": 1},
-            "levels_text": "99.500 to 103.000 m",
             "bounding": "box (1 feature(s))",
             "seeds": {"layer": "seed"},
-            "outputs": [("Summary per level (CSV)", "x.csv")],
+            "outputs": [("Summary table (CSV)", "x.csv")],
             "warnings": res.warnings,
         },
-        geometry,
+        (res.area_m2, 100.0, len(res.polygons)),
         bounding=bound,
         seeds_xy=[(cx, cy)],
     )
@@ -381,7 +350,19 @@ def test_report_docx(tmp_path):
     text = "\n".join(p.text for p in doc.paragraphs)
     assert "DEM Inundation Boundary Assessment" in text
     assert "103.000 m" in text
-    assert len(doc.inline_shapes) == 3  # plan, level-area-volume, depth classes
+    assert "range" not in text.lower()
+    assert len(doc.inline_shapes) == 2  # plan, depth distribution
     cells = [c.text for t in doc.tables for r in t.rows for c in r.cells]
+    assert "Water level" in cells and "103.000 m" in cells
     assert not any("," in c and c.replace(",", "").isdigit() for c in cells)
-    assert any(w for w in res.warnings if "nothing is inundated" in w)
+
+
+def test_report_dry_level(tmp_path):
+    pytest.importorskip("docx")
+    from mayim_tools.hydrology.inundation_boundary.report import write_report_docx
+
+    z = _two_pits()
+    res = run_inundation(z, -9999.0, GT, (0, 0, *z.shape), 7.0)
+    path = tmp_path / "dry.docx"
+    write_report_docx(str(path), res, {"warnings": res.warnings})
+    assert path.exists()

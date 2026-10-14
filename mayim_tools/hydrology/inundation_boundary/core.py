@@ -3,9 +3,9 @@ Core inundation-boundary logic - pure NumPy, no QGIS dependency (GDAL is
 imported only by the shared raster I/O helpers).
 
 PURPOSE
-The extent of water standing at a given elevation ("bathtub" inundation),
-for one level or a range of levels, as smoothed boundary lines and
-matching polygons, with the area, volume and depth at each level.
+The extent of water standing at one given elevation ("bathtub"
+inundation), as smoothed boundary lines and matching polygons, with the
+inundated area, volume and depth.
 
 METHOD
 - Inundated ground at level h:
@@ -25,8 +25,7 @@ METHOD
   match exactly. Closed rings smaller than a few cells (DEM noise) are
   dropped.
 - Area, volume (prism method, weighted by the share of each cell inside
-  the bounding polygon) and maximum depth per level are counted on the
-  cells; the depth raster is for the highest level.
+  the bounding polygon) and maximum depth are counted on the cells.
 """
 
 from __future__ import annotations
@@ -49,7 +48,6 @@ from mayim_tools.hydrology._common.depression import (
 )
 
 MODES = ("all", "connected")
-MAX_LEVELS = 1000
 DEFAULT_MIN_CELLS = 3.0
 DEFAULT_SMOOTHING = 3
 DRY_EPS = 1e-6
@@ -61,7 +59,7 @@ class InundationError(GridError):
 
 
 @dataclass
-class LevelResult:
+class InundationResult:
     level: float
     lines: list  # closed rings in map coordinates [(x, y), ...]
     polygons: list  # [[outer, hole, ...], ...] in map coordinates
@@ -69,13 +67,6 @@ class LevelResult:
     volume_m3: float
     max_depth: float
     wet_cells: int
-
-
-@dataclass
-class InundationResult:
-    levels: list[LevelResult]
-    depth: np.ndarray  # float32 window, NaN where dry (highest level)
-    depth_level: float
     window: tuple
     window_gt: tuple
     mode: str
@@ -86,51 +77,29 @@ class InundationResult:
     seed_ground: list[float] = field(default_factory=list)
     weights: np.ndarray | None = None  # share of each cell in the bounding area
 
-    def wet_at(self, level: float) -> np.ndarray:
-        return self.fill < level
+    @property
+    def wet(self) -> np.ndarray:
+        return self.fill < self.level
 
-    def depth_at(self, level: float) -> np.ndarray:
-        """Water depth (float32, NaN where dry) at ``level``."""
-        return np.where(self.wet_at(level), level - self.z, np.nan).astype(np.float32)
+    @property
+    def depth(self) -> np.ndarray:
+        """Water depth (float32, NaN where dry)."""
+        return np.where(self.wet, self.level - self.z, np.nan).astype(np.float32)
 
-    def water_surface_at(self, level: float) -> np.ndarray:
-        """Water-surface elevation (float32, NaN where dry): ``level`` on
+    @property
+    def water_surface(self) -> np.ndarray:
+        """Water-surface elevation (float32, NaN where dry): the level on
         every inundated cell."""
-        return np.where(self.wet_at(level), level, np.nan).astype(np.float32)
+        return np.where(self.wet, self.level, np.nan).astype(np.float32)
+
+    @property
+    def mean_depth(self) -> float | None:
+        return self.volume_m3 / self.area_m2 if self.area_m2 > 0 else None
 
 
 # ---------------------------------------------------------------------------
-# Levels and seeds
+# Seeds
 # ---------------------------------------------------------------------------
-
-
-def water_levels(
-    start: float, end: float | None = None, interval: float | None = None
-) -> list[float]:
-    """One level, or start, start + interval, ... up to and including end
-    (end is always included)."""
-    if end is None or abs(end - start) < 1e-9:
-        return [float(start)]
-    if end < start:
-        start, end = end, start
-    if not interval or interval <= 0:
-        raise InundationError("A level range needs an interval greater than zero.")
-    n = (end - start) / interval
-    if n > MAX_LEVELS:
-        raise InundationError(
-            f"{n:.0f} levels requested (more than {MAX_LEVELS}) - use a larger "
-            "interval."
-        )
-    levels = []
-    k = 0
-    while True:
-        v = round(start + k * interval, 9)
-        if v >= end - 1e-9:
-            break
-        levels.append(v)
-        k += 1
-    levels.append(float(end))
-    return levels
 
 
 def seed_cells(points, geotransform, domain: np.ndarray):
@@ -267,7 +236,7 @@ def run_inundation(
     dem_nodata,
     window_gt,
     window: tuple,
-    levels: Sequence[float],
+    level: float,
     *,
     bounding: list | None = None,
     mode: str = "all",
@@ -277,13 +246,14 @@ def run_inundation(
     min_cells: float = DEFAULT_MIN_CELLS,
     is_canceled: Callable[[], bool] | None = None,
 ) -> InundationResult:
-    """Inundation boundaries for each level over a DEM window.
+    """Inundation extent at ``level`` over a DEM window.
 
     ``bounding``: [[outer, hole, ...], ...] polygons in map coordinates
     limiting the analysis (None = the whole window). ``seeds``: (x, y)
     points for CONNECTED mode (none = the lowest cell)."""
-    if not levels:
-        raise InundationError("No water level given.")
+    if level is None or not math.isfinite(level):
+        raise InundationError("A water level is required.")
+    h = float(level)
     z = np.asarray(dem_window, dtype=np.float64)
     sx, sy = abs(float(window_gt[1])), abs(float(window_gt[5]))
     cell_area = sx * sy
@@ -325,39 +295,32 @@ def run_inundation(
 
     zmin = float(z[domain].min())
     zmax = float(z[domain].max())
-    results = []
-    for h in sorted(levels):
-        if is_canceled is not None and is_canceled():
-            break
-        rings, polygons = level_boundaries(fill, h, window_gt, smoothing, min_cells)
-        stats = level_statistics(z, fill, weights, h, cell_area)
-        results.append(LevelResult(h, rings, polygons, **stats))
-        if stats["wet_cells"] == 0:
-            if seed_ground and h <= min(seed_ground):
-                warnings.append(
-                    f"Level {h:.3f} m: nothing is inundated - the level is not "
-                    "above the ground at the seed point(s) (lowest seed cell "
-                    f"{min(seed_ground):.3f} m; lowest ground {zmin:.3f} m). "
-                    "Water spreads from the seed, so place it on the lowest "
-                    "ground of the water body (e.g. the channel bed)."
-                )
-            else:
-                warnings.append(
-                    f"Level {h:.3f} m: nothing is inundated (lowest ground "
-                    f"{zmin:.3f} m)."
-                )
-    if max(levels) >= zmax:
+    rings, polygons = level_boundaries(fill, h, window_gt, smoothing, min_cells)
+    stats = level_statistics(z, fill, weights, h, cell_area)
+    if stats["wet_cells"] == 0:
+        if seed_ground and h <= min(seed_ground):
+            warnings.append(
+                f"Nothing is inundated at {h:.3f} m - the level is not above the "
+                "ground at the seed point(s) (lowest seed cell "
+                f"{min(seed_ground):.3f} m; lowest ground {zmin:.3f} m). Water "
+                "spreads from the seed, so place it on the lowest ground of the "
+                "water body (e.g. the channel bed)."
+            )
+        else:
+            warnings.append(
+                f"Nothing is inundated at {h:.3f} m (lowest ground {zmin:.3f} m)."
+            )
+    if h >= zmax:
         warnings.append(
-            f"The highest level ({max(levels):.3f} m) is at or above the highest "
-            f"ground in the bounding area ({zmax:.3f} m) - everything is under "
-            "water there; widen the bounding polygon if that is unexpected."
+            f"The water level ({h:.3f} m) is at or above the highest ground in the "
+            f"bounding area ({zmax:.3f} m) - everything is under water there; "
+            "widen the bounding polygon if that is unexpected."
         )
-    top = max(levels)
-    depth = np.where(fill < top, top - z, np.nan).astype(np.float32)
     return InundationResult(
-        levels=results,
-        depth=depth,
-        depth_level=float(top),
+        level=h,
+        lines=rings,
+        polygons=polygons,
+        **stats,
         window=tuple(int(v) for v in window),
         window_gt=tuple(window_gt),
         mode=mode,

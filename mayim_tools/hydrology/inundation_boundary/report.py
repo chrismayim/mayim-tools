@@ -30,8 +30,6 @@ from mayim_tools._common.docx_report import (
 from .core import InundationResult
 
 REPORT_TITLE = "DEM Inundation Boundary Assessment"
-MAX_REPORT_ROWS = 40
-MAX_PLAN_LEVELS = 12
 
 MODE_TEXT = {
     "all": "all ground below the level (static bathtub, separate hollows included)",
@@ -64,15 +62,6 @@ REFERENCES = [
 ]
 
 
-def report_rows(levels: Sequence, max_rows: int = MAX_REPORT_ROWS) -> list:
-    """All levels, or an even thinning that keeps the first and last."""
-    levels = list(levels)
-    if len(levels) <= max_rows:
-        return levels
-    idx = np.unique(np.round(np.linspace(0, len(levels) - 1, max_rows)).astype(int))
-    return [levels[i] for i in idx]
-
-
 def depth_classes(depth: np.ndarray, cell_area: float, weights=None) -> list[dict]:
     """Area per depth class (round class widths, at most about 10 classes)."""
     d = depth[np.isfinite(depth)]
@@ -103,33 +92,21 @@ def depth_classes(depth: np.ndarray, cell_area: float, weights=None) -> list[dic
     return out
 
 
-def describe_result(result: InundationResult, geometry: dict | None = None) -> str:
-    """Plain-language summary of the highest level."""
-    if not result.levels:
-        return "No level was processed."
-    top = result.levels[-1]
-    geometry = geometry or {}
-    n_bodies = geometry.get(top.level, (None, None, len(top.polygons)))[2]
-    if top.wet_cells == 0:
+def describe_result(result: InundationResult, geometry=None) -> str:
+    """Plain-language summary of the extent."""
+    if result.wet_cells == 0:
         return (
-            f"At the highest level, {top.level:.3f} m, no ground inside the "
-            "analysis area lies below the water."
+            f"At {result.level:.3f} m no ground inside the analysis area lies "
+            "below the water."
         )
-    text = (
-        f"At the highest level, {top.level:.3f} m, the water covers "
-        f"{top.area_m2 / 1e4:.3f} ha ({top.area_m2:.0f} m²) in {n_bodies} "
-        f"water bod{'y' if n_bodies == 1 else 'ies'}, holds "
-        f"{top.volume_m3:.0f} m³ ({top.volume_m3 / 1e3:.2f} ML) and is up to "
-        f"{top.max_depth:.2f} m deep (mean "
-        f"{top.volume_m3 / top.area_m2:.2f} m)."
+    n_bodies = len(result.polygons) if geometry is None else geometry[2]
+    return (
+        f"At {result.level:.3f} m the water covers {result.area_m2 / 1e4:.3f} ha "
+        f"({result.area_m2:.0f} m²) in {n_bodies} water "
+        f"bod{'y' if n_bodies == 1 else 'ies'}, holds {result.volume_m3:.0f} m³ "
+        f"({result.volume_m3 / 1e3:.2f} ML) and is up to {result.max_depth:.2f} m "
+        f"deep (mean {result.mean_depth:.2f} m)."
     )
-    dry = [lv.level for lv in result.levels if lv.wet_cells == 0]
-    if dry and len(result.levels) > 1:
-        text += (
-            f" {len(dry)} of the {len(result.levels)} levels "
-            f"({min(dry):.3f} to {max(dry):.3f} m) flood nothing."
-        )
-    return text
 
 
 # ---------------------------------------------------------------------------
@@ -156,11 +133,9 @@ def _ring_patch(rings, **kwargs):
 def figure_plan(
     result: InundationResult, bounding=None, seeds_xy=()
 ) -> io.BytesIO | None:
-    """Depth at the highest level with the boundary lines of each level, the
-    bounding polygon and the seed points."""
-    from matplotlib import colormaps
-
-    depth = result.depth_at(result.depth_level)
+    """Depth with the inundation boundary, the bounding polygon and the seed
+    points."""
+    depth = result.depth
     if not np.isfinite(depth).any():
         return None
     gt = result.window_gt
@@ -176,22 +151,19 @@ def figure_plan(
         interpolation="nearest",
     )
     cbar = fig.colorbar(im, ax=ax, shrink=0.8, pad=0.02)
-    cbar.set_label(f"Depth at {result.depth_level:.2f} m (m)", fontsize=8, color=C_INK)
+    cbar.set_label(f"Depth at {result.level:.2f} m (m)", fontsize=8, color=C_INK)
     cbar.ax.tick_params(labelsize=7, colors=C_INK_2)
 
-    wet = [lv for lv in result.levels if lv.lines]
-    if len(wet) > MAX_PLAN_LEVELS:
-        idx = np.unique(
-            np.round(np.linspace(0, len(wet) - 1, MAX_PLAN_LEVELS)).astype(int)
-        )
-        wet = [wet[i] for i in idx]
-    cmap = colormaps["viridis"]
-    for k, lv in enumerate(wet):
-        color = C_INK if len(wet) == 1 else cmap(k / max(len(wet) - 1, 1))
-        for line in lv.lines:
-            lx, ly = zip(*line, strict=True)
-            ax.plot(lx, ly, color=color, linewidth=0.7)
-        ax.plot([], [], color=color, linewidth=0.7, label=f"{lv.level:.2f} m")
+    for line in result.lines:
+        lx, ly = zip(*line, strict=True)
+        ax.plot(lx, ly, color=C_INK, linewidth=0.7)
+    ax.plot(
+        [],
+        [],
+        color=C_INK,
+        linewidth=0.7,
+        label=f"Inundation boundary {result.level:.2f} m",
+    )
     if bounding:
         for poly in bounding:
             patch = _ring_patch(
@@ -221,41 +193,6 @@ def figure_plan(
     ax.grid(False)
     ax.ticklabel_format(useOffset=False, style="plain")
     ax.legend(fontsize=6.5, frameon=True, framealpha=0.85, loc="best")
-    return png(fig)
-
-
-def figure_level_area_volume(result: InundationResult) -> io.BytesIO | None:
-    """Water level against volume (bottom axis) and area (reversed top
-    axis), for a range of levels."""
-    if len(result.levels) < 2:
-        return None
-    h = np.array([lv.level for lv in result.levels])
-    area = np.array([lv.area_m2 for lv in result.levels])
-    vol = np.array([lv.volume_m3 for lv in result.levels])
-    vs, vlabel = (1e3, "Volume (ML)") if vol.max() >= 1e4 else (1.0, "Volume (m³)")
-    as_, alabel = (1e4, "Area (ha)") if area.max() >= 1e4 else (1.0, "Area (m²)")
-    fig = new_figure(9.0)
-    ax = fig.add_subplot(1, 1, 1)
-    ax.plot(vol / vs, h, color=C_BLUE, linewidth=1.8, marker="o", markersize=3)
-    ax.plot([], [], color=C_BLUE, linewidth=1.8, label="Volume")
-    ax.set_xlabel(vlabel)
-    ax.set_ylabel("Water level (m)")
-    ax.set_xlim(left=0)
-    style_axes(ax)
-    ax.ticklabel_format(axis="y", useOffset=False, style="plain")
-    top = ax.twiny()
-    top.plot(area / as_, h, color=C_ORANGE, linewidth=1.8, marker="o", markersize=3)
-    top.set_xlim(left=0)
-    top.invert_xaxis()
-    top.set_xlabel(alabel, fontsize=8, color=C_INK)
-    top.tick_params(colors=C_INK_2, labelsize=7, width=0.6)
-    for side in ("right", "left", "bottom"):
-        top.spines[side].set_visible(False)
-    top.spines["top"].set_color(C_INK_2)
-    top.spines["top"].set_linewidth(0.6)
-    ax.plot([], [], color=C_ORANGE, linewidth=1.8, label="Area")
-    ax.legend(fontsize=7, frameon=False, loc="lower center")
-    ax.set_ylim(h.min(), h.max())
     return png(fig)
 
 
@@ -291,7 +228,7 @@ def write_report_docx(
     path: str,
     result: InundationResult,
     context: dict,
-    geometry: dict | None = None,
+    geometry=None,
     *,
     bounding=None,
     seeds_xy: Sequence = (),
@@ -300,12 +237,11 @@ def write_report_docx(
 ) -> None:
     """Writes the report. ``context`` describes the run (tool, version, run
     time, DEM, settings, outputs, warnings - see the QGIS wrapper);
-    ``geometry`` maps level -> (polygon area, perimeter, number of polygons)
-    measured on the clipped output polygons; ``weights`` are the cell
+    ``geometry`` is (polygon area, perimeter, number of polygons) measured
+    on the clipped output polygons; ``weights`` are the cell
     weights inside the bounding polygon (for the depth classes)."""
     d = Doc()
     ctx = context or {}
-    geometry = geometry or {}
     if include_figures:
         try:
             import matplotlib  # noqa: F401
@@ -313,24 +249,15 @@ def write_report_docx(
             include_figures = False
     dem = ctx.get("dem", {})
     mode = result.mode
-    levels = result.levels
-    n = len(levels)
-    top = levels[-1] if levels else None
     cell_area = abs(result.window_gt[1] * result.window_gt[5])
 
     d.heading(REPORT_TITLE, 1)
 
     # 1. Summary ------------------------------------------------------------
     d.heading("1. Summary", 2)
-    span = (
-        f"one water level ({levels[0].level:.3f} m)"
-        if n == 1
-        else f"{n} water levels from {levels[0].level:.3f} m to "
-        f"{levels[-1].level:.3f} m"
-    )
     d.para(
         f"This report documents the level-pool (bathtub) inundation extent "
-        f"for {span}, read from a digital elevation model (DEM) with a "
+        f"at a water level of {result.level:.3f} m, read from a digital elevation model (DEM) with a "
         f"{dem.get('cell_x', 0):g} m x {dem.get('cell_y', 0):g} m cell size, "
         f"using the {ctx.get('tool', 'DEM Inundation Boundary')} tool (Mayim "
         f"Tools, version {ctx.get('version', '-')}). Inundated ground was "
@@ -346,7 +273,7 @@ def write_report_docx(
     # 2. Method -------------------------------------------------------------
     d.heading("2. Tool and method", 2)
     d.para(
-        "The water surface is taken as flat at each level: no flow, gradient "
+        "The water surface is taken as flat: no flow, gradient "
         "or hydraulic losses are modelled. The processing steps were:"
     )
     steps = [
@@ -370,7 +297,7 @@ def write_report_docx(
             "water overtops it. Water starts at the seed cell, so a level at or "
             "below the seed's ground floods nothing."
         ),
-        "For each level, the inundated area is the sum of the weighted areas "
+        "The inundated area is the sum of the weighted areas "
         "of the wet cells and the volume the sum of their weighted areas times "
         "the water depth above each cell (prism method, exact for the DEM).",
         "The water's edge was traced between cell centres by marching squares "
@@ -400,7 +327,7 @@ def write_report_docx(
                 "DEM cell size",
                 f"{dem.get('cell_x', 0):g} m x {dem.get('cell_y', 0):g} m",
             ],
-            ["Water level(s)", ctx.get("levels_text", "-")],
+            ["Water level", f"{result.level:.3f} m"],
             ["Bounding polygon", ctx.get("bounding") or "None (whole DEM)"],
             ["Inundated ground", MODE_TEXT.get(mode, mode)],
             [
@@ -437,53 +364,37 @@ def write_report_docx(
 
     # 5. Results --------------------------------------------------------------
     d.heading("5. Results", 2)
-    shown = report_rows(levels)
-    d.caption(
-        "Table",
-        "Inundation per water level"
-        + (
-            f" ({len(shown)} of {n} levels shown; the CSV holds all of them)"
-            if len(shown) < n
-            else ""
-        ),
-    )
-    table_rows = []
-    for lv in shown:
-        g = geometry.get(lv.level)
-        table_rows.append(
-            [
-                f"{lv.level:.3f}",
-                f"{lv.area_m2:.0f}",
-                f"{lv.area_m2 / 1e4:.4f}",
-                f"{lv.volume_m3:.0f}",
-                f"{lv.max_depth:.3f}",
-                f"{lv.volume_m3 / lv.area_m2:.3f}" if lv.area_m2 > 0 else "-",
-                "-" if g is None else str(g[2]),
-                "-" if g is None else f"{g[1]:.0f}",
-            ]
-        )
-    d.table(
+    g = geometry
+    rows = [
+        ["Water level (m)", f"{result.level:.3f}"],
+        ["Inundated area on the DEM cells (m²)", f"{result.area_m2:.0f}"],
+        ["Inundated area on the DEM cells (ha)", f"{result.area_m2 / 1e4:.4f}"],
+        ["Volume (m³)", f"{result.volume_m3:.0f}"],
+        ["Volume (ML)", f"{result.volume_m3 / 1e3:.2f}"],
+        ["Maximum depth (m)", f"{result.max_depth:.3f}"],
         [
-            "Level (m)",
-            "Area (m²)",
-            "Area (ha)",
-            "Volume (m³)",
-            "Max depth (m)",
             "Mean depth (m)",
-            "Water bodies",
-            "Perimeter (m)",
+            "-" if result.mean_depth is None else f"{result.mean_depth:.3f}",
         ],
-        table_rows,
-        widths_cm=[2.2, 2.2, 2.0, 2.3, 1.9, 1.9, 1.7, 2.0],
-    )
+        ["Wet cells", str(result.wet_cells)],
+        ["Water bodies", str(len(result.polygons) if g is None else g[2])],
+    ]
+    if g is not None:
+        rows += [
+            ["Polygon area (m²)", f"{g[0]:.0f}"],
+            ["Perimeter (m)", f"{g[1]:.0f}"],
+        ]
+    d.caption("Table", f"Inundation at {result.level:.3f} m")
+    d.table(["Quantity", "Value"], rows, widths_cm=[9.0, 7.0])
 
     classes = []
-    if top is not None and top.wet_cells:
-        depth = result.depth_at(top.level)
+    if result.wet_cells:
         classes = depth_classes(
-            depth, cell_area, weights if weights is not None else result.weights
+            result.depth,
+            cell_area,
+            weights if weights is not None else result.weights,
         )
-        d.caption("Table", f"Inundated area by depth class at {top.level:.2f} m")
+        d.caption("Table", f"Inundated area by depth class at {result.level:.2f} m")
         d.table(
             ["Depth class (m)", "Area (m²)", "Share (%)"],
             [
@@ -497,26 +408,19 @@ def write_report_docx(
             widths_cm=[6.0, 5.0, 5.0],
         )
 
-    if include_figures and top is not None:
+    if include_figures:
         for stream, cap in (
             (
                 figure_plan(result, bounding, seeds_xy),
-                f"depth at the highest level ({result.depth_level:.2f} m) and "
-                "the inundation boundary of "
-                + ("each level" if n > 1 else "the level"),
+                f"Depth and inundation boundary at {result.level:.2f} m",
             ),
             (
-                figure_level_area_volume(result),
-                "water level against inundated volume (bottom axis) and area "
-                "(reversed top axis)",
-            ),
-            (
-                figure_depth_distribution(classes, top.level),
-                f"distribution of depth at {top.level:.2f} m",
+                figure_depth_distribution(classes, result.level),
+                f"Distribution of depth at {result.level:.2f} m",
             ),
         ):
             if stream is not None:
-                d.picture(stream, cap[0].upper() + cap[1:])
+                d.picture(stream, cap)
 
     # 6. Outputs --------------------------------------------------------------
     outputs = ctx.get("outputs", [])
@@ -528,8 +432,7 @@ def write_report_docx(
     # 7. Notes ----------------------------------------------------------------
     d.heading("7. Notes and limitations", 2)
     for note in [
-        "This is a level-pool (bathtub) extent: the water surface is flat at "
-        "each level. It does not model flow, the water-surface slope along a "
+        "This is a level-pool (bathtub) extent: the water surface is flat. It does not model flow, the water-surface slope along a "
         "river, hydraulic losses, timing or storage routing. For flood lines "
         "along a river use a hydraulic model; this extent is a screening "
         "estimate or a check on one.",

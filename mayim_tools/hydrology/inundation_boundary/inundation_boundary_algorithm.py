@@ -1,6 +1,11 @@
-"""Processing Toolbox algorithm: DEM + water level (or a range of levels),
-optional bounding polygon and seed points in -> smoothed inundation
-boundary polylines and polygons, a depth raster and a summary CSV out.
+"""Processing Toolbox algorithm: DEM + one water level, optional bounding
+polygon and seed points in -> smoothed inundation boundary (lines) and
+extent (polygons), water-surface elevation and depth rasters, a summary
+CSV and a Word report, written to one output folder.
+
+The user picks an output folder and ticks the outputs wanted; the
+boundary, the extent and the water-surface elevation raster are ticked
+by default, and every output layer written is loaded into the map.
 
 Thin wrapper - all real logic lives in core.py (zero QGIS dependency,
 independently testable; see tests/test_inundation_boundary_core.py).
@@ -14,7 +19,6 @@ from qgis.core import (
     Qgis,
     QgsCoordinateTransform,
     QgsFeature,
-    QgsFeatureSink,
     QgsField,
     QgsFields,
     QgsGeometry,
@@ -24,14 +28,14 @@ from qgis.core import (
     QgsProcessingContext,
     QgsProcessingException,
     QgsProcessingFeedback,
+    QgsProcessingParameterBoolean,
     QgsProcessingParameterEnum,
-    QgsProcessingParameterFeatureSink,
     QgsProcessingParameterFeatureSource,
-    QgsProcessingParameterFileDestination,
     QgsProcessingParameterFolderDestination,
     QgsProcessingParameterNumber,
-    QgsProcessingParameterRasterDestination,
     QgsProcessingParameterRasterLayer,
+    QgsVectorFileWriter,
+    QgsVectorLayer,
     QgsWkbTypes,
 )
 from qgis.PyQt.QtCore import QMetaType
@@ -56,12 +60,11 @@ from .core import (
     DEFAULT_SMOOTHING,
     MODES,
     run_inundation,
-    water_levels,
 )
 from .export import write_summary_csv
 from .report import write_report_docx
 
-TOOL_VERSION = "0.3.0"
+TOOL_VERSION = "0.4.0"
 
 STYLE_DEPTH_PATH = STYLES_DIR / STYLE_DEPTH  # stage-storage "Depth at top stage"
 STYLE_WSE_PATH = (
@@ -83,13 +86,6 @@ POLYGON_FIELDS = [
     ("area_ha", _D, "area of the polygon, ha"),
     ("perim_m", _D, "perimeter of the polygon (incl. islands), m"),
     ("n_islands", _I, "dry islands (holes) in the polygon"),
-    ("lvl_vol_m3", _D, "volume below the level - all water at this level, m3"),
-    (
-        "lvl_area_m2",
-        _D,
-        "inundated area on the DEM cells - all water at this level, m2",
-    ),
-    ("lvl_maxdep", _D, "maximum depth at this level, m"),
     ("mode", _S, "all or connected"),
 ]
 
@@ -97,6 +93,16 @@ LINE_FIELDS = [
     ("level_m", _D, "water level, m"),
     ("length_m", _D, "length of the boundary line, m"),
     ("mode", _S, "all or connected"),
+]
+
+# (parameter, label, default, file suffix)
+OUTPUT_CHOICES = [
+    ("SAVE_BOUNDARY", "Inundation boundary (lines, GeoPackage)", True, "boundary.gpkg"),
+    ("SAVE_EXTENT", "Inundation extent (polygons, GeoPackage)", True, "extent.gpkg"),
+    ("SAVE_WSE", "Water-surface elevation raster (GeoTIFF)", True, "wse.tif"),
+    ("SAVE_DEPTH", "Depth raster (GeoTIFF)", False, "depth.tif"),
+    ("SAVE_CSV", "Summary table (CSV)", False, "summary.csv"),
+    ("SAVE_REPORT", "Inundation report (Word)", False, "report.docx"),
 ]
 
 
@@ -107,35 +113,28 @@ def _fields(specs) -> QgsFields:
     return fields
 
 
-def _describe_destination(dest) -> str:
-    """Readable location of a Processing output."""
-    text = str(dest or "")
-    if text.startswith("memory:") or "TEMPORARY_OUTPUT" in text or not text:
-        return "Temporary layer (not saved)"
-    return text
+def _locked_message(path, error) -> str:
+    return (
+        f"Could not write '{path}': {error}. If a layer from an earlier run at "
+        "the same level is still open in QGIS, remove it from the map (or "
+        "choose another output folder) and run the tool again."
+    )
 
 
-def _is_null(value) -> bool:
-    return value is None or str(value) in ("", "NULL")
+def level_tag(level: float) -> str:
+    """File-name tag for a level: 1617.41 -> '1617_410' (no dots)."""
+    return f"{level:.3f}".replace(".", "_").replace("-", "m")
 
 
 class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
     DEM = "DEM"
-    LEVEL_FROM = "LEVEL_FROM"
-    LEVEL_TO = "LEVEL_TO"
-    LEVEL_INTERVAL = "LEVEL_INTERVAL"
+    WATER_LEVEL = "WATER_LEVEL"
     BOUNDING = "BOUNDING"
     MODE = "MODE"
     SEEDS = "SEEDS"
     SMOOTHING = "SMOOTHING"
     MIN_CELLS = "MIN_CELLS"
-    OUTPUT_LINES = "OUTPUT_LINES"
-    OUTPUT_POLYGONS = "OUTPUT_POLYGONS"
-    OUTPUT_DEPTH = "OUTPUT_DEPTH"
-    OUTPUT_WSE = "OUTPUT_WSE"
-    OUTPUT_TABLE = "OUTPUT_TABLE"
-    OUTPUT_LEVEL_FOLDER = "OUTPUT_LEVEL_FOLDER"
-    OUTPUT_DOCX = "OUTPUT_DOCX"
+    OUTPUT_FOLDER = "OUTPUT_FOLDER"
 
     def icon(self):
         return QIcon(
@@ -159,26 +158,33 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
 
     def shortHelpString(self):
         glossary = "\n".join(f"  {n}: {d}" for n, _, d in POLYGON_FIELDS)
+        files = "\n".join(
+            f"  {label}: inundation_<level>_{suffix}"
+            for _, label, _, suffix in OUTPUT_CHOICES
+        )
         return (
             f"DEM Inundation Boundary (version {TOOL_VERSION})\n"
             "\n"
-            "PURPOSE:\tThe extent of water standing at a given elevation "
-            "(bathtub inundation) - for one level, or a range of levels at an "
-            "interval - as smoothed boundary polylines and matching polygons, "
-            "with the area, volume and depth at each level.\n"
+            "PURPOSE:\tThe extent of water standing at one elevation (bathtub "
+            "inundation), as a smoothed boundary line and matching polygons, "
+            "with the inundated area, volume and depth.\n"
             "\n"
-            "INPUTS:\tA DEM in a projected CRS in metres; a water level, or a "
-            "range (from, to and interval; 'to' is always included). Optional: "
-            "a bounding polygon that limits the analysis (all its features "
-            "together; without it the whole DEM is used), and seed points for "
-            "the connected mode.\n"
+            "INPUTS:\tA DEM in a projected CRS in metres and the water level. "
+            "Optional: a bounding polygon that limits the analysis (all its "
+            "features together; without it the whole DEM is used), and seed "
+            "points for the connected option.\n"
             "\n"
             "INUNDATED GROUND:\t'All ground below the level' floods every cell "
             "below the level, including separate hollows. 'Only ground "
             "connected to the seed point(s)' floods only ground that water at "
-            "that level can reach from a seed (e.g. a river, dam or outlet "
+            "the level can reach from a seed (e.g. a river, dam or outlet "
             "point), through cells below the level (8-connected); hollows behind "
             "higher ground stay dry. Without a seed the lowest cell is used.\n"
+            "\n"
+            "SEED POINTS:\tWater spreads outward from the seed cell, so a level "
+            "at or below the ground at the seed floods nothing. Place seeds on "
+            "the lowest ground of the water body (channel bed, dam basin), not "
+            "on a bank.\n"
             "\n"
             "BOUNDARY:\tThe water's edge is interpolated between DEM cell "
             "centres (marching squares) and rounded with Chaikin corner "
@@ -188,24 +194,15 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
             "edge. Rings smaller than the minimum size (DEM noise) are "
             "dropped.\n"
             "\n"
-            "OUTPUTS:\tBoundary polylines and inundation polygons (one feature "
-            "per water body per level); the depth and water-surface elevation "
-            "rasters at the highest level (the water-surface raster holds the "
-            "level on every inundated cell - drape a cross-section profile "
-            "over it together with the DEM); optionally both rasters for every "
-            "level of a range, written to a folder as depth_<level>.tif and "
-            "wse_<level>.tif; and a summary CSV per level (area and volume on "
-            "the DEM cells, and the polygon area and perimeter); and an optional "
-            "Word report with the method, settings, results per level, depth "
-            "classes, a plan of the extent and the level-area-volume curves. "
-            "The rasters "
-            "follow the DEM cells, so their edge is stepped; the smoothed "
-            "polygons show the interpolated water's edge.\n"
-            "\n"
-            "SEED POINTS:\tWater spreads outward from the seed cell, so a level "
-            "at or below the ground at the seed floods nothing. Place seeds on "
-            "the lowest ground of the water body (channel bed, dam basin), not "
-            "on a bank.\n"
+            "OUTPUTS:\tChoose an output folder and tick the outputs wanted. The "
+            "boundary, the extent and the water-surface elevation raster are "
+            "ticked by default. Every layer written is loaded into the map. "
+            "Files are named after the level and overwrite an earlier run at the "
+            "same level:\n" + files + "\n"
+            "The water-surface elevation raster holds the level on every "
+            "inundated cell - profile it with the DEM for cross-sections. The "
+            "rasters follow the DEM cells, so their edge is stepped; the "
+            "smoothed polygons show the interpolated water's edge.\n"
             "\n"
             "LIMITATIONS:\tA level-pool (bathtub) extent - no flow, no "
             "hydraulic gradient, no structures below DEM resolution. For "
@@ -220,26 +217,9 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
         )
         self.addParameter(
             QgsProcessingParameterNumber(
-                self.LEVEL_FROM,
-                "Water level, or start of the range (m)",
+                self.WATER_LEVEL,
+                "Water level (m)",
                 type=QgsProcessingParameterNumber.Type.Double,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterNumber(
-                self.LEVEL_TO,
-                "End of the range (m; blank = single level)",
-                type=QgsProcessingParameterNumber.Type.Double,
-                optional=True,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterNumber(
-                self.LEVEL_INTERVAL,
-                "Interval for a range (m)",
-                type=QgsProcessingParameterNumber.Type.Double,
-                minValue=0.001,
-                defaultValue=0.5,
             )
         )
         self.addParameter(
@@ -263,7 +243,14 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
                 optional=True,
             )
         )
+        for key, label, default, _ in OUTPUT_CHOICES:
+            self.addParameter(
+                QgsProcessingParameterBoolean(key, label, defaultValue=default)
+            )
         self.addParameter(
+            QgsProcessingParameterFolderDestination(self.OUTPUT_FOLDER, "Output folder")
+        )
+        for param in (
             QgsProcessingParameterNumber(
                 self.SMOOTHING,
                 "Smoothing passes (Chaikin; 0 = none)",
@@ -271,96 +258,20 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
                 minValue=0,
                 maxValue=8,
                 defaultValue=DEFAULT_SMOOTHING,
-            )
-        )
-        self.addParameter(
+            ),
             QgsProcessingParameterNumber(
                 self.MIN_CELLS,
                 "Drop rings smaller than (cells)",
                 type=QgsProcessingParameterNumber.Type.Double,
                 minValue=0.0,
                 defaultValue=DEFAULT_MIN_CELLS,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterFeatureSink(
-                self.OUTPUT_LINES,
-                "Inundation boundary (lines)",
-                type=QgsProcessing.SourceType.TypeVectorLine,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterFeatureSink(
-                self.OUTPUT_POLYGONS,
-                "Inundation extent (polygons)",
-                type=QgsProcessing.SourceType.TypeVectorPolygon,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterRasterDestination(
-                self.OUTPUT_DEPTH,
-                "Depth at the highest level",
-                optional=True,
-                createByDefault=False,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterRasterDestination(
-                self.OUTPUT_WSE,
-                "Water-surface elevation at the highest level",
-                optional=True,
-                createByDefault=False,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterFolderDestination(
-                self.OUTPUT_LEVEL_FOLDER,
-                "Depth and water-surface rasters for every level (folder)",
-                optional=True,
-                createByDefault=False,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterFileDestination(
-                self.OUTPUT_TABLE,
-                "Summary per level (CSV)",
-                fileFilter="CSV files (*.csv)",
-                optional=True,
-                createByDefault=False,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterFileDestination(
-                self.OUTPUT_DOCX,
-                "Inundation report (Word)",
-                fileFilter="Word documents (*.docx)",
-                optional=True,
-                createByDefault=False,
-            )
-        )
+            ),
+        ):
+            param.setFlags(param.flags() | Qgis.ProcessingParameterFlag.Advanced)
+            self.addParameter(param)
 
     # ------------------------------------------------------------------
-
-    def _register_style(self, context, dest_id, style_path=STYLE_DEPTH_PATH, **options):
-        """Loads the stage-storage 'Depth at top stage' style onto the depth
-        raster (ramp stretched to this run's depths). The post-processor is
-        kept alive on self - Processing holds only a weak reference."""
-        if not dest_id or not context.willLoadLayerOnCompletion(dest_id):
-            return
-        details = context.layerToLoadOnCompletionDetails(dest_id)
-        processor = _StylePostProcessor(style_path, **options)
-        details.setPostProcessor(processor)
-        self._post_processors.append(processor)
-
-    @staticmethod
-    def _write_raster(path, array, result, projection):
-        write_raster(
-            path,
-            np.where(np.isnan(array), DEFAULT_NODATA, array).astype("float32"),
-            result.window_gt,
-            projection,
-            DEFAULT_NODATA,
-        )
+    # Helpers
 
     def _transform(self, source, crs, context):
         if source is None or source.sourceCrs() == crs:
@@ -412,6 +323,101 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
             points.extend((p.x(), p.y()) for p in pts)
         return points
 
+    @staticmethod
+    def _boundary_geometry(result, clip):
+        if not result.lines:
+            return None
+        parts = [[QgsPointXY(x, y) for x, y in ring] for ring in result.lines]
+        geom = QgsGeometry.fromMultiPolylineXY(parts)
+        if clip is not None:
+            geom = geom.intersection(clip)
+            if QgsWkbTypes.flatType(geom.wkbType()) not in (
+                Qgis.WkbType.LineString,
+                Qgis.WkbType.MultiLineString,
+            ):
+                geom.convertGeometryCollectionToSubclass(Qgis.GeometryType.Line)
+        if geom.isEmpty():
+            return None
+        geom.convertToMultiType()
+        return geom
+
+    @staticmethod
+    def _extent_geometries(result, clip):
+        out = []
+        for poly in result.polygons:
+            rings = [[QgsPointXY(x, y) for x, y in ring] for ring in poly]
+            geom = QgsGeometry.fromPolygonXY(rings).makeValid()
+            if clip is not None:
+                geom = geom.intersection(clip)
+            if QgsWkbTypes.flatType(geom.wkbType()) not in (
+                Qgis.WkbType.Polygon,
+                Qgis.WkbType.MultiPolygon,
+            ):
+                geom.convertGeometryCollectionToSubclass(Qgis.GeometryType.Polygon)
+            if geom.isEmpty():
+                continue
+            geom.convertToMultiType()
+            out.append(geom)
+        return out
+
+    @staticmethod
+    def _write_gpkg(path, layer_name, specs, wkb_type, crs, rows, context):
+        """Writes features [(geometry, {field: value})] to a GeoPackage: an
+        in-memory layer filled in one batch, then saved in one call (the
+        idiom proven in the Import RAS 2D data tool)."""
+        layer = QgsVectorLayer(
+            QgsWkbTypes.displayString(wkb_type), layer_name, "memory"
+        )
+        layer.setCrs(crs)
+        provider = layer.dataProvider()
+        provider.addAttributes(list(_fields(specs)))
+        layer.updateFields()
+        features = []
+        for geom, values in rows:
+            feat = QgsFeature(layer.fields())
+            feat.setGeometry(geom)
+            for key, value in values.items():
+                feat[key] = value
+            features.append(feat)
+        provider.addFeatures(features)
+        layer.updateExtents()
+        options = QgsVectorFileWriter.SaveVectorOptions()
+        options.driverName = "GPKG"
+        options.fileEncoding = "UTF-8"
+        options.layerName = layer_name
+        result = QgsVectorFileWriter.writeAsVectorFormatV3(
+            layer, path, context.transformContext(), options
+        )
+        if result[0] != QgsVectorFileWriter.WriterError.NoError:
+            message = result[1] if len(result) > 1 else ""
+            raise QgsProcessingException(_locked_message(path, message))
+
+    @staticmethod
+    def _write_raster(path, array, result, projection):
+        try:
+            write_raster(
+                path,
+                np.where(np.isnan(array), DEFAULT_NODATA, array).astype("float32"),
+                result.window_gt,
+                projection,
+                DEFAULT_NODATA,
+            )
+        except Exception as e:
+            raise QgsProcessingException(_locked_message(path, e)) from e
+
+    def _load(self, path, name, context, style_path=None, **style_options):
+        """Loads a written file into the map when the run finishes, with an
+        optional QML style (post-processor kept alive on self - Processing
+        holds only a weak reference)."""
+        details = QgsProcessingContext.LayerDetails(name, context.project())
+        if style_path is not None:
+            processor = _StylePostProcessor(style_path, **style_options)
+            details.setPostProcessor(processor)
+            self._post_processors.append(processor)
+        context.addLayerToLoadOnCompletion(path, details)
+
+    # ------------------------------------------------------------------
+
     def processAlgorithm(
         self, parameters, context: QgsProcessingContext, feedback: QgsProcessingFeedback
     ):
@@ -425,19 +431,23 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
                 "The DEM is in a geographic CRS (degrees). Areas, volumes and "
                 "lengths need a projected CRS in metres - reproject the DEM first."
             )
-        start = self.parameterAsDouble(parameters, self.LEVEL_FROM, context)
-        raw_to = parameters.get(self.LEVEL_TO)
-        end = (
-            None
-            if _is_null(raw_to)
-            else self.parameterAsDouble(parameters, self.LEVEL_TO, context)
-        )
-        interval = self.parameterAsDouble(parameters, self.LEVEL_INTERVAL, context)
+        level = self.parameterAsDouble(parameters, self.WATER_LEVEL, context)
         mode = MODES[self.parameterAsEnum(parameters, self.MODE, context)]
         smoothing = self.parameterAsInt(parameters, self.SMOOTHING, context)
         min_cells = self.parameterAsDouble(parameters, self.MIN_CELLS, context)
+        wanted = {
+            key: self.parameterAsBool(parameters, key, context)
+            for key, _, _, _ in OUTPUT_CHOICES
+        }
+        if not any(wanted.values()):
+            raise QgsProcessingException("Tick at least one output.")
+        folder = self.parameterAsFileOutput(
+            parameters, self.OUTPUT_FOLDER, context
+        ) or self.parameterAsString(parameters, self.OUTPUT_FOLDER, context)
+        if not folder:
+            raise QgsProcessingException("An output folder is required.")
+        Path(folder).mkdir(parents=True, exist_ok=True)
         try:
-            levels = water_levels(start, end, interval)
             shape, gt, projection, nodata = raster_info(dem_layer.source())
         except GridError as e:
             raise QgsProcessingException(str(e)) from e
@@ -463,8 +473,8 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
         if mode == "all" and seeds:
             feedback.pushInfo("Seed points are only used by the connected option.")
         feedback.pushInfo(
-            f"{len(levels)} level(s) from {min(levels):.3f} to {max(levels):.3f} m, "
-            f"mode: {mode}, window {window[3]} x {window[2]} cells"
+            f"Water level {level:.3f} m, mode: {mode}, window {window[3]} x "
+            f"{window[2]} cells"
         )
 
         try:
@@ -474,7 +484,7 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
                 nodata,
                 window_geotransform(gt, window[0], window[1]),
                 window,
-                levels,
+                level,
                 bounding=bounding,
                 mode=mode,
                 seeds=seeds,
@@ -488,146 +498,116 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
             return {}
         for message in result.warnings:
             feedback.pushWarning(message)
+        feedback.setProgress(50)
 
-        outputs = {}
-        geometry = {}
-        line_sink, line_id = self.parameterAsSink(
-            parameters,
-            self.OUTPUT_LINES,
-            context,
-            _fields(LINE_FIELDS),
-            Qgis.WkbType.MultiLineString,
-            crs,
+        # Geometry (also measured for the CSV and the report)
+        boundary = self._boundary_geometry(result, clip)
+        extents = self._extent_geometries(result, clip)
+        poly_area = sum(g.area() for g in extents)
+        poly_perim = sum(g.length() for g in extents)
+        geometry = (poly_area, poly_perim, len(extents))
+        feedback.pushInfo(
+            f"{len(extents)} water body(ies), {poly_area:.0f} m2, volume "
+            f"{result.volume_m3:.0f} m3, maximum depth {result.max_depth:.2f} m"
         )
-        poly_sink, poly_id = self.parameterAsSink(
-            parameters,
-            self.OUTPUT_POLYGONS,
-            context,
-            _fields(POLYGON_FIELDS),
-            Qgis.WkbType.MultiPolygon,
-            crs,
-        )
-        for i, lv in enumerate(result.levels):
-            feedback.setProgress(int(100 * i / max(len(result.levels), 1)))
-            total_area = total_perim = 0.0
-            count = 0
-            if line_sink is not None and lv.lines:
-                parts = [[QgsPointXY(x, y) for x, y in ring] for ring in lv.lines]
-                geom = QgsGeometry.fromMultiPolylineXY(parts)
-                if clip is not None:
-                    geom = geom.intersection(clip)
-                    if QgsWkbTypes.flatType(geom.wkbType()) not in (
-                        Qgis.WkbType.LineString,
-                        Qgis.WkbType.MultiLineString,
-                    ):
-                        geom.convertGeometryCollectionToSubclass(Qgis.GeometryType.Line)
-                if not geom.isEmpty():
-                    geom.convertToMultiType()
-                    feat = QgsFeature(_fields(LINE_FIELDS))
-                    feat.setGeometry(geom)
-                    feat["level_m"] = round(lv.level, 4)
-                    feat["length_m"] = round(geom.length(), 2)
-                    feat["mode"] = mode
-                    line_sink.addFeature(feat, QgsFeatureSink.Flag.FastInsert)
-            for poly in lv.polygons:
-                rings = [[QgsPointXY(x, y) for x, y in ring] for ring in poly]
-                geom = QgsGeometry.fromPolygonXY(rings).makeValid()
-                if clip is not None:
-                    geom = geom.intersection(clip)
-                if QgsWkbTypes.flatType(geom.wkbType()) not in (
-                    Qgis.WkbType.Polygon,
-                    Qgis.WkbType.MultiPolygon,
-                ):
-                    geom.convertGeometryCollectionToSubclass(Qgis.GeometryType.Polygon)
-                if geom.isEmpty():
-                    continue
-                geom.convertToMultiType()
-                area, perim = geom.area(), geom.length()
-                total_area += area
-                total_perim += perim
-                count += 1
-                if poly_sink is None:
-                    continue
-                feat = QgsFeature(_fields(POLYGON_FIELDS))
-                feat.setGeometry(geom)
-                feat["level_m"] = round(lv.level, 4)
-                feat["area_m2"] = round(area, 2)
-                feat["area_ha"] = round(area / 1e4, 6)
-                feat["perim_m"] = round(perim, 2)
-                feat["n_islands"] = sum(len(part) - 1 for part in geom.asMultiPolygon())
-                feat["lvl_vol_m3"] = round(lv.volume_m3, 2)
-                feat["lvl_area_m2"] = round(lv.area_m2, 2)
-                feat["lvl_maxdep"] = round(lv.max_depth, 3)
-                feat["mode"] = mode
-                poly_sink.addFeature(feat, QgsFeatureSink.Flag.FastInsert)
-            geometry[lv.level] = (total_area, total_perim, count)
-            feedback.pushInfo(
-                f"Level {lv.level:.3f} m: {count} water body(ies), "
-                f"{total_area:.0f} m2, volume {lv.volume_m3:.0f} m3, maximum "
-                f"depth {lv.max_depth:.2f} m"
-            )
-        if line_sink is not None:
-            outputs[self.OUTPUT_LINES] = line_id
-        if poly_sink is not None:
-            outputs[self.OUTPUT_POLYGONS] = poly_id
 
-        top = result.depth_level
-        depth_path = self.parameterAsOutputLayer(parameters, self.OUTPUT_DEPTH, context)
-        if depth_path:
-            depth = result.depth_at(top)
-            self._write_raster(depth_path, depth, result, projection)
-            outputs[self.OUTPUT_DEPTH] = depth_path
-            valid = depth[np.isfinite(depth)]
-            self._register_style(
+        base = Path(folder) / f"inundation_{level_tag(level)}"
+        paths = {
+            key: f"{base}_{suffix}"
+            for key, _, _, suffix in OUTPUT_CHOICES
+            if wanted[key]
+        }
+        lv = f"{level:.2f} m"
+        written = []
+
+        if wanted["SAVE_BOUNDARY"]:
+            rows = []
+            if boundary is not None:
+                rows.append(
+                    (
+                        boundary,
+                        {
+                            "level_m": round(level, 4),
+                            "length_m": round(boundary.length(), 2),
+                            "mode": mode,
+                        },
+                    )
+                )
+            self._write_gpkg(
+                paths["SAVE_BOUNDARY"],
+                "inundation_boundary",
+                LINE_FIELDS,
+                Qgis.WkbType.MultiLineString,
+                crs,
+                rows,
                 context,
-                depth_path,
+            )
+            self._load(paths["SAVE_BOUNDARY"], f"Inundation boundary {lv}", context)
+            written.append(("Inundation boundary (lines)", paths["SAVE_BOUNDARY"]))
+
+        if wanted["SAVE_EXTENT"]:
+            rows = [
+                (
+                    geom,
+                    {
+                        "level_m": round(level, 4),
+                        "area_m2": round(geom.area(), 2),
+                        "area_ha": round(geom.area() / 1e4, 6),
+                        "perim_m": round(geom.length(), 2),
+                        "n_islands": sum(
+                            len(part) - 1 for part in geom.asMultiPolygon()
+                        ),
+                        "mode": mode,
+                    },
+                )
+                for geom in extents
+            ]
+            self._write_gpkg(
+                paths["SAVE_EXTENT"],
+                "inundation_extent",
+                POLYGON_FIELDS,
+                Qgis.WkbType.MultiPolygon,
+                crs,
+                rows,
+                context,
+            )
+            self._load(paths["SAVE_EXTENT"], f"Inundation extent {lv}", context)
+            written.append(("Inundation extent (polygons)", paths["SAVE_EXTENT"]))
+
+        if wanted["SAVE_WSE"]:
+            self._write_raster(
+                paths["SAVE_WSE"], result.water_surface, result, projection
+            )
+            self._load(
+                paths["SAVE_WSE"],
+                f"Water-surface elevation {lv}",
+                context,
+                STYLE_WSE_PATH,
+            )
+            written.append(("Water-surface elevation raster", paths["SAVE_WSE"]))
+
+        if wanted["SAVE_DEPTH"]:
+            depth = result.depth
+            self._write_raster(paths["SAVE_DEPTH"], depth, result, projection)
+            valid = depth[np.isfinite(depth)]
+            self._load(
+                paths["SAVE_DEPTH"],
+                f"Depth {lv}",
+                context,
+                STYLE_DEPTH_PATH,
                 raster_range=(
                     (float(valid.min()), float(valid.max())) if valid.size else None
                 ),
             )
-        wse_path = self.parameterAsOutputLayer(parameters, self.OUTPUT_WSE, context)
-        if wse_path:
-            self._write_raster(
-                wse_path, result.water_surface_at(top), result, projection
-            )
-            outputs[self.OUTPUT_WSE] = wse_path
-            self._register_style(context, wse_path, STYLE_WSE_PATH)
-        folder = self.parameterAsString(parameters, self.OUTPUT_LEVEL_FOLDER, context)
-        if folder and not _is_null(folder):
-            Path(folder).mkdir(parents=True, exist_ok=True)
-            for lv in result.levels:
-                tag = f"{lv.level:.3f}".replace(".", "_").replace("-", "m")
-                self._write_raster(
-                    str(Path(folder) / f"depth_{tag}.tif"),
-                    result.depth_at(lv.level),
-                    result,
-                    projection,
-                )
-                self._write_raster(
-                    str(Path(folder) / f"wse_{tag}.tif"),
-                    result.water_surface_at(lv.level),
-                    result,
-                    projection,
-                )
-            feedback.pushInfo(
-                f"Depth and water-surface rasters for {len(result.levels)} "
-                f"level(s) written to {folder}"
-            )
-            outputs[self.OUTPUT_LEVEL_FOLDER] = folder
-        table_path = self.parameterAsFileOutput(parameters, self.OUTPUT_TABLE, context)
-        if table_path:
-            write_summary_csv(table_path, result, geometry)
-            outputs[self.OUTPUT_TABLE] = table_path
+            written.append(("Depth raster", paths["SAVE_DEPTH"]))
 
-        docx_path = self.parameterAsFileOutput(parameters, self.OUTPUT_DOCX, context)
-        if docx_path:
+        if wanted["SAVE_CSV"]:
+            write_summary_csv(paths["SAVE_CSV"], result, geometry)
+            written.append(("Summary table (CSV)", paths["SAVE_CSV"]))
+        feedback.setProgress(80)
+
+        if wanted["SAVE_REPORT"]:
             feedback.setProgressText("Writing report")
-            levels_text = (
-                f"{levels[0]:.3f} m"
-                if len(levels) == 1
-                else f"{min(levels):.3f} to {max(levels):.3f} m "
-                f"({len(levels)} levels, interval {interval:g} m)"
-            )
             context_info = {
                 "tool": self.displayName(),
                 "version": TOOL_VERSION,
@@ -638,7 +618,6 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
                     "cell_x": abs(gt[1]),
                     "cell_y": abs(gt[5]),
                 },
-                "levels_text": levels_text,
                 "bounding": (
                     None
                     if bounding is None
@@ -650,34 +629,19 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
                 },
                 "smoothing": smoothing,
                 "min_cells": min_cells,
-                "outputs": [
-                    (label, _describe_destination(outputs.get(key)))
-                    for key, label in (
-                        (self.OUTPUT_LINES, "Inundation boundary (lines)"),
-                        (self.OUTPUT_POLYGONS, "Inundation extent (polygons)"),
-                        (self.OUTPUT_DEPTH, "Depth at the highest level"),
-                        (
-                            self.OUTPUT_WSE,
-                            "Water-surface elevation at the highest level",
-                        ),
-                        (self.OUTPUT_LEVEL_FOLDER, "Rasters for every level (folder)"),
-                        (self.OUTPUT_TABLE, "Summary per level (CSV)"),
-                    )
-                    if outputs.get(key)
-                ]
-                + [("This report", docx_path)],
+                "outputs": written + [("This report", paths["SAVE_REPORT"])],
                 "warnings": list(result.warnings),
             }
             try:
                 write_report_docx(
-                    docx_path,
+                    paths["SAVE_REPORT"],
                     result,
                     context_info,
                     geometry,
                     bounding=bounding,
                     seeds_xy=seeds if mode == "connected" else (),
                 )
-                outputs[self.OUTPUT_DOCX] = docx_path
+                written.append(("Inundation report (Word)", paths["SAVE_REPORT"]))
             except ImportError:
                 feedback.pushWarning(
                     "The Word report needs the python-docx package, which is not "
@@ -687,5 +651,8 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
                 )
             except Exception as e:  # report failure must not lose the results
                 feedback.pushWarning(f"The Word report could not be written: {e}")
+
+        for label, path in written:
+            feedback.pushInfo(f"{label}: {path}")
         feedback.setProgress(100)
-        return outputs
+        return {self.OUTPUT_FOLDER: folder}
