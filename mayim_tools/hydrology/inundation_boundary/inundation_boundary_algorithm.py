@@ -6,6 +6,7 @@ Thin wrapper - all real logic lives in core.py (zero QGIS dependency,
 independently testable; see tests/test_inundation_boundary_core.py).
 """
 
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -58,8 +59,9 @@ from .core import (
     water_levels,
 )
 from .export import write_summary_csv
+from .report import write_report_docx
 
-TOOL_VERSION = "0.2.0"
+TOOL_VERSION = "0.3.0"
 
 STYLE_DEPTH_PATH = STYLES_DIR / STYLE_DEPTH  # stage-storage "Depth at top stage"
 STYLE_WSE_PATH = (
@@ -105,6 +107,14 @@ def _fields(specs) -> QgsFields:
     return fields
 
 
+def _describe_destination(dest) -> str:
+    """Readable location of a Processing output."""
+    text = str(dest or "")
+    if text.startswith("memory:") or "TEMPORARY_OUTPUT" in text or not text:
+        return "Temporary layer (not saved)"
+    return text
+
+
 def _is_null(value) -> bool:
     return value is None or str(value) in ("", "NULL")
 
@@ -125,6 +135,7 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
     OUTPUT_WSE = "OUTPUT_WSE"
     OUTPUT_TABLE = "OUTPUT_TABLE"
     OUTPUT_LEVEL_FOLDER = "OUTPUT_LEVEL_FOLDER"
+    OUTPUT_DOCX = "OUTPUT_DOCX"
 
     def icon(self):
         return QIcon(
@@ -184,7 +195,10 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
             "over it together with the DEM); optionally both rasters for every "
             "level of a range, written to a folder as depth_<level>.tif and "
             "wse_<level>.tif; and a summary CSV per level (area and volume on "
-            "the DEM cells, and the polygon area and perimeter). The rasters "
+            "the DEM cells, and the polygon area and perimeter); and an optional "
+            "Word report with the method, settings, results per level, depth "
+            "classes, a plan of the extent and the level-area-volume curves. "
+            "The rasters "
             "follow the DEM cells, so their edge is stepped; the smoothed "
             "polygons show the interpolated water's edge.\n"
             "\n"
@@ -315,6 +329,15 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
                 createByDefault=False,
             )
         )
+        self.addParameter(
+            QgsProcessingParameterFileDestination(
+                self.OUTPUT_DOCX,
+                "Inundation report (Word)",
+                fileFilter="Word documents (*.docx)",
+                optional=True,
+                createByDefault=False,
+            )
+        )
 
     # ------------------------------------------------------------------
 
@@ -419,9 +442,9 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
         except GridError as e:
             raise QgsProcessingException(str(e)) from e
 
-        clip, bounding = self._read_bounding(
-            self.parameterAsSource(parameters, self.BOUNDING, context), crs, context
-        )
+        bounding_source = self.parameterAsSource(parameters, self.BOUNDING, context)
+        seed_source = self.parameterAsSource(parameters, self.SEEDS, context)
+        clip, bounding = self._read_bounding(bounding_source, crs, context)
         if bounding is not None:
             window = polygon_window(bounding, gt, shape, pad=2)
             if window is None:
@@ -436,9 +459,7 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
                     "cells) is processed, which may be slow. A bounding polygon "
                     "is recommended."
                 )
-        seeds = self._read_seeds(
-            self.parameterAsSource(parameters, self.SEEDS, context), crs, context
-        )
+        seeds = self._read_seeds(seed_source, crs, context)
         if mode == "all" and seeds:
             feedback.pushInfo("Seed points are only used by the connected option.")
         feedback.pushInfo(
@@ -597,5 +618,74 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
         if table_path:
             write_summary_csv(table_path, result, geometry)
             outputs[self.OUTPUT_TABLE] = table_path
+
+        docx_path = self.parameterAsFileOutput(parameters, self.OUTPUT_DOCX, context)
+        if docx_path:
+            feedback.setProgressText("Writing report")
+            levels_text = (
+                f"{levels[0]:.3f} m"
+                if len(levels) == 1
+                else f"{min(levels):.3f} to {max(levels):.3f} m "
+                f"({len(levels)} levels, interval {interval:g} m)"
+            )
+            context_info = {
+                "tool": self.displayName(),
+                "version": TOOL_VERSION,
+                "run_time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "dem": {
+                    "path": dem_layer.source(),
+                    "crs": f"{crs.authid()} - {crs.description()}",
+                    "cell_x": abs(gt[1]),
+                    "cell_y": abs(gt[5]),
+                },
+                "levels_text": levels_text,
+                "bounding": (
+                    None
+                    if bounding is None
+                    else f"{bounding_source.sourceName()} "
+                    f"({bounding_source.featureCount()} feature(s))"
+                ),
+                "seeds": {
+                    "layer": None if seed_source is None else seed_source.sourceName()
+                },
+                "smoothing": smoothing,
+                "min_cells": min_cells,
+                "outputs": [
+                    (label, _describe_destination(outputs.get(key)))
+                    for key, label in (
+                        (self.OUTPUT_LINES, "Inundation boundary (lines)"),
+                        (self.OUTPUT_POLYGONS, "Inundation extent (polygons)"),
+                        (self.OUTPUT_DEPTH, "Depth at the highest level"),
+                        (
+                            self.OUTPUT_WSE,
+                            "Water-surface elevation at the highest level",
+                        ),
+                        (self.OUTPUT_LEVEL_FOLDER, "Rasters for every level (folder)"),
+                        (self.OUTPUT_TABLE, "Summary per level (CSV)"),
+                    )
+                    if outputs.get(key)
+                ]
+                + [("This report", docx_path)],
+                "warnings": list(result.warnings),
+            }
+            try:
+                write_report_docx(
+                    docx_path,
+                    result,
+                    context_info,
+                    geometry,
+                    bounding=bounding,
+                    seeds_xy=seeds if mode == "connected" else (),
+                )
+                outputs[self.OUTPUT_DOCX] = docx_path
+            except ImportError:
+                feedback.pushWarning(
+                    "The Word report needs the python-docx package, which is not "
+                    "installed in QGIS's Python. Install it from the OSGeo4W Shell "
+                    "with: python -m pip install python-docx. All other outputs "
+                    "were written."
+                )
+            except Exception as e:  # report failure must not lose the results
+                feedback.pushWarning(f"The Word report could not be written: {e}")
         feedback.setProgress(100)
         return outputs

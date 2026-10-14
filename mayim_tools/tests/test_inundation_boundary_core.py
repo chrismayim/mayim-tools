@@ -324,3 +324,64 @@ def test_seed_above_level_is_explained():
     assert res.levels[0].wet_cells == 0
     assert res.seed_ground == [10.0]
     assert any("ground at the seed point" in w for w in res.warnings)
+
+
+# ---------------------------------------------------------------------------
+# Word report
+# ---------------------------------------------------------------------------
+
+
+def test_depth_classes_sum_to_area():
+    from mayim_tools.hydrology.inundation_boundary.report import depth_classes
+
+    z, _ = _cone()
+    res = run_inundation(z, -9999.0, GT, (0, 0, *z.shape), [103.0])
+    classes = depth_classes(res.depth_at(103.0), 1.0, res.weights)
+    assert sum(c["area_m2"] for c in classes) == pytest.approx(res.levels[0].area_m2)
+    assert sum(c["pct"] for c in classes) == pytest.approx(100.0)
+    assert classes[-1]["to_m"] >= 3.0 - 1e-9
+
+
+def test_report_docx(tmp_path):
+    pytest.importorskip("docx")
+    pytest.importorskip("matplotlib")
+    import docx
+
+    from mayim_tools.hydrology.inundation_boundary.report import write_report_docx
+
+    z, centre = _cone()
+    cx, cy = _centre_xy(centre)
+    bound = [[[(cx - 40, cy - 40), (cx + 40, cy - 40), (cx + 40, cy + 40),
+               (cx - 40, cy + 40), (cx - 40, cy - 40)]]]  # fmt: skip
+    levels = water_levels(99.5, 103.0, 0.5)
+    res = run_inundation(
+        z, -9999.0, GT, (0, 0, *z.shape), levels, bounding=bound,
+        mode="connected", seeds=[(cx, cy)],
+    )  # fmt: skip
+    geometry = {lv.level: (lv.area_m2, 100.0, len(lv.polygons)) for lv in res.levels}
+    path = tmp_path / "report.docx"
+    write_report_docx(
+        str(path),
+        res,
+        {
+            "tool": "DEM Inundation Boundary",
+            "version": "0.3.0",
+            "dem": {"path": "dem.tif", "crs": "EPSG:32735", "cell_x": 1, "cell_y": 1},
+            "levels_text": "99.500 to 103.000 m",
+            "bounding": "box (1 feature(s))",
+            "seeds": {"layer": "seed"},
+            "outputs": [("Summary per level (CSV)", "x.csv")],
+            "warnings": res.warnings,
+        },
+        geometry,
+        bounding=bound,
+        seeds_xy=[(cx, cy)],
+    )
+    doc = docx.Document(str(path))
+    text = "\n".join(p.text for p in doc.paragraphs)
+    assert "DEM Inundation Boundary Assessment" in text
+    assert "103.000 m" in text
+    assert len(doc.inline_shapes) == 3  # plan, level-area-volume, depth classes
+    cells = [c.text for t in doc.tables for r in t.rows for c in r.cells]
+    assert not any("," in c and c.replace(",", "").isdigit() for c in cells)
+    assert any(w for w in res.warnings if "nothing is inundated" in w)

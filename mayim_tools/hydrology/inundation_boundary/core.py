@@ -84,6 +84,7 @@ class InundationResult:
     z: np.ndarray | None = None  # DEM window (float64)
     fill: np.ndarray | None = None  # inundation level per cell
     seed_ground: list[float] = field(default_factory=list)
+    weights: np.ndarray | None = None  # share of each cell in the bounding area
 
     def wet_at(self, level: float) -> np.ndarray:
         return self.fill < level
@@ -365,4 +366,5 @@ def run_inundation(
         z=z,
         fill=fill,
         seed_ground=seed_ground,
+        weights=weights,
     )
