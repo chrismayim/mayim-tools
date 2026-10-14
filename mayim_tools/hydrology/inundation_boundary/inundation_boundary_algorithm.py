@@ -27,6 +27,7 @@ from qgis.core import (
     QgsProcessingParameterFeatureSink,
     QgsProcessingParameterFeatureSource,
     QgsProcessingParameterFileDestination,
+    QgsProcessingParameterFolderDestination,
     QgsProcessingParameterNumber,
     QgsProcessingParameterRasterDestination,
     QgsProcessingParameterRasterLayer,
@@ -58,7 +59,12 @@ from .core import (
 )
 from .export import write_summary_csv
 
-TOOL_VERSION = "0.1.0"
+TOOL_VERSION = "0.2.0"
+
+STYLE_DEPTH_PATH = STYLES_DIR / STYLE_DEPTH  # stage-storage "Depth at top stage"
+STYLE_WSE_PATH = (
+    Path(__file__).resolve().parent / "styles" / "water_surface_elevation.qml"
+)
 
 MODE_OPTIONS = [
     "All ground below the level (static bathtub)",
@@ -116,7 +122,9 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
     OUTPUT_LINES = "OUTPUT_LINES"
     OUTPUT_POLYGONS = "OUTPUT_POLYGONS"
     OUTPUT_DEPTH = "OUTPUT_DEPTH"
+    OUTPUT_WSE = "OUTPUT_WSE"
     OUTPUT_TABLE = "OUTPUT_TABLE"
+    OUTPUT_LEVEL_FOLDER = "OUTPUT_LEVEL_FOLDER"
 
     def icon(self):
         return QIcon(
@@ -130,7 +138,7 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
         return "inundation_boundary"
 
     def displayName(self):
-        return "DEM inundation boundary"
+        return "DEM Inundation Boundary"
 
     def group(self):
         return "Hydrological Tools"
@@ -141,7 +149,7 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
     def shortHelpString(self):
         glossary = "\n".join(f"  {n}: {d}" for n, _, d in POLYGON_FIELDS)
         return (
-            f"DEM inundation boundary (version {TOOL_VERSION})\n"
+            f"DEM Inundation Boundary (version {TOOL_VERSION})\n"
             "\n"
             "PURPOSE:\tThe extent of water standing at a given elevation "
             "(bathtub inundation) - for one level, or a range of levels at an "
@@ -170,9 +178,20 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
             "dropped.\n"
             "\n"
             "OUTPUTS:\tBoundary polylines and inundation polygons (one feature "
-            "per water body per level), the depth raster at the highest level, "
-            "and a summary CSV per level (area and volume on the DEM cells, and "
-            "the polygon area and perimeter).\n"
+            "per water body per level); the depth and water-surface elevation "
+            "rasters at the highest level (the water-surface raster holds the "
+            "level on every inundated cell - drape a cross-section profile "
+            "over it together with the DEM); optionally both rasters for every "
+            "level of a range, written to a folder as depth_<level>.tif and "
+            "wse_<level>.tif; and a summary CSV per level (area and volume on "
+            "the DEM cells, and the polygon area and perimeter). The rasters "
+            "follow the DEM cells, so their edge is stepped; the smoothed "
+            "polygons show the interpolated water's edge.\n"
+            "\n"
+            "SEED POINTS:\tWater spreads outward from the seed cell, so a level "
+            "at or below the ground at the seed floods nothing. Place seeds on "
+            "the lowest ground of the water body (channel bed, dam basin), not "
+            "on a bank.\n"
             "\n"
             "LIMITATIONS:\tA level-pool (bathtub) extent - no flow, no "
             "hydraulic gradient, no structures below DEM resolution. For "
@@ -272,6 +291,22 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
+            QgsProcessingParameterRasterDestination(
+                self.OUTPUT_WSE,
+                "Water-surface elevation at the highest level",
+                optional=True,
+                createByDefault=False,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterFolderDestination(
+                self.OUTPUT_LEVEL_FOLDER,
+                "Depth and water-surface rasters for every level (folder)",
+                optional=True,
+                createByDefault=False,
+            )
+        )
+        self.addParameter(
             QgsProcessingParameterFileDestination(
                 self.OUTPUT_TABLE,
                 "Summary per level (CSV)",
@@ -283,16 +318,26 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
 
     # ------------------------------------------------------------------
 
-    def _register_style(self, context, dest_id, **options):
+    def _register_style(self, context, dest_id, style_path=STYLE_DEPTH_PATH, **options):
         """Loads the stage-storage 'Depth at top stage' style onto the depth
         raster (ramp stretched to this run's depths). The post-processor is
         kept alive on self - Processing holds only a weak reference."""
         if not dest_id or not context.willLoadLayerOnCompletion(dest_id):
             return
         details = context.layerToLoadOnCompletionDetails(dest_id)
-        processor = _StylePostProcessor(STYLES_DIR / STYLE_DEPTH, **options)
+        processor = _StylePostProcessor(style_path, **options)
         details.setPostProcessor(processor)
         self._post_processors.append(processor)
+
+    @staticmethod
+    def _write_raster(path, array, result, projection):
+        write_raster(
+            path,
+            np.where(np.isnan(array), DEFAULT_NODATA, array).astype("float32"),
+            result.window_gt,
+            projection,
+            DEFAULT_NODATA,
+        )
 
     def _transform(self, source, crs, context):
         if source is None or source.sourceCrs() == crs:
@@ -505,18 +550,13 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
         if poly_sink is not None:
             outputs[self.OUTPUT_POLYGONS] = poly_id
 
+        top = result.depth_level
         depth_path = self.parameterAsOutputLayer(parameters, self.OUTPUT_DEPTH, context)
         if depth_path:
-            array = np.where(np.isnan(result.depth), DEFAULT_NODATA, result.depth)
-            write_raster(
-                depth_path,
-                array.astype("float32"),
-                result.window_gt,
-                projection,
-                DEFAULT_NODATA,
-            )
+            depth = result.depth_at(top)
+            self._write_raster(depth_path, depth, result, projection)
             outputs[self.OUTPUT_DEPTH] = depth_path
-            valid = result.depth[np.isfinite(result.depth)]
+            valid = depth[np.isfinite(depth)]
             self._register_style(
                 context,
                 depth_path,
@@ -524,6 +564,35 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
                     (float(valid.min()), float(valid.max())) if valid.size else None
                 ),
             )
+        wse_path = self.parameterAsOutputLayer(parameters, self.OUTPUT_WSE, context)
+        if wse_path:
+            self._write_raster(
+                wse_path, result.water_surface_at(top), result, projection
+            )
+            outputs[self.OUTPUT_WSE] = wse_path
+            self._register_style(context, wse_path, STYLE_WSE_PATH)
+        folder = self.parameterAsString(parameters, self.OUTPUT_LEVEL_FOLDER, context)
+        if folder and not _is_null(folder):
+            Path(folder).mkdir(parents=True, exist_ok=True)
+            for lv in result.levels:
+                tag = f"{lv.level:.3f}".replace(".", "_").replace("-", "m")
+                self._write_raster(
+                    str(Path(folder) / f"depth_{tag}.tif"),
+                    result.depth_at(lv.level),
+                    result,
+                    projection,
+                )
+                self._write_raster(
+                    str(Path(folder) / f"wse_{tag}.tif"),
+                    result.water_surface_at(lv.level),
+                    result,
+                    projection,
+                )
+            feedback.pushInfo(
+                f"Depth and water-surface rasters for {len(result.levels)} "
+                f"level(s) written to {folder}"
+            )
+            outputs[self.OUTPUT_LEVEL_FOLDER] = folder
         table_path = self.parameterAsFileOutput(parameters, self.OUTPUT_TABLE, context)
         if table_path:
             write_summary_csv(table_path, result, geometry)

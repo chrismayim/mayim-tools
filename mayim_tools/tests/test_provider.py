@@ -227,7 +227,7 @@ def test_provider_registers_seven_algorithms() -> None:
             "hydrological_tools",
         ),
         "inundation_boundary": (
-            "DEM inundation boundary",
+            "DEM Inundation Boundary",
             "Hydrological Tools",
             "hydrological_tools",
         ),

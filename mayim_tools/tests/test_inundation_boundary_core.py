@@ -300,3 +300,27 @@ def test_summary_csv(tmp_path):
     assert rows[1]["mean_depth_m"] == "1.000"
     assert rows[1]["n_polygons"] == "2"
     assert "," not in rows[1]["area_m2"]  # no thousands separators
+
+
+def test_per_level_depth_and_water_surface():
+    z = _two_pits()
+    z[12, 12] = 7.5
+    res = run_inundation(z, -9999.0, GT, (0, 0, *z.shape), [8.5, 9.0])
+    d85, w85 = res.depth_at(8.5), res.water_surface_at(8.5)
+    assert np.nanmax(d85) == pytest.approx(1.0)
+    assert np.count_nonzero(np.isfinite(d85)) == 400
+    assert np.nanmin(w85) == np.nanmax(w85) == pytest.approx(8.5)
+    # water surface only where depth is defined
+    assert np.array_equal(np.isfinite(w85), np.isfinite(d85))
+    assert np.array_equal(res.depth_at(9.0), res.depth, equal_nan=True)
+
+
+def test_seed_above_level_is_explained():
+    z = _two_pits()
+    bank = (GT[0] + 5.5, GT[3] - 5.5)  # on the 10 m flat, not in a pit
+    res = run_inundation(
+        z, -9999.0, GT, (0, 0, *z.shape), [9.0], mode="connected", seeds=[bank]
+    )
+    assert res.levels[0].wet_cells == 0
+    assert res.seed_ground == [10.0]
+    assert any("ground at the seed point" in w for w in res.warnings)

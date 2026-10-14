@@ -81,6 +81,21 @@ class InundationResult:
     mode: str
     n_seeds: int
     warnings: list[str] = field(default_factory=list)
+    z: np.ndarray | None = None  # DEM window (float64)
+    fill: np.ndarray | None = None  # inundation level per cell
+    seed_ground: list[float] = field(default_factory=list)
+
+    def wet_at(self, level: float) -> np.ndarray:
+        return self.fill < level
+
+    def depth_at(self, level: float) -> np.ndarray:
+        """Water depth (float32, NaN where dry) at ``level``."""
+        return np.where(self.wet_at(level), level - self.z, np.nan).astype(np.float32)
+
+    def water_surface_at(self, level: float) -> np.ndarray:
+        """Water-surface elevation (float32, NaN where dry): ``level`` on
+        every inundated cell."""
+        return np.where(self.wet_at(level), level, np.nan).astype(np.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -286,6 +301,7 @@ def run_inundation(
     weights = np.where(domain, weights, 0.0)
     n_seeds = 0
     seed_list: list = []
+    seed_ground: list[float] = []
     if mode == "connected":
         seed_list, outside = seed_cells(seeds, window_gt, domain)
         if outside:
@@ -303,6 +319,7 @@ def run_inundation(
                 f"({float(z[seed_list[0]]):.3f} m) is used as the seed."
             )
         n_seeds = len(seed_list)
+        seed_ground = [float(z[c]) for c in seed_list]
     fill = fill_field(z, domain, mode, seed_list, is_canceled)
 
     zmin = float(z[domain].min())
@@ -315,10 +332,19 @@ def run_inundation(
         stats = level_statistics(z, fill, weights, h, cell_area)
         results.append(LevelResult(h, rings, polygons, **stats))
         if stats["wet_cells"] == 0:
-            warnings.append(
-                f"Level {h:.3f} m: nothing is inundated (lowest ground "
-                f"{zmin:.3f} m)."
-            )
+            if seed_ground and h <= min(seed_ground):
+                warnings.append(
+                    f"Level {h:.3f} m: nothing is inundated - the level is not "
+                    "above the ground at the seed point(s) (lowest seed cell "
+                    f"{min(seed_ground):.3f} m; lowest ground {zmin:.3f} m). "
+                    "Water spreads from the seed, so place it on the lowest "
+                    "ground of the water body (e.g. the channel bed)."
+                )
+            else:
+                warnings.append(
+                    f"Level {h:.3f} m: nothing is inundated (lowest ground "
+                    f"{zmin:.3f} m)."
+                )
     if max(levels) >= zmax:
         warnings.append(
             f"The highest level ({max(levels):.3f} m) is at or above the highest "
@@ -336,4 +362,7 @@ def run_inundation(
         mode=mode,
         n_seeds=n_seeds,
         warnings=warnings,
+        z=z,
+        fill=fill,
+        seed_ground=seed_ground,
     )
