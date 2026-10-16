@@ -283,7 +283,7 @@ def test_summary_csv(tmp_path):
     res = run_inundation(z, -9999.0, GT, (0, 0, *z.shape), 9.0)
     path = tmp_path / "summary.csv"
     write_summary_csv(str(path), res, (401.2, 80.4, 2))
-    with open(path, encoding="utf-8") as f:
+    with open(path, encoding="utf-8-sig") as f:
         rows = list(csv.DictReader(f))
     assert len(rows) == 1
     row = rows[0]
@@ -293,8 +293,9 @@ def test_summary_csv(tmp_path):
     assert row["mean_depth_m"] == "1.000"
     assert row["n_polygons"] == "2"
     assert "," not in row["area_m2"]  # no thousands separators
+    assert path.read_bytes().startswith(b"\xef\xbb\xbf")  # UTF-8 with BOM
     write_summary_csv(str(path), res)
-    with open(path, encoding="utf-8") as f:
+    with open(path, encoding="utf-8-sig") as f:
         assert next(csv.DictReader(f))["n_polygons"] == ""
 
 
@@ -348,13 +349,27 @@ def test_report_docx(tmp_path):
     )
     doc = docx.Document(str(path))
     text = "\n".join(p.text for p in doc.paragraphs)
-    assert "DEM Inundation Boundary Assessment" in text
-    assert "103.000 m" in text
+    assert "DEM Inundation Boundary" in text
+    assert "103.00 m" in text
     assert "range" not in text.lower()
     assert len(doc.inline_shapes) == 2  # plan, depth distribution
     cells = [c.text for t in doc.tables for r in t.rows for c in r.cells]
-    assert "Water level" in cells and "103.000 m" in cells
+    assert "Water level" in cells and "103.00 m" in cells
     assert not any("," in c and c.replace(",", "").isdigit() for c in cells)
+    assert "None" not in cells and "nan" not in cells
+    # Mayim house style: heading font and colour, table header shading
+    h1 = doc.styles["Heading 1"].font
+    assert h1.name == "Arial" and h1.all_caps and str(h1.color.rgb) == "0F0F36"
+    assert doc.styles["Normal"].font.name == "Arial"
+    header_xml = doc.tables[0].rows[0].cells[0]._tc.xml
+    assert "ADADCC" in header_xml
+    # parameter table: three columns, Parameter | Value | Definition
+    params = next(
+        t for t in doc.tables if t.rows[0].cells[0].text.startswith("Parameter")
+    )
+    assert len(params.columns) == 3
+    # figures at 16.5 cm
+    assert all(abs(shape.width.cm - 16.5) < 0.01 for shape in doc.inline_shapes)
 
 
 def test_report_dry_level(tmp_path):

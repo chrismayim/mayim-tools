@@ -1,4 +1,5 @@
-"""CSV writer for the inundation boundary tool (no QGIS dependency)."""
+"""CSV writer for the inundation boundary tool (no QGIS dependency). UTF-8
+with BOM, so Excel shows units correctly (Mayim output standard)."""
 
 from __future__ import annotations
 
@@ -25,7 +26,7 @@ def write_summary_csv(path: str, result: InundationResult, geometry=None) -> Non
     (inside the bounding polygon); ``geometry`` is (polygon area, perimeter,
     number of polygons) measured on the clipped output polygons, if given."""
     g = geometry
-    with open(path, "w", newline="", encoding="utf-8") as f:
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.DictWriter(f, fieldnames=SUMMARY_FIELDS)
         writer.writeheader()
         writer.writerow(

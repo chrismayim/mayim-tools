@@ -23,6 +23,7 @@ C_INK = "#0b0b0b"
 C_INK_2 = "#52514e"
 C_GRID = "#e4e3df"
 FIG_WIDTH_CM = 16.0
+HOUSE_FIG_WIDTH_CM = 16.5  # Mayim house figure width
 
 
 def format_value(value, fmt, scale) -> str:
@@ -67,18 +68,90 @@ def png(fig) -> io.BytesIO:
     return buf
 
 
-class Doc:
-    """Thin wrapper keeping table/figure numbering."""
+# Mayim house text style (opt-in with Doc(house_style=True)):
+#   normal text   Arial 10 pt black
+#   headings      Arial 12 pt bold, #0F0F36, all caps   (heading levels 1-2)
+#   sub-headings  Arial 10 pt bold, #0F0F36             (heading level 3+, labels)
+#   captions      Arial 9 pt italic (table and figure headings)
+HOUSE_FONT = "Arial"
+HOUSE_HEADING_RGB = "0F0F36"
+HOUSE_TEXT_RGB = "000000"
+HOUSE_TABLE_HEADER = "ADADCC"  # table header row shading
 
-    def __init__(self):
+
+def _set_style_font(style, name, size_pt, bold=None, italic=None, rgb=None, caps=None):
+    """Sets a style's font explicitly for every script (ascii, hAnsi,
+    east-Asian, complex) and drops theme-font links, so Word shows exactly
+    this font rather than the theme's."""
+    from docx.oxml.ns import qn
+    from docx.shared import Pt, RGBColor
+
+    font = style.font
+    font.name = name
+    font.size = Pt(size_pt)
+    if bold is not None:
+        font.bold = bold
+    if italic is not None:
+        font.italic = italic
+    if caps is not None:
+        font.all_caps = caps
+    if rgb is not None:
+        font.color.rgb = RGBColor.from_string(rgb)
+        color = style.element.rPr.find(qn("w:color"))
+        if color is not None:
+            for attr in ("w:themeColor", "w:themeShade", "w:themeTint"):
+                color.attrib.pop(qn(attr), None)
+    r_fonts = style.element.rPr.find(qn("w:rFonts"))
+    for attr in ("w:asciiTheme", "w:hAnsiTheme", "w:eastAsiaTheme", "w:cstheme"):
+        r_fonts.attrib.pop(qn(attr), None)
+    for attr in ("w:ascii", "w:hAnsi", "w:eastAsia", "w:cs"):
+        r_fonts.set(qn(attr), name)
+
+
+class Doc:
+    """Thin wrapper keeping table/figure numbering. With house_style=True
+    the Mayim house text style above is applied and figures are placed at
+    the house figure width (16.5 cm)."""
+
+    def __init__(self, house_style: bool = False):
         from docx import Document
         from docx.shared import Pt
 
         self.doc = Document()
+        self.house_style = house_style
         normal = self.doc.styles["Normal"]
         normal.font.size = Pt(10)
+        if house_style:
+            self._apply_house_style()
         self.n_table = 0
         self.n_figure = 0
+
+    def _apply_house_style(self):
+        styles = self.doc.styles
+        _set_style_font(styles["Normal"], HOUSE_FONT, 10, rgb=HOUSE_TEXT_RGB)
+        for level in (1, 2):
+            _set_style_font(
+                styles[f"Heading {level}"],
+                HOUSE_FONT,
+                12,
+                bold=True,
+                italic=False,
+                rgb=HOUSE_HEADING_RGB,
+                caps=True,
+            )
+        for level in (3, 4):
+            _set_style_font(
+                styles[f"Heading {level}"],
+                HOUSE_FONT,
+                10,
+                bold=True,
+                italic=False,
+                rgb=HOUSE_HEADING_RGB,
+                caps=False,
+            )
+        caption = styles["Caption"]
+        _set_style_font(caption, HOUSE_FONT, 9, bold=False, italic=True)
+        caption.font.color.rgb = None
 
     def heading(self, text, level):
         self.doc.add_heading(text, level=level)
@@ -92,7 +165,13 @@ class Doc:
 
     def label(self, text):
         p = self.doc.add_paragraph()
-        p.add_run(text).bold = True
+        run = p.add_run(text)
+        run.bold = True
+        if self.house_style:
+            from docx.shared import RGBColor
+
+            run.font.color.rgb = RGBColor.from_string(HOUSE_HEADING_RGB)
+            p.paragraph_format.keep_with_next = True
         return p
 
     def bullet(self, text):
@@ -110,6 +189,14 @@ class Doc:
         else:
             self.n_figure += 1
             n = self.n_figure
+        if self.house_style:
+            p = self.doc.add_paragraph(style="Caption")
+            run = p.add_run(f"{kind} {n}: {text}")
+            run.italic = True
+            run.font.size = Pt(9)
+            if kind == "Table":  # table headings sit above their table
+                p.paragraph_format.keep_with_next = True
+            return p
         p = self.doc.add_paragraph()
         run = p.add_run(f"{kind} {n}: {text}")
         run.italic = True
@@ -142,7 +229,7 @@ class Doc:
             run = cell.paragraphs[0].add_run(h)
             run.bold = True
             run.font.size = Pt(9)
-            shade(cell, "D9E2F3")
+            shade(cell, HOUSE_TABLE_HEADER if self.house_style else "D9E2F3")
         for r_i, row in enumerate(rows):
             cells = t.add_row().cells
             if r_i in group_rows:
@@ -167,8 +254,12 @@ class Doc:
         self.doc.add_paragraph()
         return t
 
-    def picture(self, stream, caption):
+    def picture(self, stream, caption, width_cm=None):
         from docx.shared import Cm
 
-        self.doc.add_picture(stream, width=Cm(FIG_WIDTH_CM))
+        if width_cm is None:
+            width_cm = HOUSE_FIG_WIDTH_CM if self.house_style else FIG_WIDTH_CM
+        self.doc.add_picture(stream, width=Cm(width_cm))
+        if self.house_style:
+            self.doc.paragraphs[-1].paragraph_format.keep_with_next = True
         self.caption("Figure", caption)

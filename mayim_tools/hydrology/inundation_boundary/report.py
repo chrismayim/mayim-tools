@@ -1,10 +1,12 @@
-"""Word (.docx) report for the DEM Inundation Boundary tool.
+"""Word (.docx) report for the DEM Inundation Boundary tool, in the Mayim
+report and figure standard (Doc(house_style=True), ChartStyle figures at
+16.5 cm, map composed like the Catchment Delineation layout map).
 
 Zero QGIS dependency. Needs python-docx and matplotlib (both imported
 lazily, so the rest of the tool works without them). Figures use
 matplotlib's object API (no pyplot), which is safe on QGIS's Processing
-worker thread. Document and chart helpers are shared with the other
-Mayim Tools reports (mayim_tools/_common/docx_report.py).
+worker thread. The layout map is rendered by QGIS in the wrapper (a
+PlanMapFn); without it a simplified plan is drawn with matplotlib.
 
 No thousands separators anywhere in the report.
 """
@@ -12,43 +14,37 @@ No thousands separators anywhere in the report.
 from __future__ import annotations
 
 import io
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 import numpy as np
 
-from mayim_tools._common.docx_report import (
-    C_BLUE,
-    C_INK,
-    C_INK_2,
-    C_ORANGE,
-    Doc,
-    new_figure,
-    png,
-    style_axes,
+from mayim_tools._common.docx_report import Doc
+from mayim_tools._common.report_figures import CHART_COLOURS, CHART_INK, ChartStyle
+from mayim_tools.hydrology.catchment_delineation.report import (
+    OSM_ATTRIBUTION,
+    PLAN_DPI,
+    PLAN_PLOT_WIDTH_CM,
+    PlanMap,
+    _figure_plan_rendered,
+    _north_arrow,
+    _plan_height_cm,
+    _scale_bar,
 )
 
 from .core import InundationResult
 
-REPORT_TITLE = "DEM Inundation Boundary Assessment"
+REPORT_TITLE = "DEM Inundation Boundary"
+
+C_RED, C_AMBER, C_YELLOW, C_GREEN, C_BLUE, C_CYAN, C_MAGENTA = CHART_COLOURS
+
+# (result, plot width in cm, dpi) -> PlanMap or None, supplied by the QGIS
+# wrapper; without it the plan is drawn with matplotlib.
+PlanMapFn = Callable[[InundationResult, float, float], "PlanMap | None"]
 
 MODE_TEXT = {
     "all": "all ground below the level (static bathtub, separate hollows included)",
     "connected": "only ground connected to the seed point(s) below the level",
 }
-
-# (quantity, symbol (unit), definition / equation)
-DEFINITIONS = [
-    ("Water level", "h (m)", "Elevation of the water surface, in the DEM's vertical datum; the same everywhere (level pool)."),
-    ("Inundation level", "h_i (m)", "Level at which a cell first floods: its ground elevation (all-ground option), or the lowest of the highest points along the best path from a seed (connected option)."),
-    ("Wet cell", "-", "Cell inside the bounding area with h_i < h."),
-    ("Cell weight", "w (-)", "Fraction of the cell inside the bounding polygon (1 for interior cells, and for every cell without a bounding polygon)."),
-    ("Inundated area", "A(h) (m²)", "A(h) = Σ w_i a over wet cells, with a the cell area."),
-    ("Volume", "V(h) (m³)", "V(h) = Σ w_i a (h - z_i) over wet cells (prism method, exact for the DEM)."),
-    ("Depth", "d (m)", "d = h - z, water depth over a wet cell."),
-    ("Mean depth", "d_m (m)", "d_m = V(h) / A(h)."),
-    ("Polygon area", "(m²)", "Area of the smoothed inundation polygons, after clipping to the bounding polygon. Differs slightly from A(h), which counts whole cells."),
-    ("Perimeter", "(m)", "Length of all polygon rings, including the edges of dry islands and cut edges along the bounding polygon."),
-]  # fmt: skip
 
 REFERENCES = [
     "Barnes, R., Lehman, C. & Mulla, D. (2014). Priority-flood: An optimal "
@@ -60,6 +56,18 @@ REFERENCES = [
     "3D surface construction algorithm. Computer Graphics (SIGGRAPH '87), "
     "21(4), 163-169.",
 ]
+
+
+def _fmt(value, fmt: str) -> str:
+    """Formats a number, or "-" when it is missing."""
+    if value is None:
+        return "-"
+    try:
+        if not np.isfinite(value):
+            return "-"
+    except TypeError:
+        return "-"
+    return fmt.format(value)
 
 
 def depth_classes(depth: np.ndarray, cell_area: float, weights=None) -> list[dict]:
@@ -80,12 +88,11 @@ def depth_classes(depth: np.ndarray, cell_area: float, weights=None) -> list[dic
     out = []
     for lo, hi in zip(edges[:-1], edges[1:], strict=True):
         sel = (d >= lo) & ((d < hi) | ((hi >= dmax) & (d <= hi)))
-        area = float(w[sel].sum()) * cell_area
         out.append(
             {
                 "from_m": float(lo),
                 "to_m": float(hi),
-                "area_m2": area,
+                "area_m2": float(w[sel].sum()) * cell_area,
                 "pct": 100.0 * float(w[sel].sum()) / total if total else 0.0,
             }
         )
@@ -96,17 +103,45 @@ def describe_result(result: InundationResult, geometry=None) -> str:
     """Plain-language summary of the extent."""
     if result.wet_cells == 0:
         return (
-            f"At {result.level:.3f} m no ground inside the analysis area lies "
+            f"At {result.level:.2f} m no ground inside the analysis area lies "
             "below the water."
         )
     n_bodies = len(result.polygons) if geometry is None else geometry[2]
     return (
-        f"At {result.level:.3f} m the water covers {result.area_m2 / 1e4:.3f} ha "
-        f"({result.area_m2:.0f} m²) in {n_bodies} water "
-        f"bod{'y' if n_bodies == 1 else 'ies'}, holds {result.volume_m3:.0f} m³ "
-        f"({result.volume_m3 / 1e3:.2f} ML) and is up to {result.max_depth:.2f} m "
-        f"deep (mean {result.mean_depth:.2f} m)."
+        f"At a water level of {result.level:.2f} m the water covers "
+        f"{result.area_m2 / 1e4:.4f} ha ({result.area_m2:.0f} m²) in {n_bodies} "
+        f"water bod{'y' if n_bodies == 1 else 'ies'}, holds {result.volume_m3:.0f} m³ "
+        f"and is up to {result.max_depth:.2f} m deep (mean "
+        f"{result.mean_depth:.2f} m)."
     )
+
+
+def parameter_rows(result: InundationResult, geometry=None) -> list[list[str]]:
+    """Parameter (symbol, unit) | Value | Definition / equation (source)."""
+    g = geometry
+    return [
+        ["Water level, h (m)", _fmt(result.level, "{:.2f}"),
+         "Elevation of the flat water surface, in the DEM's vertical datum (input)."],
+        ["Inundated area, A (m²)", _fmt(result.area_m2, "{:.0f}"),
+         "A = Σ w_i a over wet cells; a = cell area, w_i = share of the cell "
+         "inside the bounding polygon. A cell is wet when its inundation level "
+         "h_i < h."],
+        ["Inundated area, A (ha)", _fmt(result.area_m2 / 1e4, "{:.4f}"), "A / 10000."],
+        ["Volume, V (m³)", _fmt(result.volume_m3, "{:.0f}"),
+         "V = Σ w_i a (h - z_i) over wet cells (prism method, exact for the DEM)."],
+        ["Maximum depth, d_max (m)", _fmt(result.max_depth if result.wet_cells else None, "{:.2f}"),
+         "d_max = h - min(z_i) over wet cells."],
+        ["Mean depth, d_m (m)", _fmt(result.mean_depth, "{:.2f}"), "d_m = V / A."],
+        ["Wet cells, n (-)", str(result.wet_cells), "DEM cells with h_i < h."],
+        ["Water bodies, N (-)", str(len(result.polygons) if g is None else g[2]),
+         "Separate inundation polygons after clipping to the bounding polygon."],
+        ["Polygon area, A_p (m²)", "-" if g is None else _fmt(g[0], "{:.0f}"),
+         "Area of the smoothed inundation polygons, islands excluded; differs "
+         "slightly from A, which counts whole cells."],
+        ["Perimeter, P (m)", "-" if g is None else _fmt(g[1], "{:.0f}"),
+         "Length of all polygon rings, including island edges and cut edges "
+         "along the bounding polygon."],
+    ]  # fmt: skip
 
 
 # ---------------------------------------------------------------------------
@@ -130,93 +165,142 @@ def _ring_patch(rings, **kwargs):
     return PathPatch(Path(verts, codes), **kwargs)
 
 
-def figure_plan(
-    result: InundationResult, bounding=None, seeds_xy=()
-) -> io.BytesIO | None:
-    """Depth with the inundation boundary, the bounding polygon and the seed
-    points."""
-    depth = result.depth
-    if not np.isfinite(depth).any():
-        return None
+def plan_extent(result: InundationResult, bounding=None, pad: float = 0.08):
+    """(xmin, ymin, xmax, ymax) of the water (or of the bounding polygon /
+    analysis window when nothing is wet), padded on every side."""
+    pts = [p for ring in result.lines for p in ring]
+    if not pts and bounding:
+        pts = [p for poly in bounding for ring in poly for p in ring]
+    if not pts:
+        gt = result.window_gt
+        rows, cols = result.fill.shape
+        pts = [(gt[0], gt[3]), (gt[0] + cols * gt[1], gt[3] + rows * gt[5])]
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    xmin, xmax, ymin, ymax = min(xs), max(xs), min(ys), max(ys)
+    margin = pad * max(xmax - xmin, ymax - ymin, 1.0)
+    return (xmin - margin, ymin - margin, xmax + margin, ymax + margin)
+
+
+def _figure_plan_simple(
+    result: InundationResult, style: ChartStyle, bounding=None, seeds_xy=()
+) -> io.BytesIO:
+    """Plan without QGIS: depth (blue shades), water's edge, bounding polygon
+    and seeds, in the chart style with scale bar and north arrow."""
+    from matplotlib.colors import LinearSegmentedColormap
+
+    extent = plan_extent(result, bounding)
+    xmin, ymin, xmax, ymax = extent
+    height = _plan_height_cm(extent, 2.6)
     gt = result.window_gt
-    rows, cols = depth.shape
-    extent = [gt[0], gt[0] + cols * gt[1], gt[3] + rows * gt[5], gt[3]]
-    fig = new_figure(12.0)
-    ax = fig.add_subplot(1, 1, 1)
-    im = ax.imshow(
-        np.ma.masked_invalid(depth),
-        extent=extent,
-        cmap="Blues",
-        vmin=0,
-        interpolation="nearest",
-    )
-    cbar = fig.colorbar(im, ax=ax, shrink=0.8, pad=0.02)
-    cbar.set_label(f"Depth at {result.level:.2f} m (m)", fontsize=8, color=C_INK)
-    cbar.ax.tick_params(labelsize=7, colors=C_INK_2)
-
-    for line in result.lines:
-        lx, ly = zip(*line, strict=True)
-        ax.plot(lx, ly, color=C_INK, linewidth=0.7)
-    ax.plot(
-        [],
-        [],
-        color=C_INK,
-        linewidth=0.7,
-        label=f"Inundation boundary {result.level:.2f} m",
-    )
-    if bounding:
-        for poly in bounding:
-            patch = _ring_patch(
-                poly, facecolor="none", edgecolor=C_ORANGE, linewidth=0.9
+    rows, cols = result.fill.shape
+    img_extent = (gt[0], gt[0] + cols * gt[1], gt[3] + rows * gt[5], gt[3])
+    with style.context():
+        fig = style.figure(height)
+        ax = fig.add_subplot(1, 1, 1)
+        depth = result.depth
+        if np.isfinite(depth).any():
+            cmap = LinearSegmentedColormap.from_list("depth", ["#CCE5FF", C_BLUE])
+            im = ax.imshow(
+                np.ma.masked_invalid(depth),
+                extent=img_extent,
+                cmap=cmap,
+                vmin=0,
+                interpolation="nearest",
+                zorder=1,
             )
-            if patch is not None:
-                ax.add_patch(patch)
-        ax.plot([], [], color=C_ORANGE, linewidth=0.9, label="Bounding polygon")
-    if seeds_xy:
-        sx, sy = zip(*seeds_xy, strict=True)
-        ax.plot(
-            sx,
-            sy,
-            marker="o",
-            markersize=5,
-            color=C_ORANGE,
-            markeredgecolor=C_INK,
-            linestyle="none",
-            label="Seed point",
-        )
-    ax.set_xlim(extent[0], extent[1])
-    ax.set_ylim(extent[2], extent[3])
-    ax.set_aspect("equal", adjustable="box")
-    ax.set_xlabel("Easting (m)")
-    ax.set_ylabel("Northing (m)")
-    style_axes(ax)
-    ax.grid(False)
-    ax.ticklabel_format(useOffset=False, style="plain")
-    ax.legend(fontsize=6.5, frameon=True, framealpha=0.85, loc="best")
-    return png(fig)
+            cbar = fig.colorbar(im, ax=ax, shrink=0.8, pad=0.02)
+            cbar.set_label("Depth (m)", fontproperties=style.font_props("bold"))
+            cbar.ax.tick_params(colors=CHART_INK, width=0.75)
+        for line in result.lines:
+            lx, ly = zip(*line, strict=True)
+            ax.plot(lx, ly, color=C_BLUE, linewidth=1.5, zorder=3)
+        ax.plot([], [], color=C_BLUE, linewidth=1.5, label="Inundation boundary")
+        if bounding:
+            for poly in bounding:
+                patch = _ring_patch(
+                    poly,
+                    facecolor="none",
+                    edgecolor=CHART_INK,
+                    linewidth=1.4,
+                    linestyle="--",
+                    zorder=4,
+                )
+                if patch is not None:
+                    ax.add_patch(patch)
+            ax.plot(
+                [], [], color=CHART_INK, linewidth=1.4, linestyle="--",
+                label="Bounding polygon",
+            )  # fmt: skip
+        if seeds_xy:
+            sx, sy = zip(*seeds_xy, strict=True)
+            ax.plot(
+                sx, sy, marker="o", markersize=5, color=C_RED,
+                markeredgecolor=CHART_INK, linestyle="none", label="Seed point",
+                zorder=5,
+            )  # fmt: skip
+        ax.set_xlim(xmin, xmax)
+        ax.set_ylim(ymin, ymax)
+        ax.set_aspect("equal", adjustable="box")
+        ax.set_xlabel("Easting (m)")
+        ax.set_ylabel("Northing (m)")
+        ax.ticklabel_format(useOffset=False, style="plain")
+        _scale_bar(ax, extent)
+        _north_arrow(ax)
+        style.axes(ax, grid=False)
+        style.legend(ax, loc="upper center", bbox_to_anchor=(0.5, -0.12), ncols=3)
+        return style.png(fig)
 
 
-def figure_depth_distribution(classes: list[dict], level: float) -> io.BytesIO | None:
+def figure_plan(
+    result: InundationResult,
+    style: ChartStyle,
+    plan_map: PlanMapFn | None = None,
+    bounding=None,
+    seeds_xy=(),
+    messages: list | None = None,
+) -> tuple[io.BytesIO, PlanMap | None]:
+    """The layout map: rendered by ``plan_map`` (QGIS, with the layer styles
+    and OpenStreetMap) when given, otherwise drawn with matplotlib."""
+    if plan_map is not None:
+        try:
+            pm = plan_map(result, PLAN_PLOT_WIDTH_CM, PLAN_DPI)
+        except Exception as e:  # the report must still be written
+            pm = None
+            if messages is not None:
+                messages.append(
+                    f"The QGIS layout map could not be rendered ({e}); a "
+                    "simplified plan was drawn instead."
+                )
+        if pm is not None:
+            return _figure_plan_rendered(pm, style), pm
+    return _figure_plan_simple(result, style, bounding, seeds_xy), None
+
+
+def figure_depth_distribution(
+    classes: list[dict], level: float, style: ChartStyle
+) -> io.BytesIO | None:
     if not classes:
         return None
-    fig = new_figure(7.0)
-    ax = fig.add_subplot(1, 1, 1)
-    lo = [c["from_m"] for c in classes]
-    width = [c["to_m"] - c["from_m"] for c in classes]
-    ax.bar(
-        lo,
-        [c["pct"] for c in classes],
-        width=width,
-        align="edge",
-        color=C_BLUE,
-        edgecolor="white",
-        linewidth=0.6,
-    )
-    ax.set_xlabel(f"Depth at {level:.2f} m (m)")
-    ax.set_ylabel("Share of inundated area (%)")
-    ax.set_xlim(left=0)
-    style_axes(ax)
-    return png(fig)
+    with style.context():
+        fig = style.figure(7.5)
+        ax = fig.add_subplot(1, 1, 1)
+        ax.bar(
+            [c["from_m"] for c in classes],
+            [c["pct"] for c in classes],
+            width=[c["to_m"] - c["from_m"] for c in classes],
+            align="edge",
+            color=C_BLUE,
+            edgecolor=CHART_INK,
+            linewidth=0.75,
+            zorder=2,
+        )
+        ax.set_xlabel(f"Water depth at {level:.2f} m (m)")
+        ax.set_ylabel("Share of inundated area (%)")
+        ax.set_xlim(left=0)
+        ax.set_ylim(bottom=0)
+        style.axes(ax)
+        return style.png(fig)
 
 
 # ---------------------------------------------------------------------------
@@ -232,35 +316,40 @@ def write_report_docx(
     *,
     bounding=None,
     seeds_xy: Sequence = (),
-    weights=None,
+    plan_map: PlanMapFn | None = None,
     include_figures: bool = True,
-) -> None:
-    """Writes the report. ``context`` describes the run (tool, version, run
-    time, DEM, settings, outputs, warnings - see the QGIS wrapper);
-    ``geometry`` is (polygon area, perimeter, number of polygons) measured
-    on the clipped output polygons; ``weights`` are the cell
-    weights inside the bounding polygon (for the depth classes)."""
-    d = Doc()
+) -> list[str]:
+    """Writes the report and returns messages for the log (font
+    substitutions, map problems). ``context`` describes the run (tool,
+    version, run time, DEM, settings, outputs, warnings - see the QGIS
+    wrapper); ``geometry`` is (polygon area, perimeter, number of
+    polygons) measured on the clipped output polygons."""
+    d = Doc(house_style=True)
     ctx = context or {}
+    messages: list[str] = []
+    style = None
     if include_figures:
         try:
-            import matplotlib  # noqa: F401
+            style = ChartStyle()
+            messages.extend(style.warnings)
         except ImportError:
             include_figures = False
     dem = ctx.get("dem", {})
     mode = result.mode
     cell_area = abs(result.window_gt[1] * result.window_gt[5])
+    g = geometry
 
     d.heading(REPORT_TITLE, 1)
 
     # 1. Summary ------------------------------------------------------------
     d.heading("1. Summary", 2)
     d.para(
-        f"This report documents the level-pool (bathtub) inundation extent "
-        f"at a water level of {result.level:.3f} m, read from a digital elevation model (DEM) with a "
-        f"{dem.get('cell_x', 0):g} m x {dem.get('cell_y', 0):g} m cell size, "
-        f"using the {ctx.get('tool', 'DEM Inundation Boundary')} tool (Mayim "
-        f"Tools, version {ctx.get('version', '-')}). Inundated ground was "
+        "This annexure documents the level-pool (bathtub) inundation extent at "
+        f"a water level of {result.level:.2f} m, read from a digital elevation "
+        f"model (DEM) with a {dem.get('cell_x', 0):g} m x "
+        f"{dem.get('cell_y', 0):g} m cell size, using the "
+        f"{ctx.get('tool', 'DEM Inundation Boundary')} tool (Mayim Tools, "
+        f"version {ctx.get('version', '-')}). Inundated ground was "
         f"{MODE_TEXT.get(mode, mode)}"
         + (
             " within the bounding polygon."
@@ -268,15 +357,38 @@ def write_report_docx(
             else " over the whole DEM (no bounding polygon)."
         )
     )
-    d.para(describe_result(result, geometry))
+    d.para(describe_result(result, g))
+    d.caption("Table", "Summary of the inundation")
+    d.table(
+        [
+            "Water level (m)",
+            "Area (ha)",
+            "Volume (m³)",
+            "Max depth (m)",
+            "Mean depth (m)",
+            "Water bodies",
+        ],
+        [
+            [
+                _fmt(result.level, "{:.2f}"),
+                _fmt(result.area_m2 / 1e4, "{:.4f}"),
+                _fmt(result.volume_m3, "{:.0f}"),
+                _fmt(result.max_depth if result.wet_cells else None, "{:.2f}"),
+                _fmt(result.mean_depth, "{:.2f}"),
+                str(len(result.polygons) if g is None else g[2]),
+            ]
+        ],
+        widths_cm=[2.9, 2.6, 2.9, 2.7, 2.7, 2.7],
+    )
 
     # 2. Method -------------------------------------------------------------
     d.heading("2. Tool and method", 2)
     d.para(
-        "The water surface is taken as flat: no flow, gradient "
-        "or hydraulic losses are modelled. The processing steps were:"
+        "The water surface is taken as flat at the given level: no flow, "
+        "water-surface slope or hydraulic losses are modelled. The processing "
+        "steps were:"
     )
-    steps = [
+    for step in [
         (
             "The bounding polygon was converted to cell weights - the fraction "
             "of each cell inside the polygon from an 8 x 8 sub-cell sample - "
@@ -297,9 +409,9 @@ def write_report_docx(
             "water overtops it. Water starts at the seed cell, so a level at or "
             "below the seed's ground floods nothing."
         ),
-        "The inundated area is the sum of the weighted areas "
-        "of the wet cells and the volume the sum of their weighted areas times "
-        "the water depth above each cell (prism method, exact for the DEM).",
+        "The inundated area is the sum of the weighted areas of the wet cells "
+        "and the volume the sum of their weighted areas times the water depth "
+        "above each cell (prism method, exact for the DEM).",
         "The water's edge was traced between cell centres by marching squares "
         "(Lorensen & Cline, 1987), with the crossing interpolated linearly "
         "between the two cell elevations, and rounded with "
@@ -308,16 +420,24 @@ def write_report_docx(
         f"{ctx.get('min_cells', 3):g} cells were dropped as DEM noise.",
         "Polygons were built from the same rings - the outer ring is water, "
         "rings inside it are dry islands, rings inside those are water "
-        "again - so the boundary lines and polygons match exactly. Where the "
+        "again - so the boundary line and polygons match exactly. Where the "
         "water reaches the bounding polygon, both were cut at its edge.",
-    ]
-    for step in steps:
+    ]:
         d.numbered(step)
 
     # 3. Inputs ---------------------------------------------------------------
     d.heading("3. Inputs and settings", 2)
     d.caption("Table", "Inputs and processing settings")
     seeds = ctx.get("seeds") or {}
+    seed_text = "Not used"
+    if mode == "connected":
+        seed_text = f"{seeds.get('layer') or 'None'} ({result.n_seeds} used"
+        if result.seed_ground:
+            seed_text += (
+                f", ground {min(result.seed_ground):.2f} to "
+                f"{max(result.seed_ground):.2f} m"
+            )
+        seed_text += ")"
     d.table(
         ["Item", "Value"],
         [
@@ -327,73 +447,33 @@ def write_report_docx(
                 "DEM cell size",
                 f"{dem.get('cell_x', 0):g} m x {dem.get('cell_y', 0):g} m",
             ],
-            ["Water level", f"{result.level:.3f} m"],
+            ["Water level", f"{result.level:.2f} m"],
             ["Bounding polygon", ctx.get("bounding") or "None (whole DEM)"],
             ["Inundated ground", MODE_TEXT.get(mode, mode)],
-            [
-                "Seed points",
-                (
-                    "Not used"
-                    if mode == "all"
-                    else f"{seeds.get('layer') or 'None'} ({result.n_seeds} "
-                    "used"
-                    + (
-                        f", ground {min(result.seed_ground):.3f} to "
-                        f"{max(result.seed_ground):.3f} m"
-                        if result.seed_ground
-                        else ""
-                    )
-                    + ")"
-                ),
-            ],
+            ["Seed points", seed_text],
             ["Smoothing passes", str(ctx.get("smoothing", "-"))],
             ["Smallest ring kept", f"{ctx.get('min_cells', 0):g} cells"],
+            ["Project number", ctx.get("project_number") or "-"],
             ["Run", ctx.get("run_time", "-")],
         ],
-        widths_cm=[5.0, 11.0],
+        widths_cm=[5.0, 11.5],
     )
 
-    # 4. Definitions ----------------------------------------------------------
-    d.heading("4. Definitions", 2)
-    d.caption("Table", "Quantities and equations")
+    # 4. Parameters ----------------------------------------------------------
+    d.heading("4. Parameters and calculations", 2)
+    d.caption("Table", "Inundation parameters, values and definitions")
     d.table(
-        ["Quantity", "Symbol (unit)", "Definition / equation"],
-        [list(row) for row in DEFINITIONS],
-        widths_cm=[3.6, 2.8, 9.6],
+        ["Parameter (symbol, unit)", "Value", "Definition / equation (source)"],
+        parameter_rows(result, g),
+        widths_cm=[6.2, 2.8, 7.5],
     )
 
     # 5. Results --------------------------------------------------------------
     d.heading("5. Results", 2)
-    g = geometry
-    rows = [
-        ["Water level (m)", f"{result.level:.3f}"],
-        ["Inundated area on the DEM cells (m²)", f"{result.area_m2:.0f}"],
-        ["Inundated area on the DEM cells (ha)", f"{result.area_m2 / 1e4:.4f}"],
-        ["Volume (m³)", f"{result.volume_m3:.0f}"],
-        ["Volume (ML)", f"{result.volume_m3 / 1e3:.2f}"],
-        ["Maximum depth (m)", f"{result.max_depth:.3f}"],
-        [
-            "Mean depth (m)",
-            "-" if result.mean_depth is None else f"{result.mean_depth:.3f}",
-        ],
-        ["Wet cells", str(result.wet_cells)],
-        ["Water bodies", str(len(result.polygons) if g is None else g[2])],
-    ]
-    if g is not None:
-        rows += [
-            ["Polygon area (m²)", f"{g[0]:.0f}"],
-            ["Perimeter (m)", f"{g[1]:.0f}"],
-        ]
-    d.caption("Table", f"Inundation at {result.level:.3f} m")
-    d.table(["Quantity", "Value"], rows, widths_cm=[9.0, 7.0])
-
+    d.para(describe_result(result, g))
     classes = []
     if result.wet_cells:
-        classes = depth_classes(
-            result.depth,
-            cell_area,
-            weights if weights is not None else result.weights,
-        )
+        classes = depth_classes(result.depth, cell_area, result.weights)
         d.caption("Table", f"Inundated area by depth class at {result.level:.2f} m")
         d.table(
             ["Depth class (m)", "Area (m²)", "Share (%)"],
@@ -405,37 +485,41 @@ def write_report_docx(
                 ]
                 for c in classes
             ],
-            widths_cm=[6.0, 5.0, 5.0],
+            widths_cm=[6.0, 5.25, 5.25],
         )
-
-    if include_figures:
-        for stream, cap in (
-            (
-                figure_plan(result, bounding, seeds_xy),
-                f"Depth and inundation boundary at {result.level:.2f} m",
-            ),
-            (
-                figure_depth_distribution(classes, result.level),
-                f"Distribution of depth at {result.level:.2f} m",
-            ),
-        ):
-            if stream is not None:
-                d.picture(stream, cap)
+    used_osm = False
+    if include_figures and style is not None:
+        stream, pm = figure_plan(result, style, plan_map, bounding, seeds_xy, messages)
+        used_osm = pm is not None and bool(pm.attribution)
+        d.picture(
+            stream,
+            f"Inundation at {result.level:.2f} m: water depth, inundation "
+            "boundary"
+            + (", bounding polygon" if bounding else "")
+            + (", seed points" if seeds_xy else "")
+            + (" (background: OpenStreetMap)" if used_osm else ""),
+        )
+        hist = figure_depth_distribution(classes, result.level, style)
+        if hist is not None:
+            d.picture(hist, f"Distribution of water depth at {result.level:.2f} m")
 
     # 6. Outputs --------------------------------------------------------------
     outputs = ctx.get("outputs", [])
     if outputs:
         d.heading("6. Outputs", 2)
         d.caption("Table", "Files produced by the tool")
-        d.table(["Output", "Location"], [list(o) for o in outputs], widths_cm=[5, 11])
+        d.table(
+            ["Output", "Location"], [list(o) for o in outputs], widths_cm=[5.0, 11.5]
+        )
 
     # 7. Notes ----------------------------------------------------------------
     d.heading("7. Notes and limitations", 2)
-    for note in [
-        "This is a level-pool (bathtub) extent: the water surface is flat. It does not model flow, the water-surface slope along a "
-        "river, hydraulic losses, timing or storage routing. For flood lines "
-        "along a river use a hydraulic model; this extent is a screening "
-        "estimate or a check on one.",
+    notes = [
+        "This is a level-pool (bathtub) extent: the water surface is flat. It "
+        "does not model flow, the water-surface slope along a river, hydraulic "
+        "losses, timing or storage routing. For flood lines along a river use "
+        "a hydraulic model; this extent is a screening estimate or a check on "
+        "one.",
         "Results are only as good as the DEM. Its resolution, vertical accuracy "
         "and vegetation or building artefacts control the extent. Embankments, "
         "walls, culverts and channels narrower than a DEM cell are not "
@@ -448,15 +532,25 @@ def write_report_docx(
         "water-surface rasters follow whole DEM cells, so their edges are "
         "stepped and the cell-based area differs slightly from the polygon "
         "area.",
-        "With the connected option, place seed points on the lowest ground of "
-        "the water body (channel bed, dam basin). Water starts at the seed "
-        "cell, so a seed on a bank floods nothing below the bank level.",
-    ]:
+    ]
+    if mode == "connected":
+        notes.append(
+            "Seed points should lie on the lowest ground of the water body "
+            "(channel bed, dam basin). Water starts at the seed cell, so a seed "
+            "on a bank floods nothing below the bank level."
+        )
+    if used_osm:
+        notes.append(
+            f"Map background: {OSM_ATTRIBUTION}. OpenStreetMap data is "
+            "available under the Open Database Licence (ODbL), "
+            "openstreetmap.org/copyright."
+        )
+    for note in notes:
         d.bullet(note)
-    warnings = ctx.get("warnings", [])
+    warnings = list(ctx.get("warnings", [])) + messages
     if warnings:
         d.para("Processing messages recorded during this run:")
-        for w in warnings:
+        for w in dict.fromkeys(warnings):
             d.bullet(w)
 
     # 8. References -------------------------------------------------------------
@@ -465,3 +559,4 @@ def write_report_docx(
         d.para(ref)
 
     d.doc.save(path)
+    return messages

@@ -1,16 +1,18 @@
 """Processing Toolbox algorithm: DEM + one water level, optional bounding
 polygon and seed points in -> smoothed inundation boundary (lines) and
 extent (polygons), water-surface elevation and depth rasters, a summary
-CSV and a Word report, written to one output folder.
+CSV and a Word report.
 
-The user picks an output folder and ticks the outputs wanted; the
-boundary, the extent and the water-surface elevation raster are ticked
-by default, and every output layer written is loaded into the map.
+Outputs follow the Mayim report and figure standard: the user ticks the
+outputs wanted and chooses one folder per kind (rasters, shapefiles, CSV,
+Word); files are named <project number>_<description> with underscores;
+every layer written is loaded into the project with its style.
 
 Thin wrapper - all real logic lives in core.py (zero QGIS dependency,
 independently testable; see tests/test_inundation_boundary_core.py).
 """
 
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -18,9 +20,6 @@ import numpy as np
 from qgis.core import (
     Qgis,
     QgsCoordinateTransform,
-    QgsFeature,
-    QgsField,
-    QgsFields,
     QgsGeometry,
     QgsPointXY,
     QgsProcessing,
@@ -34,20 +33,35 @@ from qgis.core import (
     QgsProcessingParameterFolderDestination,
     QgsProcessingParameterNumber,
     QgsProcessingParameterRasterLayer,
-    QgsVectorFileWriter,
-    QgsVectorLayer,
+    QgsProcessingParameterString,
+    QgsProcessingUtils,
     QgsWkbTypes,
 )
 from qgis.PyQt.QtCore import QMetaType
 from qgis.PyQt.QtGui import QIcon
 
-from mayim_tools.hydrology._common.d8_network import GridError, write_raster
+from mayim_tools._common.output_files import (
+    CSV,
+    EXTENSIONS,
+    RASTER,
+    SHAPEFILE,
+    WORD,
+    OutputSpec,
+    clean_name_part,
+)
+from mayim_tools.hydrology._common.contours import dem_contours
+from mayim_tools.hydrology._common.d8_network import (
+    GridError,
+    nodata_mask,
+    write_raster,
+)
 from mayim_tools.hydrology._common.depression import (
     polygon_window,
     raster_info,
     read_window,
     window_geotransform,
 )
+from mayim_tools.hydrology.catchment_delineation.qgis_outputs import save_shapefile
 from mayim_tools.hydrology.terrain_storage.terrain_storage_algorithm import (
     STYLE_DEPTH,
     STYLES_DIR,
@@ -62,12 +76,20 @@ from .core import (
     run_inundation,
 )
 from .export import write_summary_csv
+from .qgis_outputs import (
+    VectorStyler,
+    load_on_completion,
+    make_plan_map,
+    memory_layer,
+    points_layer,
+    polygon_layer,
+)
 from .report import write_report_docx
 
-TOOL_VERSION = "0.4.0"
+TOOL_VERSION = "0.5.0"
 
-STYLE_DEPTH_PATH = STYLES_DIR / STYLE_DEPTH  # stage-storage "Depth at top stage"
-STYLE_WSE_PATH = (
+STYLE_DEPTH_PATH = str(STYLES_DIR / STYLE_DEPTH)  # stage-storage "Depth at top stage"
+STYLE_WSE_PATH = str(
     Path(__file__).resolve().parent / "styles" / "water_surface_elevation.qml"
 )
 
@@ -80,6 +102,7 @@ _S = QMetaType.Type.QString
 _I = QMetaType.Type.Int
 _D = QMetaType.Type.Double
 
+# shapefile field names - all at most 10 characters
 POLYGON_FIELDS = [
     ("level_m", _D, "water level, m"),
     ("area_m2", _D, "area of the polygon (after clipping), m2"),
@@ -95,35 +118,34 @@ LINE_FIELDS = [
     ("mode", _S, "all or connected"),
 ]
 
-# (parameter, label, default, file suffix)
-OUTPUT_CHOICES = [
-    ("SAVE_BOUNDARY", "Inundation boundary (lines, GeoPackage)", True, "boundary.gpkg"),
-    ("SAVE_EXTENT", "Inundation extent (polygons, GeoPackage)", True, "extent.gpkg"),
-    ("SAVE_WSE", "Water-surface elevation raster (GeoTIFF)", True, "wse.tif"),
-    ("SAVE_DEPTH", "Depth raster (GeoTIFF)", False, "depth.tif"),
-    ("SAVE_CSV", "Summary table (CSV)", False, "summary.csv"),
-    ("SAVE_REPORT", "Inundation report (Word)", False, "report.docx"),
-]
-
-
-def _fields(specs) -> QgsFields:
-    fields = QgsFields()
-    for name, qtype, _ in specs:
-        fields.append(QgsField(name, qtype))
-    return fields
-
-
-def _locked_message(path, error) -> str:
-    return (
-        f"Could not write '{path}': {error}. If a layer from an earlier run at "
-        "the same level is still open in QGIS, remove it from the map (or "
-        "choose another output folder) and run the tool again."
-    )
-
-
-def level_tag(level: float) -> str:
-    """File-name tag for a level: 1617.41 -> '1617_410' (no dots)."""
-    return f"{level:.3f}".replace(".", "_").replace("-", "m")
+# Selectable outputs: key, dialog label, file-name description, folder kind,
+# ticked by default.
+OUTPUT_SPECS = [
+    OutputSpec(
+        "OUTPUT_BOUNDARY", "Inundation boundary (lines)", "Inundation Boundary",
+        SHAPEFILE,
+    ),
+    OutputSpec(
+        "OUTPUT_EXTENT", "Inundation extent (polygons)", "Inundation Extent",
+        SHAPEFILE,
+    ),
+    OutputSpec(
+        "OUTPUT_WSE", "Water-surface elevation raster", "Water Surface Elevation",
+        RASTER,
+    ),
+    OutputSpec("OUTPUT_DEPTH", "Depth raster", "Inundation Depth", RASTER, False),
+    OutputSpec("OUTPUT_CSV", "Summary table (CSV)", "Inundation Summary", CSV, False),
+    OutputSpec(
+        "OUTPUT_DOCX", "Inundation report (Word)", "Inundation Report", WORD, False
+    ),
+]  # fmt: skip
+SPEC_BY_KEY = {spec.key: spec for spec in OUTPUT_SPECS}
+FOLDER_PARAMS = {
+    RASTER: ("FOLDER_RASTER", "Output folder for rasters (GeoTIFF)"),
+    SHAPEFILE: ("FOLDER_SHP", "Output folder for vector layers (shapefiles)"),
+    CSV: ("FOLDER_CSV", "Output folder for CSV files"),
+    WORD: ("FOLDER_WORD", "Output folder for Word reports"),
+}
 
 
 class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
@@ -134,7 +156,9 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
     SEEDS = "SEEDS"
     SMOOTHING = "SMOOTHING"
     MIN_CELLS = "MIN_CELLS"
-    OUTPUT_FOLDER = "OUTPUT_FOLDER"
+    CONTOUR_INTERVAL = "CONTOUR_INTERVAL"
+    REPORT_BASEMAP = "REPORT_BASEMAP"
+    PROJECT_NUMBER = "PROJECT_NUMBER"
 
     def icon(self):
         return QIcon(
@@ -157,10 +181,13 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
         return "hydrological_tools"
 
     def shortHelpString(self):
-        glossary = "\n".join(f"  {n}: {d}" for n, _, d in POLYGON_FIELDS)
+        glossary = "\n".join(
+            f"  {n}: {d}" for n, _, d in POLYGON_FIELDS + LINE_FIELDS[1:2]
+        )
         files = "\n".join(
-            f"  {label}: inundation_<level>_{suffix}"
-            for _, label, _, suffix in OUTPUT_CHOICES
+            f"  {spec.label}: <project number>_"
+            f"{clean_name_part(spec.description)}{EXTENSIONS[spec.kind]}"
+            for spec in OUTPUT_SPECS
         )
         return (
             f"DEM Inundation Boundary (version {TOOL_VERSION})\n"
@@ -194,21 +221,32 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
             "edge. Rings smaller than the minimum size (DEM noise) are "
             "dropped.\n"
             "\n"
-            "OUTPUTS:\tChoose an output folder and tick the outputs wanted. The "
-            "boundary, the extent and the water-surface elevation raster are "
-            "ticked by default. Every layer written is loaded into the map. "
-            "Files are named after the level and overwrite an earlier run at the "
-            "same level:\n" + files + "\n"
+            "OUTPUTS:\tTick the outputs wanted (boundary, extent and "
+            "water-surface elevation raster are ticked by default) and choose "
+            "an output folder for each kind used: rasters (GeoTIFF), vector "
+            "layers (shapefiles), CSV and Word. Files are named <project "
+            "number>_<description> with underscores (just <description> "
+            "without a project number) and replace files of the same name; a "
+            "file that is open in QGIS cannot be replaced - remove it from the "
+            "project first (the other outputs are still written). Every layer "
+            "written is loaded into the project with its style.\n" + files + "\n"
             "The water-surface elevation raster holds the level on every "
             "inundated cell - profile it with the DEM for cross-sections. The "
             "rasters follow the DEM cells, so their edge is stepped; the "
             "smoothed polygons show the interpolated water's edge.\n"
             "\n"
+            "WORD REPORT:\tAn annexure in the Mayim report standard: summary, "
+            "method, inputs, parameters with definitions, depth classes, a "
+            "layout map (rendered by QGIS: depth, boundary, bounding polygon, "
+            "seeds, DEM contours at the set interval and an OpenStreetMap "
+            "background - needs internet), the depth distribution, outputs, "
+            "notes and references.\n"
+            "\n"
             "LIMITATIONS:\tA level-pool (bathtub) extent - no flow, no "
             "hydraulic gradient, no structures below DEM resolution. For "
             "flood lines along a river use a hydraulic model.\n"
             "\n"
-            "POLYGON ATTRIBUTES:\n" + glossary
+            "SHAPEFILE FIELDS (all 10 characters or fewer):\n" + glossary
         )
 
     def initAlgorithm(self, config=None):
@@ -243,13 +281,23 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
                 optional=True,
             )
         )
-        for key, label, default, _ in OUTPUT_CHOICES:
-            self.addParameter(
-                QgsProcessingParameterBoolean(key, label, defaultValue=default)
-            )
         self.addParameter(
-            QgsProcessingParameterFolderDestination(self.OUTPUT_FOLDER, "Output folder")
+            QgsProcessingParameterString(
+                self.PROJECT_NUMBER,
+                "Project number (file name prefix, optional)",
+                optional=True,
+            )
         )
+        for spec in OUTPUT_SPECS:
+            self.addParameter(
+                QgsProcessingParameterBoolean(
+                    spec.key, f"Output: {spec.label}", defaultValue=spec.default
+                )
+            )
+        for name, label in FOLDER_PARAMS.values():
+            self.addParameter(
+                QgsProcessingParameterFolderDestination(name, label, optional=True)
+            )
         for param in (
             QgsProcessingParameterNumber(
                 self.SMOOTHING,
@@ -265,6 +313,19 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
                 type=QgsProcessingParameterNumber.Type.Double,
                 minValue=0.0,
                 defaultValue=DEFAULT_MIN_CELLS,
+            ),
+            QgsProcessingParameterNumber(
+                self.CONTOUR_INTERVAL,
+                "Word report: contour interval on the layout map (m; 0 = none)",
+                type=QgsProcessingParameterNumber.Type.Double,
+                minValue=0.0,
+                defaultValue=1.0,
+            ),
+            QgsProcessingParameterBoolean(
+                self.REPORT_BASEMAP,
+                "Word report: OpenStreetMap background on the layout map "
+                "(needs internet)",
+                defaultValue=True,
             ),
         ):
             param.setFlags(param.flags() | Qgis.ProcessingParameterFlag.Advanced)
@@ -361,60 +422,19 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
         return out
 
     @staticmethod
-    def _write_gpkg(path, layer_name, specs, wkb_type, crs, rows, context):
-        """Writes features [(geometry, {field: value})] to a GeoPackage: an
-        in-memory layer filled in one batch, then saved in one call (the
-        idiom proven in the Import RAS 2D data tool)."""
-        layer = QgsVectorLayer(
-            QgsWkbTypes.displayString(wkb_type), layer_name, "memory"
+    def _write_raster(path, array, window_gt, projection):
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+            except OSError as e:
+                raise RuntimeError("the existing file is in use") from e
+        write_raster(
+            path,
+            np.where(np.isnan(array), DEFAULT_NODATA, array).astype("float32"),
+            window_gt,
+            projection,
+            DEFAULT_NODATA,
         )
-        layer.setCrs(crs)
-        provider = layer.dataProvider()
-        provider.addAttributes(list(_fields(specs)))
-        layer.updateFields()
-        features = []
-        for geom, values in rows:
-            feat = QgsFeature(layer.fields())
-            feat.setGeometry(geom)
-            for key, value in values.items():
-                feat[key] = value
-            features.append(feat)
-        provider.addFeatures(features)
-        layer.updateExtents()
-        options = QgsVectorFileWriter.SaveVectorOptions()
-        options.driverName = "GPKG"
-        options.fileEncoding = "UTF-8"
-        options.layerName = layer_name
-        result = QgsVectorFileWriter.writeAsVectorFormatV3(
-            layer, path, context.transformContext(), options
-        )
-        if result[0] != QgsVectorFileWriter.WriterError.NoError:
-            message = result[1] if len(result) > 1 else ""
-            raise QgsProcessingException(_locked_message(path, message))
-
-    @staticmethod
-    def _write_raster(path, array, result, projection):
-        try:
-            write_raster(
-                path,
-                np.where(np.isnan(array), DEFAULT_NODATA, array).astype("float32"),
-                result.window_gt,
-                projection,
-                DEFAULT_NODATA,
-            )
-        except Exception as e:
-            raise QgsProcessingException(_locked_message(path, e)) from e
-
-    def _load(self, path, name, context, style_path=None, **style_options):
-        """Loads a written file into the map when the run finishes, with an
-        optional QML style (post-processor kept alive on self - Processing
-        holds only a weak reference)."""
-        details = QgsProcessingContext.LayerDetails(name, context.project())
-        if style_path is not None:
-            processor = _StylePostProcessor(style_path, **style_options)
-            details.setPostProcessor(processor)
-            self._post_processors.append(processor)
-        context.addLayerToLoadOnCompletion(path, details)
 
     # ------------------------------------------------------------------
 
@@ -435,18 +455,32 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
         mode = MODES[self.parameterAsEnum(parameters, self.MODE, context)]
         smoothing = self.parameterAsInt(parameters, self.SMOOTHING, context)
         min_cells = self.parameterAsDouble(parameters, self.MIN_CELLS, context)
-        wanted = {
-            key: self.parameterAsBool(parameters, key, context)
-            for key, _, _, _ in OUTPUT_CHOICES
-        }
-        if not any(wanted.values()):
+        contour_interval = self.parameterAsDouble(
+            parameters, self.CONTOUR_INTERVAL, context
+        )
+        use_basemap = self.parameterAsBoolean(parameters, self.REPORT_BASEMAP, context)
+        project_number = (
+            self.parameterAsString(parameters, self.PROJECT_NUMBER, context) or ""
+        ).strip()
+
+        selected = [
+            spec
+            for spec in OUTPUT_SPECS
+            if self.parameterAsBoolean(parameters, spec.key, context)
+        ]
+        if not selected:
             raise QgsProcessingException("Tick at least one output.")
-        folder = self.parameterAsFileOutput(
-            parameters, self.OUTPUT_FOLDER, context
-        ) or self.parameterAsString(parameters, self.OUTPUT_FOLDER, context)
-        if not folder:
-            raise QgsProcessingException("An output folder is required.")
-        Path(folder).mkdir(parents=True, exist_ok=True)
+        folders = {}
+        for kind in {spec.kind for spec in selected}:
+            name, label = FOLDER_PARAMS[kind]
+            folder = self.parameterAsFileOutput(parameters, name, context)
+            if not folder:
+                raise QgsProcessingException(f"Choose the {label.lower()}.")
+            os.makedirs(folder, exist_ok=True)
+            folders[kind] = folder
+        paths = {spec.key: spec.path(folders, project_number) for spec in selected}
+        want = set(paths)
+
         try:
             shape, gt, projection, nodata = raster_info(dem_layer.source())
         except GridError as e:
@@ -473,16 +507,17 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
         if mode == "all" and seeds:
             feedback.pushInfo("Seed points are only used by the connected option.")
         feedback.pushInfo(
-            f"Water level {level:.3f} m, mode: {mode}, window {window[3]} x "
+            f"Water level {level:.2f} m, mode: {mode}, window {window[3]} x "
             f"{window[2]} cells"
         )
 
         try:
             dem = read_window(dem_layer.source(), window)
+            window_gt = window_geotransform(gt, window[0], window[1])
             result = run_inundation(
                 dem,
                 nodata,
-                window_geotransform(gt, window[0], window[1]),
+                window_gt,
                 window,
                 level,
                 bounding=bounding,
@@ -500,7 +535,7 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
             feedback.pushWarning(message)
         feedback.setProgress(50)
 
-        # Geometry (also measured for the CSV and the report)
+        # geometry (also measured for the CSV and the report)
         boundary = self._boundary_geometry(result, clip)
         extents = self._extent_geometries(result, clip)
         poly_area = sum(g.area() for g in extents)
@@ -510,20 +545,15 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
             f"{len(extents)} water body(ies), {poly_area:.0f} m2, volume "
             f"{result.volume_m3:.0f} m3, maximum depth {result.max_depth:.2f} m"
         )
-
-        base = Path(folder) / f"inundation_{level_tag(level)}"
-        paths = {
-            key: f"{base}_{suffix}"
-            for key, _, _, suffix in OUTPUT_CHOICES
-            if wanted[key]
-        }
-        lv = f"{level:.2f} m"
-        written = []
-
-        if wanted["SAVE_BOUNDARY"]:
-            rows = []
-            if boundary is not None:
-                rows.append(
+        boundary_layer = memory_layer(
+            "Inundation boundary",
+            LINE_FIELDS,
+            Qgis.WkbType.MultiLineString,
+            crs,
+            (
+                []
+                if boundary is None
+                else [
                     (
                         boundary,
                         {
@@ -532,21 +562,15 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
                             "mode": mode,
                         },
                     )
-                )
-            self._write_gpkg(
-                paths["SAVE_BOUNDARY"],
-                "inundation_boundary",
-                LINE_FIELDS,
-                Qgis.WkbType.MultiLineString,
-                crs,
-                rows,
-                context,
-            )
-            self._load(paths["SAVE_BOUNDARY"], f"Inundation boundary {lv}", context)
-            written.append(("Inundation boundary (lines)", paths["SAVE_BOUNDARY"]))
-
-        if wanted["SAVE_EXTENT"]:
-            rows = [
+                ]
+            ),
+        )
+        extent_layer = memory_layer(
+            "Inundation extent",
+            POLYGON_FIELDS,
+            Qgis.WkbType.MultiPolygon,
+            crs,
+            [
                 (
                     geom,
                     {
@@ -561,57 +585,134 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
                     },
                 )
                 for geom in extents
-            ]
-            self._write_gpkg(
-                paths["SAVE_EXTENT"],
-                "inundation_extent",
-                POLYGON_FIELDS,
-                Qgis.WkbType.MultiPolygon,
-                crs,
-                rows,
-                context,
-            )
-            self._load(paths["SAVE_EXTENT"], f"Inundation extent {lv}", context)
-            written.append(("Inundation extent (polygons)", paths["SAVE_EXTENT"]))
+            ],
+        )
 
-        if wanted["SAVE_WSE"]:
-            self._write_raster(
-                paths["SAVE_WSE"], result.water_surface, result, projection
-            )
-            self._load(
-                paths["SAVE_WSE"],
-                f"Water-surface elevation {lv}",
-                context,
-                STYLE_WSE_PATH,
-            )
-            written.append(("Water-surface elevation raster", paths["SAVE_WSE"]))
+        outputs = {
+            name: folders[kind]
+            for kind, (name, _) in FOLDER_PARAMS.items()
+            if kind in folders
+        }
+        written = []  # (label, path) for the log and the report
 
-        if wanted["SAVE_DEPTH"]:
-            depth = result.depth
-            self._write_raster(paths["SAVE_DEPTH"], depth, result, projection)
-            valid = depth[np.isfinite(depth)]
-            self._load(
-                paths["SAVE_DEPTH"],
-                f"Depth {lv}",
-                context,
+        def done(key, path):
+            outputs[key] = path
+            written.append((SPEC_BY_KEY[key].label, path))
+
+        def failed(key, path, error):
+            feedback.reportError(
+                f"{SPEC_BY_KEY[key].label}: {Path(path).name} could not be written "
+                f"({error}). If it is open in QGIS, remove it from the project "
+                "and run again.",
+                fatalError=False,
+            )
+
+        # shapefiles, loaded into the project with their styles
+        feedback.setProgressText("Writing layers")
+        for key, layer, kind in (
+            ("OUTPUT_BOUNDARY", boundary_layer, "boundary"),
+            ("OUTPUT_EXTENT", extent_layer, "extent"),
+        ):
+            if key not in want:
+                continue
+            try:
+                path = save_shapefile(layer, paths[key], context.transformContext())
+            except Exception as e:
+                failed(key, paths[key], e)
+                continue
+            load_on_completion(
+                context, path, Path(path).stem, VectorStyler(kind),
+                self._post_processors,
+            )  # fmt: skip
+            done(key, path)
+
+        depth = result.depth
+        valid = depth[np.isfinite(depth)]
+        depth_range = (float(valid.min()), float(valid.max())) if valid.size else None
+        rasters = (
+            ("OUTPUT_WSE", result.water_surface, STYLE_WSE_PATH, {}),
+            (
+                "OUTPUT_DEPTH",
+                depth,
                 STYLE_DEPTH_PATH,
-                raster_range=(
-                    (float(valid.min()), float(valid.max())) if valid.size else None
-                ),
-            )
-            written.append(("Depth raster", paths["SAVE_DEPTH"]))
+                {"raster_range": depth_range},
+            ),
+        )
+        for key, array, qml, options in rasters:
+            if key not in want:
+                continue
+            path = paths[key]
+            try:
+                self._write_raster(path, array, window_gt, projection)
+            except Exception as e:
+                failed(key, path, e)
+                continue
+            load_on_completion(
+                context, path, Path(path).stem, _StylePostProcessor(qml, **options),
+                self._post_processors,
+            )  # fmt: skip
+            done(key, path)
 
-        if wanted["SAVE_CSV"]:
-            write_summary_csv(paths["SAVE_CSV"], result, geometry)
-            written.append(("Summary table (CSV)", paths["SAVE_CSV"]))
-        feedback.setProgress(80)
+        if "OUTPUT_CSV" in want:
+            path = paths["OUTPUT_CSV"]
+            try:
+                write_summary_csv(path, result, geometry)
+                done("OUTPUT_CSV", path)
+            except Exception as e:
+                failed("OUTPUT_CSV", path, e)
+        feedback.setProgress(70)
 
-        if wanted["SAVE_REPORT"]:
+        if "OUTPUT_DOCX" in want:
+            docx_path = paths["OUTPUT_DOCX"]
             feedback.setProgressText("Writing report")
+            map_messages = []
+            depth_map_path = outputs.get("OUTPUT_DEPTH")
+            if depth_map_path is None and valid.size:
+                depth_map_path = os.path.join(
+                    QgsProcessingUtils.tempFolder(), "inundation_depth_map.tif"
+                )
+                try:
+                    self._write_raster(depth_map_path, depth, window_gt, projection)
+                except Exception as e:
+                    map_messages.append(f"Layout map: depth not shown ({e}).")
+                    depth_map_path = None
+            dem_nan = np.where(nodata_mask(dem, nodata), np.nan, dem).astype(float)
+
+            def contours_for(extent):
+                lines, warnings = dem_contours(
+                    dem_nan, window_gt, contour_interval, extent=extent
+                )
+                map_messages.extend(warnings)
+                return lines
+
+            plan_map = make_plan_map(
+                crs,
+                context.transformContext(),
+                boundary=boundary_layer.clone(),
+                seeds=(
+                    points_layer("Seed points", seeds, crs)
+                    if mode == "connected" and seeds
+                    else None
+                ),
+                study_area=(
+                    None
+                    if clip is None
+                    else polygon_layer("Bounding polygon", clip, crs)
+                ),
+                depth_path=depth_map_path,
+                depth_qml=STYLE_DEPTH_PATH,
+                depth_range=depth_range,
+                bounding=bounding,
+                contours_for=contours_for,
+                contour_interval=contour_interval,
+                use_osm=use_basemap,
+                messages=map_messages,
+            )
             context_info = {
                 "tool": self.displayName(),
                 "version": TOOL_VERSION,
                 "run_time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "project_number": project_number or None,
                 "dem": {
                     "path": dem_layer.source(),
                     "crs": f"{crs.authid()} - {crs.description()}",
@@ -629,19 +730,22 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
                 },
                 "smoothing": smoothing,
                 "min_cells": min_cells,
-                "outputs": written + [("This report", paths["SAVE_REPORT"])],
+                "outputs": written + [("This report", docx_path)],
                 "warnings": list(result.warnings),
             }
             try:
-                write_report_docx(
-                    paths["SAVE_REPORT"],
+                messages = write_report_docx(
+                    docx_path,
                     result,
                     context_info,
                     geometry,
                     bounding=bounding,
                     seeds_xy=seeds if mode == "connected" else (),
+                    plan_map=plan_map,
                 )
-                written.append(("Inundation report (Word)", paths["SAVE_REPORT"]))
+                for message in dict.fromkeys(map_messages + (messages or [])):
+                    feedback.pushWarning(message)
+                done("OUTPUT_DOCX", docx_path)
             except ImportError:
                 feedback.pushWarning(
                     "The Word report needs the python-docx package, which is not "
@@ -649,10 +753,12 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
                     "with: python -m pip install python-docx. All other outputs "
                     "were written."
                 )
+            except PermissionError as e:
+                failed("OUTPUT_DOCX", docx_path, e)
             except Exception as e:  # report failure must not lose the results
                 feedback.pushWarning(f"The Word report could not be written: {e}")
 
         for label, path in written:
             feedback.pushInfo(f"{label}: {path}")
         feedback.setProgress(100)
-        return {self.OUTPUT_FOLDER: folder}
+        return outputs
