@@ -126,8 +126,11 @@ class HydrologicSoilGroupsAlgorithm(QgsProcessingAlgorithm):
             "60-80 %, Low < 60 %). The groups at the Ksat P5 (more runoff) and "
             "P95 (less runoff) are written too.\n"
             "\n"
-            "INPUTS:\tRegional soil parameterisation output folder (rsp_ksat.tif; "
-            "rsp_inputs_P50.tif for an NEH 630 texture cross-check). Depth to an "
+            "INPUTS:\tRegional soil parameterisation raster output folder. The "
+            "Ksat raster (e.g. <project>_Soil_Ksat.tif, or rsp_ksat.tif from "
+            "older runs) and the harmonised inputs raster (for an NEH 630 texture "
+            "cross-check) are found by their band descriptions; when several runs "
+            "share the folder the newest is used. Depth to an "
             "impermeable layer: SoilGrids 2017 depth to bedrock (run 'Extract: "
             "SoilGrids 2.0' with the depth-to-bedrock layer and give its folder), "
             "iSDAsoil depth to bedrock with its standard deviation (Africa; the "
@@ -151,7 +154,7 @@ class HydrologicSoilGroupsAlgorithm(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterFile(
                 self.REGIONAL_FOLDER,
-                "Regional soil parameterisation output folder",
+                "Regional soil parameterisation raster folder",
                 behavior=_folder_behavior(),
             )
         )
@@ -343,13 +346,7 @@ class HydrologicSoilGroupsAlgorithm(QgsProcessingAlgorithm):
             write_report=self.parameterAsBoolean(parameters, self.REPORT, context),
         )
         try:
-            ksat_path = str(Path(settings.regional_folder) / core.KSAT_FILE)
-            if not Path(ksat_path).is_file():
-                raise SoilDataError(
-                    f"{core.KSAT_FILE} not found in {settings.regional_folder}. "
-                    "Point the tool at the output folder of 'Regional soil "
-                    "parameterisation'."
-                )
+            ksat_path = core.find_regional_files(settings.regional_folder)["ksat"]
             grid = core.grid_of(ksat_path)
             settings.zones = self._zones(parameters, context, grid, feedback)
 

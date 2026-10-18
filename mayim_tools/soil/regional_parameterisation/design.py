@@ -32,7 +32,43 @@ import numpy as np
 
 from .ptf import PARAMETER_BY_CODE
 
-DESIGN_PARAMS = ("ksat", "psi_f", "theta_s", "theta_fc", "theta_wp", "paw")
+DESIGN_PARAMS = (
+    "ksat",
+    "psi_f",
+    "theta_s",
+    "theta_fc",
+    "theta_wp",
+    "paw",
+    "ima_dry",
+    "ima_moist",
+    "t_dry",
+)
+# Initial deficit as a depth of water over the layer (mm), as well as a
+# fraction: the fraction x the layer thickness.
+DEPTH_PARAMS = ("ima_dry", "ima_moist")
+
+# How each design value relates to the soil parameters and to the Green-Ampt
+# input names of SWMM (Rossman & Huber, 2016) - the Description column.
+DESCRIPTION = {
+    "ksat": "Saturated hydraulic conductivity of the soil matrix. Green-Ampt "
+    "(SWMM) 'Conductivity'.",
+    "psi_f": "Green-Ampt wetting-front suction head = ψf (Rawls et al., 1983 "
+    "form from the retention curve). SWMM 'Suction head'.",
+    "theta_s": "Saturated water content (porosity); upper bound of the "
+    "initial deficit.",
+    "theta_fc": "Water content at 33 kPa (field capacity); moist starting state.",
+    "theta_wp": "Water content at 1500 kPa (wilting point); dry starting state.",
+    "paw": "Plant-available water = θ33 − θ1500.",
+    "ima_dry": "Initial deficit for a dry start = θs − θ1500. SWMM 'Initial "
+    "deficit' (fraction).",
+    "ima_moist": "Initial deficit for a moist start = θs − θ33. SWMM 'Initial "
+    "deficit' (fraction).",
+    "t_dry": "Drying time T = 15.78 / √Ksat (Ksat in mm/h). Time for a "
+    "saturated soil to drain to its initial deficit between storms.",
+}
+DEPTH_DESCRIPTION = (
+    "Initial deficit as a depth = fraction × layer thickness ({mm:g} mm)."
+)
 EFFECTIVE_K_FACTOR = 0.5  # Bouwer (1966): wetted-zone K about half of Ksat
 
 CONFIDENCE_RULES = {
@@ -113,7 +149,8 @@ def design_rows(result, short_names: dict) -> list[dict]:
     methods = result.settings.mc.methods
     for z, zname in enumerate(result.zone_names, start=1):
         zmask = result.zone_raster == z
-        for lab, _, _ in result.settings.layers:
+        for lab, top, bottom in result.settings.layers:
+            thickness_mm = 10.0 * (bottom - top)
             if lab not in result.texture_class:
                 continue
             for code in DESIGN_PARAMS:
@@ -160,10 +197,18 @@ def design_rows(result, short_names: dict) -> list[dict]:
                     "Share of variance (%)": 100.0 * shares[source],
                     "Recommendation": recommendation(level, source),
                     "Aggregation": "geometric mean" if prm.log else "arithmetic mean",
+                    "Description": DESCRIPTION.get(code, ""),
                 }
                 for name, val in members.items():
                     row[f"Member {name}"] = val
                 if code == "ksat":
                     row["Effective K (0.5 Ksat)"] = EFFECTIVE_K_FACTOR * cvalue
+                if code in DEPTH_PARAMS:
+                    row["Layer thickness (mm)"] = thickness_mm
+                    row["Candidate depth (mm)"] = cvalue * thickness_mm
+                    row["Sensitivity low depth (mm)"] = low * thickness_mm
+                    row["Sensitivity high depth (mm)"] = high * thickness_mm
+                    row["Product x method min depth (mm)"] = smin * thickness_mm
+                    row["Product x method max depth (mm)"] = smax * thickness_mm
                 rows.append(row)
     return rows

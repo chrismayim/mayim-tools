@@ -2,9 +2,10 @@
 No QGIS (GDAL for reading and writing only).
 
 Inputs: the Ksat P5 / P50 / P95 maps of Regional soil parameterisation
-(rsp_ksat.tif, three layers), the depth to a water impermeable layer
-(SoilGrids 2017 depth to bedrock, a raster, a constant or none) and the
-depth to the high water table (a raster, a constant or none).
+(found in its raster folder by band description: <project>_Soil_Ksat.tif,
+or rsp_ksat.tif from runs before v0.8.0; three layers), the depth to a water
+impermeable layer (SoilGrids 2017 depth to bedrock, a raster, a constant or
+none) and the depth to the high water table (a raster, a constant or none).
 
 Methods:
 - NEH630: USDA-NRCS NEH Part 630 Chapter 7 (2009), Table 7-1 (neh630.py);
@@ -36,7 +37,7 @@ from . import neh630, scs_sa
 from . import probability as prob_mod
 
 TOOL_NAME = "Hydrologic soil groups"
-TOOL_VERSION = "0.2.0"
+TOOL_VERSION = "0.3.0"
 
 LAYERS = ("0-30cm", "30-60cm", "60-100cm")
 TAGS = ("P05", "P50", "P95")
@@ -240,50 +241,162 @@ def read_band_to_grid(path: str, grid: TargetGrid, band: int = 1) -> np.ndarray:
         src = None
 
 
+def band_descriptions(path: str) -> list[str]:
+    """Band descriptions of a raster ([] if it cannot be opened)."""
+    gdal = _gdal()
+    try:
+        ds = gdal.Open(path)
+    except RuntimeError:
+        return []
+    if ds is None:
+        return []
+    try:
+        return [
+            ds.GetRasterBand(i).GetDescription() for i in range(1, ds.RasterCount + 1)
+        ]
+    finally:
+        ds = None
+
+
+def _is_ksat_file(descs: list[str]) -> bool:
+    return (
+        bool(descs)
+        and all(d.startswith("ksat_") for d in descs)
+        and any(d.startswith("ksat_0-30cm_P50") for d in descs)
+        and not any("log10" in d for d in descs)
+    )
+
+
+def _is_inputs_file(descs: list[str]) -> bool:
+    return any(d.startswith("sand_0-30cm_P50") for d in descs)
+
+
+def _is_regional_metadata(path: str) -> bool:
+    try:
+        with open(path, encoding="utf-8-sig") as f:
+            head = f.read(4000)
+    except (OSError, UnicodeDecodeError):
+        return False
+    return head.startswith("# Run") and "Regional soil parameterisation" in head
+
+
+def find_regional_files(folder: str) -> dict:
+    """Locates the Regional soil parameterisation outputs in ``folder``:
+    {'ksat': path, 'inputs': path or None, 'metadata': path or None,
+    'notes': [...]}. The legacy rsp_* names are used when present; otherwise
+    the rasters are recognised by their band descriptions (ksat_0-30cm_P50,
+    sand_0-30cm_P50), so project-numbered names work. When several runs
+    share the folder the newest file is used and a note says so."""
+    if not folder or not os.path.isdir(folder):
+        raise SoilDataError(f"Folder not found: {folder}")
+    out = {"ksat": None, "inputs": None, "metadata": None, "notes": []}
+    legacy = {
+        "ksat": os.path.join(folder, KSAT_FILE),
+        "inputs": os.path.join(folder, INPUTS_FILE),
+        "metadata": os.path.join(folder, REGIONAL_META),
+    }
+    for key, path in legacy.items():
+        if os.path.isfile(path):
+            out[key] = path
+    if out["ksat"] is None or out["inputs"] is None:
+        found = {"ksat": [], "inputs": []}
+        for name in sorted(os.listdir(folder)):
+            if not name.lower().endswith((".tif", ".tiff")):
+                continue
+            path = os.path.join(folder, name)
+            descs = band_descriptions(path)
+            if _is_ksat_file(descs):
+                found["ksat"].append(path)
+            elif _is_inputs_file(descs):
+                found["inputs"].append(path)
+        for key, paths in found.items():
+            if out[key] is not None or not paths:
+                continue
+            paths.sort(key=os.path.getmtime, reverse=True)
+            out[key] = paths[0]
+            if len(paths) > 1:
+                out["notes"].append(
+                    f"{len(paths)} candidate {key} rasters in {folder}; the newest, "
+                    f"{os.path.basename(paths[0])}, was used."
+                )
+    if out["ksat"] is None:
+        raise SoilDataError(
+            f"No Ksat raster (bands ksat_0-30cm_P50 ...) found in {folder}. Point "
+            "the tool at the raster output folder of 'Regional soil "
+            "parameterisation' with the Ksat output ticked."
+        )
+    if out["metadata"] is None:
+        for name in sorted(os.listdir(folder)):
+            path = os.path.join(folder, name)
+            if name.lower().endswith(".csv") and _is_regional_metadata(path):
+                out["metadata"] = path
+                break
+    return out
+
+
 def read_regional(folder: str) -> tuple[TargetGrid, dict, dict, dict]:
     """Grid, Ksat quantiles {tag: {layer: arr}}, surface texture
     {'sand','clay'} (may be empty) and the regional run metadata."""
-    if not folder or not os.path.isdir(folder):
-        raise SoilDataError(f"Folder not found: {folder}")
-    path = os.path.join(folder, KSAT_FILE)
-    if not os.path.isfile(path):
-        raise SoilDataError(
-            f"{KSAT_FILE} not found in {folder}. Point the tool at the output "
-            "folder of 'Regional soil parameterisation'."
-        )
+    files = find_regional_files(folder)
+    path = files["ksat"]
+    name = os.path.basename(path)
     grid = grid_of(path)
     bands = read_bands(path)
     ksat = {tag: {} for tag in TAGS}
     for desc, arr in bands.items():
-        name = desc.split(" ")[0]  # ksat_0-30cm_P50
-        parts = name.split("_")
+        parts = desc.split(" ")[0].split("_")  # ksat_0-30cm_P50
         if len(parts) == 3 and parts[0] == "ksat" and parts[2] in TAGS:
             ksat[parts[2]][parts[1]] = arr
     missing = [f"{lab} {tag}" for tag in TAGS for lab in LAYERS if lab not in ksat[tag]]
     if missing:
         raise SoilDataError(
-            f"{KSAT_FILE} lacks Ksat bands for: {', '.join(missing)}. Re-run "
+            f"{name} lacks Ksat bands for: {', '.join(missing)}. Re-run "
             "Regional soil parameterisation (all three layers are needed)."
         )
     texture = {}
-    ipath = os.path.join(folder, INPUTS_FILE)
-    if os.path.isfile(ipath):
-        ib = read_bands(ipath)
+    if files["inputs"]:
+        ib = read_bands(files["inputs"])
         for var in ("sand", "clay"):
             key = next((d for d in ib if d.startswith(f"{var}_0-30cm_P50")), None)
             if key:
                 texture[var] = ib[key]
-    return grid, ksat, texture, read_regional_metadata(folder)
+    meta = read_regional_metadata(files["metadata"]) if files["metadata"] else {}
+    if not meta:
+        meta = raster_run_metadata(path)
+    meta["_files"] = files
+    return grid, ksat, texture, meta
 
 
-def read_regional_metadata(folder: str) -> dict:
-    """Run rows of rsp_metadata.csv (Tool, Products, Methods, ...)."""
-    path = os.path.join(folder, REGIONAL_META)
+RASTER_META_KEYS = {
+    "TOOL": "Tool",
+    "PRODUCTS": "Products",
+    "METHODS": "Methods",
+    "MC_DRAWS": "Monte Carlo draws per product",
+    "RUN_TIME": "Run time",
+}
+
+
+def raster_run_metadata(path: str) -> dict:
+    """Run details embedded in a Regional parameter raster (v0.8.0+)."""
+    gdal = _gdal()
+    ds = gdal.Open(path)
+    try:
+        md = ds.GetMetadata() or {}
+    finally:
+        ds = None
+    return {label: md[key] for key, label in RASTER_META_KEYS.items() if md.get(key)}
+
+
+def read_regional_metadata(path: str) -> dict:
+    """Run rows of the Regional metadata CSV (Tool, Products, Methods, ...).
+    ``path`` is the CSV, or (older callers) the folder holding rsp_metadata.csv."""
+    if os.path.isdir(path):
+        path = os.path.join(path, REGIONAL_META)
     out = {}
     if not os.path.isfile(path):
         return out
     section = None
-    with open(path, newline="", encoding="utf-8") as f:
+    with open(path, newline="", encoding="utf-8-sig") as f:
         for row in csv.reader(f):
             if not row:
                 continue
@@ -519,7 +632,15 @@ def run(
     os.makedirs(settings.out_dir, exist_ok=True)
 
     grid, ksat, texture, meta = read_regional(settings.regional_folder)
+    files = meta.pop("_files", {})
     result = RunResult(settings=settings, grid=grid, ksat=ksat, regional_meta=meta)
+    if files.get("ksat"):
+        result.input_notes.append(f"Ksat raster: {os.path.basename(files['ksat'])}")
+    if files.get("inputs"):
+        result.input_notes.append(
+            f"Harmonised inputs raster: {os.path.basename(files['inputs'])}"
+        )
+    result.input_notes += files.get("notes", [])
     result.run_time_utc = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
     result.cell_area_km2 = cell_area_km2(grid)
     log_fn(
@@ -548,7 +669,7 @@ def run(
         grid,
         "Water-table depth",
     )
-    result.input_notes = notes + notes2
+    result.input_notes = result.input_notes + notes + notes2
     result.input_notes.insert(0, f"Depth to impermeable layer: {imp_desc}")
     result.input_notes.insert(1, f"Depth to water table: {wt_desc}")
 
@@ -565,7 +686,7 @@ def run(
         result.zone_raster = valid.astype(np.int32)
         result.zone_names = ["Area of interest"]
     if not valid.any():
-        raise SoilDataError(f"{KSAT_FILE} has no valid Ksat values.")
+        raise SoilDataError("The Ksat raster has no valid Ksat values.")
     result.mask = valid
 
     n_imp_missing = int((valid & ~np.isfinite(imp)).sum())
@@ -604,7 +725,10 @@ def run(
             valid, texture_group(texture["sand"], texture["clay"]), 0
         )
     else:
-        result.input_notes.append(f"{INPUTS_FILE} not found: no texture check.")
+        result.input_notes.append(
+            "Harmonised inputs raster (sand_0-30cm_P50 ...) not found: no texture "
+            "check. Tick 'Harmonised inputs' in Regional soil parameterisation."
+        )
 
     progress_fn(0.3, "Classifying")
     for m in settings.methods:

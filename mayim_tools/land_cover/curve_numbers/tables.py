@@ -1344,7 +1344,130 @@ TR55_ROWS = [
     ),
 ]
 
-ROWS = {r.key: r for r in SCS_SA_ROWS + TR55_ROWS}
+# ----------------------------------------------------------------------
+# WRC Report 2747/1/20 (Loots & Smithers 2020), Table 9.7: preliminary
+# calibrated SCS-SA curve numbers for the DEA 2013/14 land-use types
+# (Tshwane). Keys are the DEA land-use numbers. Printed values are used,
+# except four misprints (checked on the scanned table, pp. 93-94):
+#  - 6 and 58 (woods, high stormflow potential): B/C printed 75; Table 5.1
+#    (the row the report states it used, Table 8.1) gives 72;
+#  - 61-64 (township): C printed 76/78/79/80, below B/C; replaced by the
+#    mean of B/C and C/D;
+#  - 68 (village, bare): D printed 95, below C/D 98; set to 98.
+# ----------------------------------------------------------------------
+
+
+def _wrc(n, desc, *vals):
+    assert len(vals) == 7, n
+    return CnRow(
+        f"wrc2747:{n}", "WRC 2747/1/20 Table 9.7", desc, tuple(float(v) for v in vals)
+    )
+
+
+WRC_ROWS = [
+    _wrc(5, "Thicket / dense bush", 25, 47, 55, 64, 70, 74, 77),
+    _wrc(6, "Woodland / open bush (B/C corrected to 72)", 45, 56, 66, 72, 77, 80, 83),
+    _wrc(7, "Grassland", 49, 61, 69, 75, 79, 82, 84),
+    _wrc(9, "Low shrubland", 28, 36, 44, 53, 60, 64, 66),
+    _wrc(32, "Plantations / woodlots mature", 34, 47, 59, 64, 69, 72, 75),
+    _wrc(33, "Plantations / woodlots young", 37, 49, 60, 66, 71, 74, 77),
+    _wrc(35, "Mines 1 bare", 89, 91, 92, 93, 94, 95, 95),
+    _wrc(36, "Mines 2 semi-bare", 89, 91, 92, 93, 94, 95, 95),
+    _wrc(42, "Urban commercial", 89, 91, 92, 93, 94, 95, 95),
+    _wrc(43, "Urban industrial", 89, 91, 92, 93, 94, 95, 95),
+    _wrc(44, "Urban informal (dense trees / bush)", 60, 68, 74, 78, 82, 85, 86),
+    _wrc(45, "Urban informal (open trees / bush)", 64, 69, 77, 81, 84, 86, 87),
+    _wrc(46, "Urban informal (low veg / grass)", 66, 71, 79, 83, 86, 88, 89),
+    _wrc(47, "Urban informal (bare)", 78, 82, 86, 88, 90, 91, 92),
+    _wrc(
+        48,
+        "Urban residential (dense trees / bush); calibrated",
+        51,
+        59,
+        65,
+        69,
+        73,
+        76,
+        77,
+    ),
+    _wrc(
+        49,
+        "Urban residential (open trees / bush); calibrated",
+        55,
+        60,
+        68,
+        72,
+        75,
+        77,
+        78,
+    ),
+    _wrc(50, "Urban residential (low veg / grass)", 57, 62, 70, 74, 77, 79, 80),
+    _wrc(51, "Urban residential (bare); calibrated", 69, 73, 77, 79, 81, 82, 83),
+    _wrc(52, "Urban school and sports ground", 49, 61, 69, 75, 79, 82, 84),
+    _wrc(53, "Urban smallholding (dense trees / bush)", 27, 49, 57, 66, 72, 76, 79),
+    _wrc(54, "Urban smallholding (open trees / bush)", 47, 58, 68, 77, 79, 82, 85),
+    _wrc(55, "Urban smallholding (low veg / grass)", 50, 62, 70, 76, 80, 83, 85),
+    _wrc(56, "Urban smallholding (bare)", 55, 67, 75, 81, 85, 88, 90),
+    _wrc(57, "Urban sports and golf (dense trees / bush)", 39, 51, 61, 68, 74, 78, 80),
+    _wrc(
+        58,
+        "Urban sports and golf (open trees / bush) (B/C corrected to 72)",
+        45,
+        56,
+        66,
+        72,
+        77,
+        80,
+        83,
+    ),
+    _wrc(59, "Urban sports and golf (low veg / grass)", 25, 47, 55, 64, 70, 74, 77),
+    _wrc(60, "Urban sports and golf (bare)", 68, 74, 79, 83, 86, 88, 89),
+    _wrc(
+        61,
+        "Urban township (dense trees / bush) (C corrected)",
+        73,
+        77,
+        81,
+        84,
+        85.5,
+        87,
+        88,
+    ),
+    _wrc(
+        62,
+        "Urban township (open trees / bush) (C corrected)",
+        75,
+        79,
+        83,
+        86,
+        87.5,
+        89,
+        90,
+    ),
+    _wrc(
+        63,
+        "Urban township (low veg / grass) (C corrected)",
+        76,
+        80,
+        84,
+        87,
+        88.5,
+        90,
+        91,
+    ),
+    _wrc(64, "Urban township (bare) (C corrected)", 77, 81, 85, 88, 89.5, 91, 92),
+    _wrc(65, "Urban village (dense trees / bush)", 37, 59, 67, 76, 82, 86, 89),
+    _wrc(66, "Urban village (open trees / bush)", 57, 68, 78, 87, 89, 92, 95),
+    _wrc(67, "Urban village (low veg / grass)", 60, 72, 80, 86, 90, 93, 95),
+    _wrc(68, "Urban village (bare) (D corrected to 98)", 65, 77, 85, 91, 95, 98, 98),
+    _wrc(69, "Urban built-up (dense trees / bush)", 89, 91, 92, 93, 94, 95, 95),
+    _wrc(70, "Urban built-up (open trees / bush)", 89, 91, 92, 93, 94, 95, 95),
+    _wrc(71, "Urban built-up (low veg / grass)", 89, 91, 92, 93, 94, 95, 95),
+    _wrc(72, "Urban built-up (bare)", 89, 91, 92, 93, 94, 95, 95),
+]
+
+
+ROWS = {r.key: r for r in SCS_SA_ROWS + TR55_ROWS + WRC_ROWS}
 
 TABLES = {
     "scs_sa": (
@@ -1359,6 +1482,13 @@ TABLES = {
         "USDA-SCS (1986). Urban Hydrology for Small Watersheds. Technical Release "
         "55, 2nd edition. Tables 2-2a to 2-2d (as NEH 630 Chapter 9).",
         0.2,
+    ),
+    "wrc2747": (
+        "WRC 2747/1/20",
+        "Loots, I. and Smithers, J.C. (2020). Design Flood Estimation in Urban Areas "
+        "in South Africa: Preliminary Results from Tshwane Case Studies. WRC Report "
+        "No. 2747/1/20, Water Research Commission, Pretoria. Table 9.7.",
+        0.1,
     ),
 }
 
@@ -1413,6 +1543,7 @@ class DefaultClass:
     high: str
     override: str = ""
     note: str = ""
+    colour: str = ""
 
 
 _BUILT_NOTE = (
@@ -1611,6 +1742,21 @@ DEFAULT_LOOKUPS = {
         "ESA WorldCover - SCS-SA Table 5.1",
         "scs_sa",
         WORLDCOVER_SCS_SA,
+        "",
     ),
-    "worldcover_tr55": ("ESA WorldCover - TR-55 / NEH 630", "tr55", WORLDCOVER_TR55),
+    "worldcover_tr55": (
+        "ESA WorldCover - TR-55 / NEH 630",
+        "tr55",
+        WORLDCOVER_TR55,
+        "",
+    ),
 }
+
+from .sanlc import SANLC_2020, SANLC_SOURCE  # noqa: E402
+
+DEFAULT_LOOKUPS["sanlc_2020"] = (
+    "SANLC 2018 / 2020 (73 classes) - WRC 2747/1/20 and SCS-SA Table 5.1",
+    "scs_sa",
+    SANLC_2020,
+    SANLC_SOURCE,
+)

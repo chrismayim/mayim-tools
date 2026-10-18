@@ -36,6 +36,7 @@ class ClassEntry:
     override: str = ""
     rows: dict = field(default_factory=dict)  # case -> row spec / text
     note: str = ""
+    colour: str = ""
 
 
 @dataclass
@@ -79,7 +80,7 @@ def _check(entry: ClassEntry, where: str) -> None:
 def default_lookup(key: str) -> Lookup:
     if key not in tb.DEFAULT_LOOKUPS:
         raise SoilDataError(f"Unknown built-in lookup '{key}'.")
-    name, table, classes = tb.DEFAULT_LOOKUPS[key]
+    name, table, classes, source = tb.DEFAULT_LOOKUPS[key]
     out = {}
     for c in classes:
         specs = {"low": c.low, "design": c.design, "high": c.high}
@@ -89,10 +90,10 @@ def default_lookup(key: str) -> Lookup:
             )
             for case, s in specs.items()
         }
-        e = ClassEntry(c.code, c.name, values, c.override, specs, c.note)
+        e = ClassEntry(c.code, c.name, values, c.override, specs, c.note, c.colour)
         _check(e, name)
         out[c.code] = e
-    return Lookup(name, table, out, source=tb.TABLES[table][1])
+    return Lookup(name, table, out, source=source or tb.TABLES[table][1])
 
 
 def _num(text):
@@ -227,7 +228,9 @@ def _fmt(x: float) -> str:
 
 def write_reference_table(table: str, path: str) -> None:
     """The full CN table (all rows) for building custom lookups."""
-    rows = tb.SCS_SA_ROWS if table == "scs_sa" else tb.TR55_ROWS
+    rows = {"scs_sa": tb.SCS_SA_ROWS, "tr55": tb.TR55_ROWS, "wrc2747": tb.WRC_ROWS}[
+        table
+    ]
     with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow([f"# {tb.TABLES[table][1]}"])

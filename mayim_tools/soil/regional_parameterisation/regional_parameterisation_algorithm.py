@@ -1,12 +1,16 @@
 """Processing Toolbox algorithm: Regional soil parameterisation.
 
-Reads the output folders of 'Extract: SoilGrids 2.0' and/or 'Extract:
-OpenLandMap Soils' and writes hydraulic soil parameters (median and 90 %
-range per depth layer), quality rasters, a zone summary, metadata and a Word
-report. Thin wrapper - the logic is in core.py and the modules it uses (no
-QGIS; see tests/test_regional_parameterisation_core.py).
+Reads the output folders of 'Extract: SoilGrids 2.0', 'Extract: OpenLandMap
+Soils' and/or 'Extract: iSDAsoil (Africa)' and writes hydraulic soil
+parameters (median and 90 % range per depth layer), USDA texture class per
+layer, quality rasters, a zone summary, design parameters, metadata and a
+Word report. Outputs follow the Mayim output standard: a tick box per output,
+raster / CSV / Word folders and <project number>_<description> file names.
+Thin wrapper - the logic is in core.py and the modules it uses (no QGIS; see
+tests/test_regional_parameterisation_core.py).
 """
 
+import os
 from pathlib import Path
 
 from qgis.core import (
@@ -25,17 +29,22 @@ from qgis.core import (
     QgsProcessingParameterFile,
     QgsProcessingParameterFolderDestination,
     QgsProcessingParameterNumber,
+    QgsProcessingParameterString,
+    QgsProcessingParameterVectorLayer,
 )
 from qgis.PyQt.QtGui import QIcon
 
+from mayim_tools._common.output_files import CSV, RASTER, WORD, OutputSpec
 from mayim_tools.soil._common import qgis_ui
 from mayim_tools.soil._common.errors import SoilDataError
 
 from . import core
 from .inputs import TARGET_LAYERS
 from .ptf import AVAILABLE_METHODS
-from .texture import TEXTURE_CLASSES
+from .texture import TEXTURE_STYLE
 from .uncertainty import Settings
+
+STYLE_TEXTURE = str(Path(__file__).resolve().parent / "styles" / TEXTURE_STYLE)
 
 
 def _folder_behavior():
@@ -47,7 +56,81 @@ def _folder_behavior():
         return QgsProcessingParameterFile.Behavior.Folder
 
 
-MAIN_FILES = {"rsp_ksat", "rsp_psi_f", "rsp_theta_s", "rsp_texture_class"}
+def _param(code, label, description, default=True):
+    return OutputSpec(core.param_key(code), label, description, RASTER, default)
+
+
+# One tick box per output (Mayim output standard). File names are
+# <project number>_<description>.<ext>; texture is one raster per layer
+# (<..>_Soil_USDA_Texture_0-30cm.tif).
+OUTPUT_SPECS = [
+    _param("ksat", "Ksat (P50, P05, P95 per layer)", "Soil Ksat"),
+    _param("psi_f", "Wetting-front suction head ψf", "Soil Suction Head"),
+    _param("theta_s", "Saturated water content θs", "Soil Theta S"),
+    _param("theta_fc", "Field capacity θ33", "Soil Theta 33"),
+    _param("theta_wp", "Wilting point θ1500", "Soil Theta 1500"),
+    _param("paw", "Plant-available water", "Soil PAW"),
+    _param("ima_dry", "Initial deficit, dry start", "Soil Initial Deficit Dry"),
+    _param("ima_moist", "Initial deficit, moist start", "Soil Initial Deficit Moist"),
+    _param("t_dry", "Drying time (SWMM)", "Soil Drying Time"),
+    OutputSpec(
+        core.OUT_TEXTURE,
+        "USDA texture class (one raster per layer)",
+        "Soil USDA Texture",
+        RASTER,
+    ),
+    OutputSpec(
+        core.OUT_QUALITY,
+        "Quality (Ksat uncertainty, texture confidence, flags, sources)",
+        "Soil Quality",
+        RASTER,
+    ),
+    OutputSpec(
+        core.OUT_INPUTS,
+        "Harmonised inputs (used by Hydrologic soil groups)",
+        "Soil Harmonised Inputs",
+        RASTER,
+    ),
+    OutputSpec(
+        core.OUT_DIFFERENCE,
+        "Product differences",
+        "Soil Product Differences",
+        RASTER,
+        False,
+    ),
+    _param("psi_b", "Air-entry suction ψb (Saxton & Rawls)", "Soil Air Entry", False),
+    _param("lambda", "Pore-size distribution index λ", "Soil Lambda", False),
+    _param("theta_r", "van Genuchten θr", "Soil VG Theta R", False),
+    _param("alpha", "van Genuchten α", "Soil VG Alpha", False),
+    _param("n_vg", "van Genuchten n", "Soil VG N", False),
+    OutputSpec(core.OUT_ZONES_CSV, "Zone summary", "Soil Zone Summary", CSV),
+    OutputSpec(
+        core.OUT_DESIGN_CSV,
+        "Candidate design parameters",
+        "Soil Design Parameters",
+        CSV,
+    ),
+    OutputSpec(core.OUT_METADATA_CSV, "Run metadata", "Soil Parameters Metadata", CSV),
+    OutputSpec(core.OUT_REPORT, "Word report", "Soil Parameters Report", WORD),
+]
+SPEC_BY_KEY = {spec.key: spec for spec in OUTPUT_SPECS}
+FOLDER_PARAMS = {
+    RASTER: ("FOLDER_RASTER", "Output folder for rasters (GeoTIFF)"),
+    CSV: ("FOLDER_CSV", "Output folder for CSV files"),
+    WORD: ("FOLDER_WORD", "Output folder for Word reports"),
+}
+MAIN_KEYS = {
+    core.param_key("ksat"),
+    core.param_key("psi_f"),
+    core.param_key("ima_dry"),
+    core.param_key("t_dry"),
+    core.OUT_TEXTURE,
+}
+
+
+def output_param(key: str) -> str:
+    """Processing parameter name of an output's tick box."""
+    return "OUTPUT_" + key.upper()
 
 
 class RegionalSoilParameterisationAlgorithm(QgsProcessingAlgorithm):
@@ -57,6 +140,8 @@ class RegionalSoilParameterisationAlgorithm(QgsProcessingAlgorithm):
     ISDA_FOLDER = "ISDA_FOLDER"
     ZONES = "ZONES"
     ZONE_FIELD = "ZONE_FIELD"
+    SITE_BOUNDARY = "SITE_BOUNDARY"
+    CATCHMENT_BOUNDARY = "CATCHMENT_BOUNDARY"
     RESOLUTION = "RESOLUTION"
     OM_FACTOR = "OM_FACTOR"
     DENSITY = "DENSITY"
@@ -66,9 +151,9 @@ class RegionalSoilParameterisationAlgorithm(QgsProcessingAlgorithm):
     SEED = "SEED"
     WORKERS = "WORKERS"
     MAX_CELLS = "MAX_CELLS"
-    REPORT = "REPORT"
+    REPORT_BASEMAP = "REPORT_BASEMAP"
     LOAD_LAYERS = "LOAD_LAYERS"
-    OUTPUT_FOLDER = "OUTPUT_FOLDER"
+    PROJECT_NUMBER = "PROJECT_NUMBER"
 
     def __init__(self):
         super().__init__()
@@ -105,10 +190,12 @@ class RegionalSoilParameterisationAlgorithm(QgsProcessingAlgorithm):
             "field capacity (33 kPa) and "
             "wilting point (1500 kPa), plant-available water, saturated "
             "hydraulic conductivity (Ksat), Brooks-Corey and van Genuchten "
-            "parameters and the Green-Ampt wetting-front suction - each as a "
-            "median (P50) with a "
-            "90 % range (P05-P95). A detailed Word report documents the data, "
-            "methods, uncertainty and checks.\n"
+            "parameters, the Green-Ampt wetting-front suction head and the "
+            "Green-Ampt (SWMM) initial deficit (dry and moist start) and drying "
+            "time - each as a median (P50) with a 90 % range (P05-P95) - and the "
+            "USDA texture class per layer. A Word report documents the data, "
+            "methods, uncertainty, checks and candidate design values per zone, "
+            "with a USDA texture layout map per layer.\n"
             "\n"
             "INPUTS:\tGive one, two or three product folders (more is better: "
             "each product is an ensemble member, their disagreement is reported "
@@ -136,13 +223,30 @@ class RegionalSoilParameterisationAlgorithm(QgsProcessingAlgorithm):
             "ZONES:\tOptional polygons (e.g. catchments) for per-zone tables. "
             "Only cells inside the zones are processed when zones are given.\n"
             "\n"
-            "OUTPUTS:\tOne GeoTIFF per parameter (bands: P50, P05, P95 per "
-            "layer - select bands by description), harmonised inputs, USDA "
-            "texture class, quality raster (Ksat uncertainty factor and class, texture "
-            "confidence, validity flags, input "
-            "source), product differences (each pair of products), zone summary CSV, "
-            "metadata CSV, Word report and one .qlr layer file that reloads every "
-            "output styled.\n"
+            "REPORT MAPS:\tThe USDA texture layout maps show the texture raster "
+            "at 70 % transparency over OpenStreetMap. Optional site boundary and "
+            "catchment boundary polygon layers are drawn above it in their "
+            "symbology from the project. With a catchment layer the map fits the "
+            "catchment with a margin; without it the map fits the texture raster "
+            "(and the zones are outlined as the study area).\n"
+            "\n"
+            "OUTPUTS:\tTick the outputs you need and choose a folder for "
+            "rasters, CSV files and Word reports. Files are named <project "
+            "number>_<description> with underscores (e.g. MC2025_014_Soil_Ksat."
+            "tif); without a project number just the description. Rasters: one "
+            "GeoTIFF per parameter (bands: P50, P05, P95 per layer - select bands "
+            "by description), the USDA texture class per layer "
+            "(<..>_Soil_USDA_Texture_0-30cm.tif, styled with "
+            "SOIL_USDA_classification.qml), quality (Ksat uncertainty, texture "
+            "confidence and share, validity flags, input source), harmonised "
+            "inputs and product differences. CSV: zone summary, candidate design "
+            "parameters, run metadata (UTF-8 with BOM). Word: the report. "
+            "Existing files are overwritten; a file that is open elsewhere is "
+            "reported and the other outputs are still written.\n"
+            "\n"
+            "HYDROLOGIC SOIL GROUPS:\tGive that tool the raster folder: it finds "
+            "the Ksat and harmonised-inputs rasters by their band descriptions "
+            "(keep 'Ksat' and 'Harmonised inputs' ticked).\n"
             "\n"
             "LIMITATIONS:\tTexture-based methods ignore soil structure and "
             "macropores; global maps have modest site-level accuracy; the "
@@ -201,6 +305,21 @@ class RegionalSoilParameterisationAlgorithm(QgsProcessingAlgorithm):
                 optional=True,
             )
         )
+        for name, label in (
+            (self.SITE_BOUNDARY, "Site boundary for the report maps [optional]"),
+            (
+                self.CATCHMENT_BOUNDARY,
+                "Catchment boundary for the report maps [optional]",
+            ),
+        ):
+            self.addParameter(
+                QgsProcessingParameterVectorLayer(
+                    name,
+                    label,
+                    [QgsProcessing.SourceType.TypeVectorPolygon],
+                    optional=True,
+                )
+            )
         self.addParameter(
             QgsProcessingParameterNumber(
                 self.RESOLUTION,
@@ -224,11 +343,12 @@ class RegionalSoilParameterisationAlgorithm(QgsProcessingAlgorithm):
                 defaultValue=False,
             )
         )
-        self.addParameter(
-            QgsProcessingParameterBoolean(
-                self.REPORT, "Write the Word report", defaultValue=True
-            )
+        basemap = QgsProcessingParameterBoolean(
+            self.REPORT_BASEMAP,
+            "Report maps: OpenStreetMap background (needs internet)",
+            defaultValue=True,
         )
+        self.addParameter(qgis_ui.advanced(basemap))
         for param in (
             QgsProcessingParameterNumber(
                 self.OM_FACTOR,
@@ -286,8 +406,24 @@ class RegionalSoilParameterisationAlgorithm(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
-            QgsProcessingParameterFolderDestination(self.OUTPUT_FOLDER, "Output folder")
+            QgsProcessingParameterString(
+                self.PROJECT_NUMBER,
+                "Project number (file name prefix, optional)",
+                optional=True,
+            )
         )
+        for spec in OUTPUT_SPECS:
+            self.addParameter(
+                QgsProcessingParameterBoolean(
+                    output_param(spec.key),
+                    f"Output: {spec.label}",
+                    defaultValue=spec.default,
+                )
+            )
+        for name, label in FOLDER_PARAMS.values():
+            self.addParameter(
+                QgsProcessingParameterFolderDestination(name, label, optional=True)
+            )
 
     # ------------------------------------------------------------------
 
@@ -315,12 +451,33 @@ class RegionalSoilParameterisationAlgorithm(QgsProcessingAlgorithm):
             feedback.pushWarning(f"{len(zones)} zones: the report tables will be long.")
         return zones
 
+    def _output_paths(self, parameters, context):
+        """{core output key: path} for the ticked outputs, and the folders."""
+        project_number = self.parameterAsString(
+            parameters, self.PROJECT_NUMBER, context
+        )
+        selected = [
+            spec
+            for spec in OUTPUT_SPECS
+            if self.parameterAsBoolean(parameters, output_param(spec.key), context)
+        ]
+        if not selected:
+            raise QgsProcessingException("Tick at least one output.")
+        folders = {}
+        for kind in {spec.kind for spec in selected}:
+            name, label = FOLDER_PARAMS[kind]
+            folder = self.parameterAsFileOutput(parameters, name, context)
+            if not folder:
+                raise QgsProcessingException(f"Choose the {label.lower()}.")
+            os.makedirs(folder, exist_ok=True)
+            folders[kind] = folder
+        return {s.key: s.path(folders, project_number) for s in selected}, folders
+
     def processAlgorithm(
         self, parameters, context: QgsProcessingContext, feedback: QgsProcessingFeedback
     ):
         self._post_processors = []
-        out_dir = self.parameterAsString(parameters, self.OUTPUT_FOLDER, context)
-        Path(out_dir).mkdir(parents=True, exist_ok=True)
+        paths, folders = self._output_paths(parameters, context)
         sg = self.parameterAsFile(parameters, self.SG_FOLDER, context)
         olm = self.parameterAsFile(parameters, self.OLM_FOLDER, context)
         isda = self.parameterAsFile(parameters, self.ISDA_FOLDER, context)
@@ -336,7 +493,7 @@ class RegionalSoilParameterisationAlgorithm(QgsProcessingAlgorithm):
             gravel=self.parameterAsBoolean(parameters, self.GRAVEL, context),
         )
         settings = core.RunSettings(
-            out_dir=out_dir,
+            out_dir="",
             sg_folder=sg,
             olm_folder=olm,
             isda_folder=isda,
@@ -345,16 +502,47 @@ class RegionalSoilParameterisationAlgorithm(QgsProcessingAlgorithm):
             mc=mc,
             workers=self.parameterAsInt(parameters, self.WORKERS, context),
             max_cells=self.parameterAsInt(parameters, self.MAX_CELLS, context),
-            write_report=self.parameterAsBoolean(parameters, self.REPORT, context),
+            write_report=core.OUT_REPORT in paths,
+            outputs=paths,
         )
+        map_fn = None
+        if core.OUT_REPORT in paths:
+            try:
+                from .texture_map import make_texture_map, snapshot_layer
+
+                site = snapshot_layer(
+                    self.parameterAsVectorLayer(
+                        parameters, self.SITE_BOUNDARY, context
+                    ),
+                    "Site boundary",
+                )
+                catchment = snapshot_layer(
+                    self.parameterAsVectorLayer(
+                        parameters, self.CATCHMENT_BOUNDARY, context
+                    ),
+                    "Catchment boundary",
+                )
+                map_fn = make_texture_map(
+                    context.transformContext(),
+                    use_osm=self.parameterAsBoolean(
+                        parameters, self.REPORT_BASEMAP, context
+                    ),
+                    site_layer=site,
+                    catchment_layer=catchment,
+                )
+            except Exception as exc:  # noqa: BLE001 - the report still gets maps
+                feedback.pushWarning(
+                    f"QGIS layout maps unavailable ({exc}); the report draws "
+                    "simplified texture maps."
+                )
         try:
-            folders = [f for f in (sg, olm, isda) if f]
-            if not folders:
+            folders_in = [f for f in (sg, olm, isda) if f]
+            if not folders_in:
                 raise SoilDataError(
                     "Give at least one product folder: SoilGrids, OpenLandMap "
                     "or iSDAsoil."
                 )
-            grid = core.processing_grid(folders, settings.resolution)
+            grid = core.processing_grid(folders_in, settings.resolution)
             settings.zones = self._zones(parameters, context, grid, feedback)
 
             def progress(fraction):
@@ -365,11 +553,16 @@ class RegionalSoilParameterisationAlgorithm(QgsProcessingAlgorithm):
                 log_fn=feedback.pushInfo,
                 progress_fn=progress,
                 cancel_fn=feedback.isCanceled,
+                map_fn=map_fn,
             )
         except SoilDataError as exc:
             raise QgsProcessingException(str(exc)) from exc
         for w in result.warnings:
             feedback.pushWarning(w)
+        for n in result.notes:
+            feedback.pushInfo(n)
+        for path, reason in result.failed:
+            feedback.reportError(f"Not written: {path} ({reason})", fatalError=False)
         for row in result.zone_texture:
             if row["Layer"] == TARGET_LAYERS[0][0]:
                 ksat = next(
@@ -393,30 +586,28 @@ class RegionalSoilParameterisationAlgorithm(QgsProcessingAlgorithm):
                         else ""
                     )
                 )
-        feedback.pushInfo(f"Finished in {result.seconds:.0f} s; outputs in {out_dir}")
-        if result.report_path:
-            feedback.pushInfo(f"Report: {result.report_path}")
+        feedback.pushInfo(f"Finished in {result.seconds:.0f} s.")
+        for path, desc in result.files:
+            feedback.pushInfo(f"Written: {path} ({desc})")
 
-        texture_classes = [(c, f"{n} ({a})") for c, n, a in TEXTURE_CLASSES]
         ksat_classes = list(core.KSAT_CLASS_LABELS.items())
-        outputs = []
-        for path, _ in result.files:
-            if not path.lower().endswith(".tif"):
-                continue
-            stem = Path(path).stem
-            classes = []
-            if stem == "rsp_texture_class":
-                classes = texture_classes
-            elif stem == "rsp_quality":
-                classes = ksat_classes
-            outputs.append(
-                qgis_ui.OutputLayer(
-                    path=path, name=stem, main=stem in MAIN_FILES, classes=classes
+        layers = []
+        for key, written in result.outputs.items():
+            for path in written:
+                if not path.lower().endswith(".tif"):
+                    continue
+                stem = Path(path).stem
+                layers.append(
+                    qgis_ui.OutputLayer(
+                        path=path,
+                        name=stem,
+                        main=key in MAIN_KEYS,
+                        classes=ksat_classes if key == core.OUT_QUALITY else [],
+                        qml=STYLE_TEXTURE if key == core.OUT_TEXTURE else "",
+                    )
                 )
-            )
-        qlr = str(Path(out_dir) / core.LAYER_FILE)
-        if qgis_ui.write_layer_file(outputs, qlr, feedback):
-            feedback.pushInfo(f"Layer file (reloads all outputs, styled): {qlr}")
         choice = self.parameterAsEnum(parameters, self.LOAD_LAYERS, context)
-        qgis_ui.load_outputs(context, outputs, choice, self._post_processors)
-        return {self.OUTPUT_FOLDER: out_dir}
+        qgis_ui.load_outputs(context, layers, choice, self._post_processors)
+        out = {name: folders[kind] for kind, (name, _) in FOLDER_PARAMS.items()
+               if kind in folders}  # fmt: skip
+        return out

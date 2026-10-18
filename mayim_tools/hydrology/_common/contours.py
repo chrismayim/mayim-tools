@@ -156,3 +156,99 @@ def index_to_map(points_rc: np.ndarray, geotransform) -> list[tuple[float, float
     x = geotransform[0] + (p[:, 1] + 0.5) * geotransform[1]
     y = geotransform[3] + (p[:, 0] + 0.5) * geotransform[5]
     return list(zip(x.tolist(), y.tolist(), strict=True))
+
+
+def dem_contours(
+    dem: np.ndarray,
+    geotransform,
+    interval: float,
+    extent: tuple[float, float, float, float] | None = None,
+    max_cells: int = 1200,
+    max_levels: int = 2000,
+) -> tuple[list[tuple[float, list[tuple[float, float]]]], list[str]]:
+    """Contour lines of a DEM at every multiple of ``interval`` (m), for map
+    display. Only the window covering ``extent`` (xmin, ymin, xmax, ymax;
+    None = whole DEM) is contoured, block-averaged so that neither side
+    exceeds ``max_cells`` cells. NoData (NaN) is left blank: lines are
+    broken where they touch a NoData cell. Returns ([(level, [(x, y),
+    ...]), ...], warnings)."""
+    warnings: list[str] = []
+    if interval is None or interval <= 0:
+        return [], warnings
+    z = np.asarray(dem, dtype=np.float64)
+    gt = list(geotransform)
+    rows, cols = z.shape
+    if extent is not None:
+        xmin, ymin, xmax, ymax = extent
+        c0 = int(np.floor((xmin - gt[0]) / gt[1])) - 1
+        c1 = int(np.ceil((xmax - gt[0]) / gt[1])) + 1
+        r0 = int(np.floor((ymax - gt[3]) / gt[5])) - 1
+        r1 = int(np.ceil((ymin - gt[3]) / gt[5])) + 1
+        r0, c0 = max(r0, 0), max(c0, 0)
+        r1, c1 = min(r1, rows), min(c1, cols)
+        if r1 - r0 < 2 or c1 - c0 < 2:
+            return [], warnings
+        z = z[r0:r1, c0:c1]
+        gt[0] += c0 * gt[1]
+        gt[3] += r0 * gt[5]
+    step = max(1, int(np.ceil(max(z.shape) / max_cells)))
+    if step > 1:
+        h, w = (z.shape[0] // step) * step, (z.shape[1] // step) * step
+        blocks = z[:h, :w].reshape(h // step, step, w // step, step)
+        with np.errstate(invalid="ignore"):
+            valid = np.isfinite(blocks).all(axis=(1, 3))
+            z = np.where(valid, np.nanmean(blocks, axis=(1, 3)), np.nan)
+        gt[1] *= step
+        gt[5] *= step
+    finite = np.isfinite(z)
+    if finite.sum() < 4:
+        return [], warnings
+    lo, hi = float(np.nanmin(z)), float(np.nanmax(z))
+    levels = np.arange(np.ceil(lo / interval), np.floor(hi / interval) + 1) * interval
+    if levels.size > max_levels:
+        warnings.append(
+            f"Contours not drawn: a {interval:g} m interval gives {levels.size} "
+            f"contour levels over the {hi - lo:.1f} m relief of the map "
+            f"(more than {max_levels}). Use a larger contour interval."
+        )
+        return [], warnings
+    filled = np.where(finite, z, lo - 10.0 * interval)  # NoData far below
+    nodata = ~finite
+    out = []
+    for level in levels:
+        for line in marching_squares(filled, float(level)):
+            for piece in _split_at_nodata(line, nodata):
+                if len(piece) >= 2:
+                    out.append((round(float(level), 6), index_to_map(piece, gt)))
+    return out, warnings
+
+
+def _split_at_nodata(line_rc: np.ndarray, nodata: np.ndarray) -> list[np.ndarray]:
+    """Breaks a contour (fractional row/col positions) wherever it runs
+    between cells of which one is NoData."""
+    if not nodata.any():
+        return [line_rc]
+    rows, cols = nodata.shape
+    r = np.asarray(line_rc[:, 0])
+    c = np.asarray(line_rc[:, 1])
+    r_lo = np.clip(np.floor(r).astype(int), 0, rows - 1)
+    r_hi = np.clip(np.ceil(r).astype(int), 0, rows - 1)
+    c_lo = np.clip(np.floor(c).astype(int), 0, cols - 1)
+    c_hi = np.clip(np.ceil(c).astype(int), 0, cols - 1)
+    bad = (
+        nodata[r_lo, c_lo]
+        | nodata[r_hi, c_hi]
+        | nodata[r_lo, c_hi]
+        | nodata[r_hi, c_lo]
+    )
+    pieces, current = [], []
+    for i, point in enumerate(line_rc):
+        if bad[i]:
+            if len(current) >= 2:
+                pieces.append(np.asarray(current))
+            current = []
+        else:
+            current.append(point)
+    if len(current) >= 2:
+        pieces.append(np.asarray(current))
+    return pieces

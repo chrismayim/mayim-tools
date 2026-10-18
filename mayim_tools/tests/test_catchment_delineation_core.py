@@ -459,6 +459,54 @@ def test_pour_line_across_valley():
     assert a["snap_m"] is None and a["n_outcells"] == 31
 
 
+def test_elevation_gain_and_relief():
+    dem = valley_dem()
+    res = delineate_catchments(
+        pointer_for(dem),
+        PTR_NODATA,
+        dem,
+        np.nan,
+        GT,
+        [Outlet("A", "point", [[cxy(39, 25)]])],
+    )
+    a = res.catchments[0].attributes
+    assert a["z_outlet"] == pytest.approx(float(dem[39, 25]), abs=1e-3)
+    assert a["elev_gain"] == pytest.approx(a["z_max"] - a["z_outlet"], abs=1e-3)
+    # on a conditioned DEM the outlet is the lowest cell: relief = gain
+    assert a["relief_m"] == pytest.approx(a["elev_gain"], abs=1e-3)
+    assert not any("below the outlet" in w for w in res.warnings)
+
+
+def test_cells_below_outlet_are_reported():
+    dem = valley_dem()
+    pointer = pointer_for(dem)
+    dem_raw = dem.copy()
+    dem_raw[20, 25] = float(dem[39, 25]) - 2.0  # a pit the pointer does not see
+    res = delineate_catchments(
+        pointer,
+        PTR_NODATA,
+        dem_raw,
+        np.nan,
+        GT,
+        [Outlet("A", "point", [[cxy(39, 25)]])],
+    )
+    a = res.catchments[0].attributes
+    assert a["z_min"] == pytest.approx(float(dem[39, 25]) - 2.0, abs=1e-3)
+    assert a["relief_m"] == pytest.approx(a["elev_gain"] + 2.0, abs=1e-3)
+    assert any("1 cell(s)" in w and "below the outlet" in w for w in res.warnings)
+
+
+def test_pour_line_outlet_elevation_is_lowest_line_cell():
+    dem = valley_dem()
+    line = [cxy(30, 10), cxy(30, 40)]
+    res = delineate_catchments(
+        pointer_for(dem), PTR_NODATA, dem, np.nan, GT, [Outlet("L", "line", [line])]
+    )
+    a = res.catchments[0].attributes
+    assert a["z_outlet"] == pytest.approx(float(dem[30, 10:41].min()), abs=1e-3)
+    assert a["elev_gain"] == pytest.approx(a["z_max"] - a["z_outlet"], abs=1e-3)
+
+
 def test_crater_creates_filled_hole_and_warning():
     # a mound on the valley side with a small crater on top: the crater
     # drains to its own pit, surrounded by cells that do reach the outlet
@@ -734,6 +782,169 @@ def test_word_report(tmp_path):
     assert "5.2 Catchment up" in text and "References" in text
     if include:
         assert len(doc.inline_shapes) == 8  # four figures per catchment
+
+
+def _fake_png(width, height):
+    import io
+
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+
+    fig = Figure(figsize=(width / 100, height / 100), dpi=100)
+    FigureCanvasAgg(fig)
+    ax = fig.add_axes((0, 0, 1, 1))
+    ax.imshow(np.linspace(0, 1, 100).reshape(10, 10), cmap="Greens")
+    ax.set_axis_off()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png")
+    return buf.getvalue()
+
+
+def test_word_report_house_style_tables_and_layout_map(tmp_path):
+    docx = pytest.importorskip("docx")
+    pytest.importorskip("matplotlib")
+    from docx.shared import Cm, RGBColor
+
+    from mayim_tools.hydrology.catchment_delineation.report import (
+        OSM_ATTRIBUTION,
+        PLAN_DPI,
+        PLAN_PLOT_WIDTH_CM,
+        PlanMap,
+        plan_extent,
+        write_report_docx,
+    )
+
+    dem = valley_dem()
+    res = delineate_catchments(
+        pointer_for(dem),
+        PTR_NODATA,
+        dem,
+        np.nan,
+        GT,
+        [Outlet("A", "point", [[cxy(39, 25)]])],
+    )
+    calls = []
+    key = np.zeros((21, 42, 4))
+    key[8:13, :, 0] = key[8:13, :, 3] = 1.0  # a red line
+
+    def plan_map(c, width_cm, dpi):
+        calls.append((c.outlet_id, width_cm, dpi))
+        ext = plan_extent(c)
+        return PlanMap(
+            image=_fake_png(400, 300),
+            extent=ext,
+            legend=[("Catchment", key), ("Stream order 1", key)],
+            attribution=OSM_ATTRIBUTION,
+        )
+
+    path = tmp_path / "report.docx"
+    messages = write_report_docx(
+        str(path), res.catchments, {"version": "t"}, plan_map=plan_map
+    )
+    assert calls == [("A", PLAN_PLOT_WIDTH_CM, PLAN_DPI)]
+    assert not [m for m in messages if "layout map" in m]
+    doc = docx.Document(str(path))
+    h2 = doc.styles["Heading 2"].font
+    assert h2.name == "Arial" and h2.all_caps and h2.bold
+    assert h2.color.rgb == RGBColor.from_string("0F0F36")
+    assert doc.styles["Heading 3"].font.size.pt == 10
+    assert doc.styles["Normal"].font.name == "Arial"
+    assert doc.styles["Caption"].font.italic
+    text = "\n".join(p.text for p in doc.paragraphs)
+    assert "Shape parameters of catchment A" in text
+    assert "Relief parameters of catchment A" in text
+    assert "(background: OpenStreetMap)" in text
+    assert "© OpenStreetMap contributors" in text
+    cells = [c.text for t in doc.tables for r in t.rows for c in r.cells]
+    assert "Elevation gain H (m)" in cells and "Elongation ratio R_e" in cells
+    assert all(abs(s.width - Cm(16.5)) < Cm(0.01) for s in doc.inline_shapes)
+
+
+def test_word_report_falls_back_when_layout_map_fails(tmp_path):
+    pytest.importorskip("docx")
+    pytest.importorskip("matplotlib")
+    from mayim_tools.hydrology.catchment_delineation.report import write_report_docx
+
+    dem = valley_dem()
+    res = delineate_catchments(
+        pointer_for(dem),
+        PTR_NODATA,
+        dem,
+        np.nan,
+        GT,
+        [Outlet("A", "point", [[cxy(39, 25)]])],
+    )
+
+    def broken(c, width_cm, dpi):
+        raise RuntimeError("no network")
+
+    path = tmp_path / "broken.docx"
+    messages = write_report_docx(str(path), res.catchments, {}, plan_map=broken)
+    assert path.exists()
+    assert any("no network" in m and "simplified plan" in m for m in messages)
+
+
+def test_nice_scale_length():
+    from mayim_tools.hydrology.catchment_delineation.report import nice_scale_length
+
+    assert nice_scale_length(1000) == 200
+    assert nice_scale_length(4100) == 1000
+    assert nice_scale_length(9000) == 2000
+    assert nice_scale_length(21000) == 5000
+
+
+def test_output_file_names():
+    from mayim_tools._common.output_files import (
+        CSV,
+        SHAPEFILE,
+        OutputSpec,
+        output_file_name,
+        shapefile_field_names,
+    )
+
+    assert output_file_name("MC2025 014", "Catchments", SHAPEFILE) == (
+        "MC2025_014_Catchments.shp"
+    )
+    assert output_file_name("", "Longest Flow Paths", SHAPEFILE) == (
+        "Longest_Flow_Paths.shp"
+    )
+    assert output_file_name(" P/12:3 ", "Catchment  Parameters", CSV) == (
+        "P123_Catchment_Parameters.csv"
+    )
+    spec = OutputSpec("K", "Label", "Stream Network", SHAPEFILE)
+    path = spec.path({SHAPEFILE: "/tmp/out"}, "X1")
+    assert path.replace("\\", "/") == "/tmp/out/X1_Stream_Network.shp"
+    with pytest.raises(ValueError):
+        spec.path({}, "X1")
+    names = shapefile_field_names(["links_to_out", "links_to_other", "outlet_id"])
+    assert names == ["links_to_o", "links_to_1", "outlet_id"]
+    assert all(len(n) <= 10 for n in names)
+
+
+def test_dem_contours_levels_extent_and_nodata():
+    from mayim_tools.hydrology._common.contours import dem_contours
+
+    y, x = np.mgrid[0:50, 0:60].astype(float)
+    dem = 100.0 + x * 0.5  # rises 0.5 m per cell eastward
+    lines, warnings = dem_contours(dem, GT, 5.0)
+    levels = sorted({lv for lv, _ in lines})
+    assert levels == [105.0, 110.0, 115.0, 120.0, 125.0] and not warnings
+    for lv, coords in lines:  # vertical lines at x = 1000 + (2 (lv - 100) + 0.5) * 10
+        xs = {round(px, 6) for px, _ in coords}
+        assert xs == {round(1000 + (2 * (lv - 100) + 0.5) * CELL, 6)}
+    # extent window: only levels inside it
+    ext = (1000 + 25 * CELL, GT[3] - 50 * CELL, 1000 + 45 * CELL, GT[3])
+    lines, _ = dem_contours(dem, GT, 5.0, extent=ext)
+    assert {lv for lv, _ in lines} <= {110.0, 115.0, 120.0, 125.0}
+    # NoData splits a line
+    holed = dem.copy()
+    holed[20:25, :] = np.nan
+    lines, _ = dem_contours(holed, GT, 10.0)
+    assert len([1 for lv, _ in lines if lv == 110.0]) == 2
+    # interval 0 = no contours; too many levels -> warning
+    assert dem_contours(dem, GT, 0.0) == ([], [])
+    lines, warnings = dem_contours(dem, GT, 0.001)
+    assert not lines and "larger contour interval" in warnings[0]
 
 
 def test_stream_links_split_at_junctions():

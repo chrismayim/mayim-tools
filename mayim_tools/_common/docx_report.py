@@ -77,6 +77,9 @@ HOUSE_FONT = "Arial"
 HOUSE_HEADING_RGB = "0F0F36"
 HOUSE_TEXT_RGB = "000000"
 HOUSE_TABLE_HEADER = "ADADCC"  # table header row shading
+HOUSE_TITLE_SIZE = 20  # title page title, pt
+TITLE_PAGE_TOP_CM = 7.0  # space above the title (about a third down the page)
+PREPARED_BY = "Mayim Consulting"
 
 
 def _set_style_font(style, name, size_pt, bold=None, italic=None, rgb=None, caps=None):
@@ -152,6 +155,92 @@ class Doc:
         caption = styles["Caption"]
         _set_style_font(caption, HOUSE_FONT, 9, bold=False, italic=True)
         caption.font.color.rgb = None
+
+    def title_page(self, title, purpose=None, details=(), subtitle=None):
+        """Title page (report standard 1.4) followed by a page break: the
+        title (Arial 20 pt bold, #0F0F36, centred), an optional subtitle,
+        a short purpose and goal statement and a borderless table of report
+        details [(label, value)] - missing values are shown as "-"."""
+        from docx.enum.table import WD_TABLE_ALIGNMENT
+        from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+        from docx.shared import Cm, Pt, RGBColor
+
+        style = self.doc.styles["Title"]
+        _set_style_font(
+            style,
+            HOUSE_FONT,
+            HOUSE_TITLE_SIZE,
+            bold=True,
+            italic=False,
+            rgb=HOUSE_HEADING_RGB,
+            caps=False,
+        )
+        p_pr = style.element.get_or_add_pPr()
+        for border in p_pr.findall(qn("w:pBdr")):  # template's rule below
+            p_pr.remove(border)
+        r_pr = style.element.get_or_add_rPr()
+        for tag in ("w:spacing", "w:kern"):
+            for el in r_pr.findall(qn(tag)):
+                r_pr.remove(el)
+        style.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        p = self.doc.add_paragraph(title, style="Title")
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p.paragraph_format.space_before = Cm(TITLE_PAGE_TOP_CM)
+        p.paragraph_format.space_after = Pt(12)
+
+        if subtitle:
+            p = self.doc.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            run = p.add_run(subtitle)
+            run.bold = True
+            run.font.size = Pt(12)
+            run.font.color.rgb = RGBColor.from_string(HOUSE_HEADING_RGB)
+            p.paragraph_format.space_after = Pt(12)
+
+        if purpose:
+            p = self.doc.add_paragraph(purpose)
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            p.paragraph_format.space_before = Pt(12)
+            p.paragraph_format.space_after = Pt(24)
+
+        details = list(details)
+        if details:
+            t = self.doc.add_table(rows=0, cols=2)
+            t.alignment = WD_TABLE_ALIGNMENT.CENTER
+            t.autofit = False
+            tbl_pr = t._tbl.tblPr
+            borders = OxmlElement("w:tblBorders")
+            for edge in ("top", "left", "bottom", "right", "insideH", "insideV"):
+                el = OxmlElement(f"w:{edge}")
+                el.set(qn("w:val"), "nil")
+                borders.append(el)
+            tbl_pr.append(borders)
+            for label, value in details:
+                text = "-" if value is None or str(value).strip() == "" else value
+                cells = t.add_row().cells
+                for cell, content, bold in (
+                    (cells[0], label, True),
+                    (cells[1], str(text), False),
+                ):
+                    cell.text = ""
+                    run = cell.paragraphs[0].add_run(str(content))
+                    run.bold = bold
+                    run.font.size = Pt(10)
+            layout = OxmlElement("w:tblLayout")
+            layout.set(qn("w:type"), "fixed")
+            tbl_pr.append(layout)
+            widths = (5.0, 7.0)
+            for col, width in zip(t.columns, widths, strict=True):
+                col.width = Cm(width)
+            for row in t.rows:
+                for cell, width in zip(row.cells, widths, strict=True):
+                    cell.width = Cm(width)
+                    cell.paragraphs[0].paragraph_format.space_after = Pt(3)
+
+        self.doc.add_paragraph().add_run().add_break(WD_BREAK.PAGE)
 
     def heading(self, text, level):
         self.doc.add_heading(text, level=level)

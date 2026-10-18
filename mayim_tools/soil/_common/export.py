@@ -23,8 +23,10 @@ def write_multiband_geotiff(
     units: str,
     source: str = "",
     tool_version: str = "",
+    metadata: dict | None = None,
 ) -> None:
-    """One Float32 GeoTIFF, one band per (description, array).
+    """One Float32 GeoTIFF, one band per (description, array). ``metadata``
+    adds dataset metadata items (key -> text).
 
     Values are already in conventional units. NaN is written as the
     output nodata value (-9999); nodata is never written as zero.
@@ -55,6 +57,8 @@ def write_multiband_geotiff(
         ds.SetMetadataItem("SOURCE", source)
     if tool_version:
         ds.SetMetadataItem("TOOL_VERSION", tool_version)
+    for key, value in (metadata or {}).items():
+        ds.SetMetadataItem(str(key), str(value))
     for i, (description, arr) in enumerate(bands, start=1):
         if arr.shape != (rows, cols):
             raise ValueError(
@@ -112,10 +116,13 @@ def write_points_csv(
 
 
 def write_metadata_csv(
-    sections: list[tuple[str, list[str], list[list]]], path: str | Path
+    sections: list[tuple[str, list[str], list[list]]],
+    path: str | Path,
+    encoding: str = "utf-8",
 ) -> None:
-    """Sectioned CSV: '# <title>' line, header, rows, blank line."""
-    with open(path, "w", newline="", encoding="utf-8") as f:
+    """Sectioned CSV: '# <title>' line, header, rows, blank line. Use
+    encoding 'utf-8-sig' (with BOM) for files meant to be opened in Excel."""
+    with open(path, "w", newline="", encoding=encoding) as f:
         w = csv.writer(f)
         for title, header, rows in sections:
             w.writerow([f"# {title}"])

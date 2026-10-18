@@ -42,6 +42,16 @@ REFERENCES = [
     "edition. United States Department of Agriculture, Soil Conservation Service, "
     "Washington, D.C.",
 ]
+WRC_REF = (
+    "Loots, I. and Smithers, J.C. (2020). Design Flood Estimation in Urban Areas in "
+    "South Africa: Preliminary Results from Tshwane Case Studies. WRC Report No. "
+    "2747/1/20, Water Research Commission, Pretoria."
+)
+SANLC_REF = (
+    "Department of Forestry, Fisheries and the Environment. South African National "
+    "Land-Cover (SANLC) 2018 and 2020 datasets. Pretoria. "
+    "https://egis.environment.gov.za"
+)
 WORLDCOVER_REF = (
     "Zanaga, D., Van De Kerchove, R., Daems, D., et al. (2022). ESA WorldCover 10 m "
     "2021 v200. Zenodo. https://doi.org/10.5281/zenodo.7254221"
@@ -130,7 +140,37 @@ def _recommendations(result) -> list[str]:
             "curve numbers through the flood calculation as a sensitivity test, and "
             "state the range with the result."
         )
-    if 50 in result.by_class:
+    sanlc = result.settings.lookup_key.startswith("sanlc")
+    if sanlc:
+        urban = [c for c in result.by_class if 47 <= c <= 72]
+        if urban:
+            out.append(
+                "Urban curve numbers come from WRC Report 2747/1/20, calibrated on "
+                "two Tshwane catchments and called preliminary by its authors (they "
+                "may overestimate large floods and underestimate small ones). Check "
+                "that the development types match those catchments, and use the "
+                "P95 values (uncalibrated Table 5.1 for formal residential) as a "
+                "cautious case."
+            )
+        out.append(
+            "SANLC splits urban and fallow classes by tree, bush, grass and bare "
+            "cover; this split is the least reliable part of the map. Check the "
+            "dominant classes on recent imagery."
+        )
+        flags = [
+            c
+            for c in (8, 10, 11, 38, 39, 40, 41, 34, 36, 37, 7)
+            if c in result.by_class
+        ]
+        if flags:
+            names = ", ".join(result.lookup.classes[c].name.lower() for c in flags)
+            out.append(
+                "Design values that may be low for the cover (" + names + "): the "
+                "lookup keeps the composite values (derived from WRC 2747/1/20), "
+                "with Table 5.1 alternatives (row crops, veld in poor condition, "
+                "sugarcane, compact plantation floor) as the high end of the range."
+            )
+    if 50 in result.by_class and result.settings.lookup_key.startswith("worldcover"):
         out.append(
             "Built-up land: WorldCover marks buildings and roads but not their "
             "impervious share. Replace the built-up rows of the lookup with the "
@@ -248,6 +288,19 @@ def write_report(result) -> str:
             "may need interpolation between rows, and that values below about 50 "
             "call for caution."
         )
+        if result.settings.lookup_key.startswith("sanlc"):
+            d.para(
+                "For the South African National Land Cover (SANLC 2018 / 2020, 73 "
+                "classes) the lookup is a composite. Urban, plantation and natural "
+                "vegetation classes take the preliminary calibrated curve numbers "
+                "of WRC Report 2747/1/20 (Loots & Smithers, 2020, Table 9.7), which "
+                "were derived for the DEA 2013/14 land-use types in two Tshwane "
+                "catchments; the 2018 / 2020 classes are crosswalked to those types. "
+                "Other classes use the nearest Table 5.1 row. Four misprints in "
+                "Table 9.7 are corrected (woods B/C 72, township C, village D). "
+                "Open water is 100 and bare rock 98. Herbaceous wetlands are set to "
+                "group D (saturated soils)."
+            )
     elif result.lookup.table == "tr55":
         d.para(
             "Curve numbers come from TR-55 (USDA-SCS, 1986) Tables 2-2a to 2-2d, the "
@@ -267,7 +320,7 @@ def write_report(result) -> str:
     d.table(
         ["Class", "Design", "Low (less runoff)", "High (more runoff)", "Group"],
         _class_lookup_rows(result),
-        widths_cm=[2.6, 4.5, 3.9, 3.9, 1.1],
+        widths_cm=[2.6, 4.3, 3.8, 3.8, 1.5],
     )
     d.heading("4.2 Soil groups", 3)
     d.para(
@@ -431,9 +484,7 @@ def write_report(result) -> str:
         d.bullet(text)
     d.heading("6.3 Limitations", 3)
     for text in (
-        "Land-cover maps are about 75-80 % accurate overall (WorldCover 2021: 76.7 % "
-        "globally) and much less for some classes; a class says nothing about "
-        "treatment, condition or imperviousness, which the lookup assumes.",
+        _accuracy_text(result),
         "The curve-number tables come from US experience (Table 5.1 adapts them for "
         "southern Africa); values below about 50 are uncertain.",
         "The soil and condition ranges are combined as independent 90 % ranges; "
@@ -463,6 +514,8 @@ def write_report(result) -> str:
     refs = list(REFERENCES)
     if s.lookup_key.startswith("worldcover"):
         refs.append(WORLDCOVER_REF)
+    if s.lookup_key.startswith("sanlc"):
+        refs += [WRC_REF, SANLC_REF]
     for ref in sorted(refs):
         d.para(ref)
 
@@ -499,9 +552,30 @@ def write_report(result) -> str:
 def _class_colours(result) -> dict:
     from mayim_tools.soil._common.export import class_colour
 
-    colours = {c: class_colour(c) for c in result.lookup.classes}
+    colours = {c: e.colour or class_colour(c) for c, e in result.lookup.classes.items()}
     if result.settings.lookup_key.startswith("worldcover"):
         from mayim_tools.land_cover.land_cover_extract.catalogue import CLASSES
 
         colours.update({c.code: c.colour for c in CLASSES})
     return colours
+
+
+def _accuracy_text(result) -> str:
+    key = result.settings.lookup_key
+    if key.startswith("sanlc"):
+        lead = (
+            "SANLC 2020 scored 91.5 % overall accuracy in an independent comparison "
+            "with field data, but less for some classes (grassland about 58 % "
+            "producer's accuracy)"
+        )
+    elif key.startswith("worldcover"):
+        lead = (
+            "Land-cover maps are about 75-80 % accurate overall (WorldCover 2021: "
+            "76.7 % globally) and much less for some classes"
+        )
+    else:
+        lead = "The land-cover map has its own classification errors"
+    return (
+        lead + "; a class says nothing about treatment, condition or "
+        "imperviousness, which the lookup assumes."
+    )

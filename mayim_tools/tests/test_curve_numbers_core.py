@@ -65,7 +65,7 @@ def test_row_values_mean_and_constant():
 
 
 def test_default_lookups_complete():
-    for key in tb.DEFAULT_LOOKUPS:
+    for key in ("worldcover_scs_sa", "worldcover_tr55"):
         look = lk.default_lookup(key)
         assert sorted(look.classes) == [10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100]
         for e in look.classes.values():
@@ -385,3 +385,86 @@ def test_no_overlap_raises(tmp_path):
                 write_report=False,
             )
         )
+
+
+# ----------------------------------------------------------------------
+# SANLC 2018 / 2020 lookup (WRC 2747/1/20 + SCS-SA Table 5.1)
+# ----------------------------------------------------------------------
+
+
+def test_wrc_rows_and_corrections():
+    r = tb.ROWS
+    assert r["wrc2747:48"].values == (51, 59, 65, 69, 73, 76, 77)
+    assert r["wrc2747:47"].values == (78, 82, 86, 88, 90, 91, 92)
+    assert r["wrc2747:6"].values[3] == 72  # printed 75
+    assert r["wrc2747:61"].values[4] == pytest.approx(85.5)  # printed 76
+    assert r["wrc2747:68"].values[6] == 98  # printed 95
+    for row in tb.WRC_ROWS:  # corrected rows never decrease across groups
+        v = row.values
+        assert all(v[i] <= v[i + 1] for i in range(6)), row.key
+
+
+def test_sanlc_lookup():
+    look = lk.default_lookup("sanlc_2020")
+    assert sorted(look.classes) == list(range(1, 74))
+    for e in look.classes.values():
+        for case in lk.CASES:
+            assert np.isfinite(e.values[case]).all()
+            assert ((e.values[case] >= 0) & (e.values[case] <= 100)).all()
+        assert e.colour.startswith("#")
+    d = {c: tuple(e.values["design"]) for c, e in look.classes.items()}
+    w = {
+        k.split(":")[1]: v.values for k, v in tb.ROWS.items() if k.startswith("wrc2747")
+    }
+    # formal residential -> DEA urban residential, informal -> DEA urban informal
+    assert [d[c] for c in (47, 48, 49, 50)] == [w[str(n)] for n in (48, 49, 50, 51)]
+    assert [d[c] for c in (51, 52, 53, 54)] == [w[str(n)] for n in (44, 45, 46, 47)]
+    # recreational fields -> DEA 57-60; villages -> DEA 68
+    assert [d[c] for c in (61, 62, 63, 64)] == [w[str(n)] for n in (57, 58, 59, 60)]
+    assert d[55] == d[56] == w["68"]
+    assert d[14] == (100.0,) * 7 and d[25] == (98.0,) * 7
+    assert d[8][1] == 36  # composite A/B 39 corrected
+    assert look.classes[22].override == "D" and look.classes[23].override == "D"
+    assert look.classes[24].override == ""  # kept as in the composite
+    # the high end flags a possibly low design value for annual crops
+    assert look.classes[40].values["high"][2] == tb.ROWS["scs_sa:row_crops_1"].values[2]
+
+
+def test_sanlc_end_to_end(tmp_path):
+    gdal = pytest.importorskip("osgeo.gdal")
+    from osgeo import osr
+
+    gdal.UseExceptions()
+    srs = osr.SpatialReference()
+    srs.ImportFromEPSG(32735)
+    lc = np.array([[47, 51, 22, 14, 40, 50]], dtype=np.uint8).repeat(4, axis=0)
+    path = tmp_path / "sanlc_2020.tif"
+    ds = gdal.GetDriverByName("GTiff").Create(str(path), 6, 4, 1, gdal.GDT_Byte)
+    ds.SetGeoTransform((600000, 20, 0, 7150000, 0, -20))
+    ds.SetProjection(srs.ExportToWkt())
+    ds.GetRasterBand(1).SetNoDataValue(0)
+    ds.GetRasterBand(1).WriteArray(lc)
+    ds = None
+    hsg = tmp_path / "hsg_scssa_recommended.tif"
+    ds = gdal.GetDriverByName("GTiff").Create(str(hsg), 2, 2, 1, gdal.GDT_Float32)
+    ds.SetGeoTransform((600000, 60, 0, 7150000, 0, -60))
+    ds.SetProjection(srs.ExportToWkt())
+    ds.GetRasterBand(1).SetDescription("hsg_scssa_recommended (code)")
+    ds.GetRasterBand(1).WriteArray(np.full((2, 2), 2.0))  # group B everywhere
+    ds = None
+    out = tmp_path / "o"
+    r = core.run(
+        core.RunSettings(
+            str(path), str(hsg), str(out), lookup_key="sanlc_2020", write_report=False
+        )
+    )
+    core.write_outputs(r, "test")
+    ds = gdal.Open(str(out / "curve_numbers.tif"))
+    design = ds.GetRasterBand(1).ReadAsArray()[0]
+    ds = None
+    # formal res., informal res., wetland on D, river, rain-fed crops, formal bare
+    assert design.tolist() == [65, 74, 80, 100, 69, 77]
+    assert (out / "cn_table_wrc2747.csv").exists() and (
+        out / "cn_table_scs_sa.csv"
+    ).exists()
+    assert not any("Built-up land covers" in w for w in r.warnings)

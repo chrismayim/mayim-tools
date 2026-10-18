@@ -36,6 +36,10 @@ from . import core
 LOOKUP_OPTIONS = [
     ("worldcover_scs_sa", "ESA WorldCover - SCS-SA Table 5.1 (southern Africa)"),
     ("worldcover_tr55", "ESA WorldCover - TR-55 / NEH 630"),
+    (
+        "sanlc_2020",
+        "SANLC 2018 / 2020 (73 classes) - WRC 2747/1/20 + SCS-SA (South Africa)",
+    ),
     ("custom", "Custom lookup CSV (below)"),
 ]
 AMC_CODES = list(core.AMC_OPTIONS)
@@ -103,10 +107,15 @@ class CurveNumbersAlgorithm(QgsProcessingAlgorithm):
             "\n"
             "LOOKUP:\tBuilt in: ESA WorldCover with SCS-SA Table 5.1 (Schulze, "
             "Schmidt & Smithers 2004; groups A, A/B, B, B/C, C, C/D, D) or with "
-            "TR-55 / NEH 630 (A-D). Each class has a design row and a low / high "
+            "TR-55 / NEH 630 (A-D); or the South African National Land Cover "
+            "2018 / 2020 (73 classes, a local raster) with the urban curve numbers "
+            "calibrated in Tshwane by WRC Report 2747/1/20 (Loots & Smithers 2020) "
+            "and SCS-SA Table 5.1 for other classes. Check the SANLC 2022 legend "
+            "matches the 2018 / 2020 codes before using it. Each class has a design "
+            "row and a low / high "
             "row (e.g. veld fair; good and poor). Every run writes "
             "cn_lookup_used.csv: edit it and choose 'Custom lookup CSV' to use your "
-            "own rows (also for SANLC or a hand-made land-cover map). Wetlands and "
+            "own rows (also for SANLC 2013/14 or a hand-made land-cover map). Wetlands and "
             "mangroves are set to group D.\n"
             "\n"
             "UNCERTAINTY:\tP05 / P95 combine the soil range (CN at the group of the "

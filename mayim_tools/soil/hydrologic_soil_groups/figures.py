@@ -6,7 +6,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from mayim_tools._common.docx_report import C_INK
+from mayim_tools._common.report_figures import CHART_INK as C_INK
+from mayim_tools._common.report_figures import CHART_SIZE
 from mayim_tools.soil.regional_parameterisation.figures import (
     C_OUTSIDE,
     _clean,
@@ -70,7 +71,9 @@ def confidence_maps(result):
             )
             cb.outline.set_linewidth(0.4)
             cb.ax.tick_params(labelsize=6, length=2)
-            cb.set_label("probability of the recommended group (%)", fontsize=7)
+            cb.set_label(
+                "probability of the recommended group (%)", fontsize=CHART_SIZE
+            )
         fig.tight_layout(w_pad=1.0)
         return _png(fig)
 
@@ -113,7 +116,7 @@ def zone_shares(result):
                         labels[code],
                         ha="center",
                         va="center",
-                        fontsize=6.5,
+                        fontsize=CHART_SIZE,
                         color=C_INK,
                     )
                 left += v
@@ -187,7 +190,7 @@ def ksat_thresholds(result):
         _clean(ax)
         fig.tight_layout(rect=(0, 0.12, 1, 1))
         handles, labels = ax.get_legend_handles_labels()
-        fig.legend(handles, labels, loc="lower center", ncol=3, fontsize=6.5)
+        fig.legend(handles, labels, loc="lower center", ncol=3, fontsize=CHART_SIZE)
         return _png(fig)
 
 
@@ -214,7 +217,8 @@ def probability_bars(result):
             )
         ax.set_xticks(x)
         ax.set_xticklabels(
-            [f"{r['Zone']}\n{METHOD_TITLE[r['Method']]}" for r in rows], fontsize=6.5
+            [f"{r['Zone']}\n{METHOD_TITLE[r['Method']]}" for r in rows],
+            fontsize=CHART_SIZE,
         )
         ax.set_ylabel("mean probability (%)")
         ax.set_ylim(0, 100)

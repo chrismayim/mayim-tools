@@ -544,7 +544,8 @@ def test_end_to_end_both_products(tmp_path, folders):
         "rsp_ksat.tif",
         "rsp_psi_f.tif",
         "rsp_theta_s.tif",
-        "rsp_texture_class.tif",
+        "rsp_texture_class_0-30cm.tif",
+        "rsp_texture_class_60-100cm.tif",
         "rsp_quality.tif",
         "rsp_inputs_P50.tif",
         "rsp_product_difference.tif",
@@ -603,6 +604,154 @@ def test_end_to_end_report(tmp_path, folders):
     pytest.importorskip("matplotlib")
     r = _run(tmp_path, folders, report=True)
     assert r.report_path and os.path.getsize(r.report_path) > 20000
+    from docx import Document
+
+    doc = Document(r.report_path)
+    heads = [p.text for p in doc.paragraphs if p.style.name.startswith("Heading")]
+    for h in (
+        "1. Summary",
+        "2. Tool and method",
+        "3. Inputs and settings",
+        "4. Parameters and calculations",
+        "5. Results",
+        "6. Outputs",
+        "7. Notes and limitations",
+        "8. References",
+    ):
+        assert h in heads
+    # the design table has the Green-Ampt rows and a Description column
+    design = [
+        t
+        for t in doc.tables
+        if t.rows[0].cells[-1].text == "Description"
+        and t.rows[0].cells[0].text == "Parameter"
+    ]
+    assert design
+    labels = [row.cells[0].text for row in design[0].rows]
+    for lab in (
+        "Initial deficit, dry start (m³/m³)",
+        "Initial deficit, dry start (mm)",
+        "Initial deficit, moist start (mm)",
+        "Drying time T (days)",
+        "Wetting-front suction head ψf (mm)",
+    ):
+        assert lab in labels
+    # house style: Arial body text, no "nan" in any table
+    assert doc.styles["Normal"].font.name == "Arial"
+    for t in doc.tables:
+        for row in t.rows:
+            for cell in row.cells:
+                assert "nan" not in cell.text.lower().split()
+    assert set(r.texture_paths) == {"0-30cm", "30-60cm", "60-100cm"}
+
+
+def test_report_without_texture_output(tmp_path, folders):
+    """The texture maps need class rasters; when the texture output is not
+    ticked they are written to a temporary folder and removed again."""
+    pytest.importorskip("docx")
+    pytest.importorskip("matplotlib")
+    from mayim_tools.soil.regional_parameterisation import core
+
+    sg, olm = folders
+    report = str(tmp_path / "word" / "P1_Soil_Parameters_Report.docx")
+    s = core.RunSettings(
+        out_dir="", sg_folder=sg, olm_folder="", outputs={core.OUT_REPORT: report}
+    )
+    s.mc.draws = 20
+    r = core.run(s)
+    assert os.path.isfile(report) and r.report_path == report
+    assert not r.texture_paths
+    assert os.listdir(tmp_path / "word") == ["P1_Soil_Parameters_Report.docx"]
+    assert [os.path.basename(f) for f, _ in r.files] == [
+        "P1_Soil_Parameters_Report.docx"
+    ]
+
+
+def test_output_standard_paths(tmp_path, folders):
+    """Outputs go to the paths given (output standard): only the ticked keys
+    are written, texture as one class raster per layer, CSVs with a BOM."""
+    from osgeo import gdal
+
+    from mayim_tools._common.output_files import CSV, RASTER, OutputSpec
+    from mayim_tools.soil.regional_parameterisation import core
+
+    folders_out = {RASTER: str(tmp_path / "ras"), CSV: str(tmp_path / "csv")}
+    specs = [
+        OutputSpec(core.param_key("ksat"), "Ksat", "Soil Ksat", RASTER),
+        OutputSpec(
+            core.param_key("ima_dry"), "IMD", "Soil Initial Deficit Dry", RASTER
+        ),
+        OutputSpec(core.OUT_TEXTURE, "Texture", "Soil USDA Texture", RASTER),
+        OutputSpec(core.OUT_INPUTS, "Inputs", "Soil Harmonised Inputs", RASTER),
+        OutputSpec(core.OUT_DESIGN_CSV, "Design", "Soil Design Parameters", CSV),
+        OutputSpec(core.OUT_METADATA_CSV, "Meta", "Soil Metadata", CSV),
+    ]
+    sg, olm = folders
+    s = core.RunSettings(
+        out_dir="",
+        sg_folder=sg,
+        olm_folder=olm,
+        outputs={sp.key: sp.path(folders_out, "MC2025 014") for sp in specs},
+    )
+    s.mc.draws = 20
+    r = core.run(s)
+    ras = sorted(os.listdir(tmp_path / "ras"))
+    assert ras == [
+        "MC2025_014_Soil_Harmonised_Inputs.tif",
+        "MC2025_014_Soil_Initial_Deficit_Dry.tif",
+        "MC2025_014_Soil_Ksat.tif",
+        "MC2025_014_Soil_USDA_Texture_0-30cm.tif",
+        "MC2025_014_Soil_USDA_Texture_30-60cm.tif",
+        "MC2025_014_Soil_USDA_Texture_60-100cm.tif",
+    ]
+    assert sorted(os.listdir(tmp_path / "csv")) == [
+        "MC2025_014_Soil_Design_Parameters.csv",
+        "MC2025_014_Soil_Metadata.csv",
+    ]
+    assert set(r.outputs) == {sp.key for sp in specs}
+    tex = gdal.Open(str(tmp_path / "ras" / "MC2025_014_Soil_USDA_Texture_0-30cm.tif"))
+    assert tex.RasterCount == 1
+    band = tex.GetRasterBand(1)
+    assert band.GetDescription() == "texture_class_0-30cm (USDA code)"
+    ct = band.GetColorTable()
+    assert ct.GetColorEntry(7)[:3] == (0x46, 0xD1, 0x43)  # SCL as in the QML
+    ksat = gdal.Open(str(tmp_path / "ras" / "MC2025_014_Soil_Ksat.tif"))
+    assert ksat.GetMetadataItem("TOOL").startswith("Regional soil parameterisation")
+    raw = (tmp_path / "csv" / "MC2025_014_Soil_Design_Parameters.csv").read_bytes()
+    assert raw.startswith(b"\xef\xbb\xbf")
+    header = raw.decode("utf-8-sig").splitlines()[0]
+    assert "Candidate depth (mm)" in header and "Description" in header
+
+
+def test_green_ampt_derived_parameters(tmp_path, folders):
+    """Initial deficit = θs − θ1500 / θs − θ33 and drying time 15.78/√Ksat on
+    every draw; design rows carry the depth over the layer thickness."""
+    from mayim_tools.soil.regional_parameterisation.ptf import drying_time_days
+
+    assert float(drying_time_days(25.0)) == pytest.approx(3.156, abs=1e-3)
+    assert np.isnan(drying_time_days(0.0))
+    r = _run(tmp_path, folders)
+    st = r.stats
+    lab = "0-30cm"
+    med = {k: np.nanmedian(st[k][lab][1]) for k in ("theta_s", "theta_wp", "ima_dry")}
+    assert med["ima_dry"] == pytest.approx(med["theta_s"] - med["theta_wp"], abs=0.03)
+    assert np.nanmin(st["ima_moist"][lab][1]) >= 0
+    rows = {
+        (x["Layer"], x["Parameter"]): x
+        for x in r.design_rows
+        if x["Zone"] == r.zone_names[0]
+    }
+    dry = rows[("0-30cm", "ima_dry")]
+    assert dry["Layer thickness (mm)"] == 300.0
+    assert dry["Candidate depth (mm)"] == pytest.approx(300.0 * dry["Candidate value"])
+    deep = rows[("60-100cm", "ima_moist")]
+    assert deep["Layer thickness (mm)"] == 400.0
+    t = rows[("0-30cm", "t_dry")]
+    assert (
+        t["Sensitivity low (P5)"] <= t["Candidate value"] <= t["Sensitivity high (P95)"]
+    )
+    assert "15.78" in t["Description"]
+    assert rows[("0-30cm", "psi_f")]["Description"].startswith("Green-Ampt")
 
 
 def test_wrong_folder_and_missing_inputs(tmp_path, folders):

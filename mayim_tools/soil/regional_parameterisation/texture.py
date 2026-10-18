@@ -42,6 +42,28 @@ TEXTURE_CLASSES: tuple[tuple[int, str, str], ...] = (
 )
 CLASS_NAME = {code: name for code, name, _ in TEXTURE_CLASSES}
 CLASS_ABBR = {code: abbr for code, _, abbr in TEXTURE_CLASSES}
+# Colours of the Mayim layer style styles/SOIL_USDA_classification.qml
+# (paletted, band 1, values 1-12); keep the two in step.
+TEXTURE_STYLE = "SOIL_USDA_classification.qml"
+TEXTURE_COLOURS = {
+    1: "#ff005b",
+    2: "#ff5a9d",
+    3: "#ffd557",
+    4: "#368f20",
+    5: "#3e5a14",
+    6: "#fff72e",
+    7: "#46d143",
+    8: "#ae868f",
+    9: "#f86714",
+    10: "#9d3706",
+    11: "#b96947",
+    12: "#d5c36b",
+}
+
+
+def class_label(code: int) -> str:
+    """Legend label as in the layer style, e.g. 'Sandy Clay Loam (SCL)'."""
+    return f"{CLASS_NAME[code].title()} ({CLASS_ABBR[code]})"
 
 
 def iso_to_usda(sand_iso, silt_iso, clay):

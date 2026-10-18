@@ -383,3 +383,44 @@ def test_end_to_end_isda_bedrock(tmp_path, regional):
     )
     with pytest.raises(SoilDataError):
         _run(tmp_path / "c", folder, bedrock_source="ISDA", isda_folder=str(tmp_path))
+
+
+def test_finds_project_numbered_regional_rasters(tmp_path, regional):
+    """Regional v0.8.0 writes <project>_<description>.tif to a raster folder;
+    the Ksat and inputs rasters are found by their band descriptions, and the
+    run details come from the raster metadata when no metadata CSV is there."""
+    from osgeo import gdal
+
+    folder, _ = regional
+    new = tmp_path / "ras"
+    new.mkdir()
+    for old, name in (
+        ("rsp_ksat.tif", "MC2025_014_Soil_Ksat.tif"),
+        ("rsp_inputs_P50.tif", "MC2025_014_Soil_Harmonised_Inputs.tif"),
+    ):
+        os.replace(os.path.join(folder, old), new / name)
+    ds = gdal.Open(str(new / "MC2025_014_Soil_Ksat.tif"), gdal.GA_Update)
+    ds.SetMetadataItem("TOOL", "Regional soil parameterisation (mayim_tools) v0.8.0")
+    ds = None
+    # a difference raster also has ksat_ bands but must not be taken for Ksat
+    from mayim_tools.soil._common.export import write_multiband_geotiff
+
+    grid = core.grid_of(str(new / "MC2025_014_Soil_Ksat.tif"))
+    arr = np.zeros((grid.height, grid.width))
+    write_multiband_geotiff(
+        str(new / "MC2025_014_Soil_Product_Differences.tif"),
+        grid,
+        [("clay_0-30cm_OLM-SG (%)", arr), ("ksat_0-30cm_log10_OLM/SG (-)", arr)],
+        "",
+    )
+    files = core.find_regional_files(str(new))
+    assert os.path.basename(files["ksat"]) == "MC2025_014_Soil_Ksat.tif"
+    assert os.path.basename(files["inputs"]).endswith("Harmonised_Inputs.tif")
+    r = _run(tmp_path, str(new))
+    assert r.texture is not None
+    assert r.regional_meta["Tool"].endswith("v0.8.0")
+    assert any("MC2025_014_Soil_Ksat.tif" in n for n in r.input_notes)
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    with pytest.raises(SoilDataError, match="No Ksat raster"):
+        core.find_regional_files(str(empty))

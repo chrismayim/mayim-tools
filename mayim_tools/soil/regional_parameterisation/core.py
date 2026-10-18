@@ -23,6 +23,7 @@ import numpy as np
 
 from mayim_tools.soil._common.errors import SoilDataError
 from mayim_tools.soil._common.export import (
+    write_class_geotiff,
     write_metadata_csv,
     write_multiband_geotiff,
 )
@@ -32,11 +33,20 @@ from mayim_tools.soil._common.stats import _r
 from . import design as design_mod
 from . import fill as fill_mod
 from . import inputs as inp
-from .ptf import METHOD_BY_CODE, active_parameters, rawls_1983, saxton_rawls, toth2015
+from .ptf import (
+    METHOD_BY_CODE,
+    PARAMETERS,
+    active_parameters,
+    rawls_1983,
+    saxton_rawls,
+    toth2015,
+)
 from .texture import (
     CLASS_NAME,
     ISO_TO_USDA_SILT_FACTOR,
     TEXTURE_CLASSES,
+    TEXTURE_COLOURS,
+    class_label,
     usda_class,
 )
 from .uncertainty import (
@@ -48,21 +58,20 @@ from .uncertainty import (
 )
 
 TOOL_NAME = "Regional soil parameterisation"
-TOOL_VERSION = "0.7.0"
+TOOL_VERSION = "0.8.1"
 CHUNK_CELLS = 1024
 MAX_CELLS_DEFAULT = 2_000_000  # ~1800 km2 at 30 m; about 6 GB of memory
 SAMPLE_POINTS = 3000  # cells kept for scatter plots in the report
 
 PARAM_FILE = "rsp_{code}.tif"
 INPUTS_FILE = "rsp_inputs_P50.tif"
-CLASS_FILE = "rsp_texture_class.tif"
+CLASS_FILE = "rsp_texture_class.tif"  # legacy name; now one file per layer
 QUALITY_FILE = "rsp_quality.tif"
 DIFF_FILE = "rsp_product_difference.tif"
 ZONES_CSV = "rsp_zone_summary.csv"
 DESIGN_CSV = "rsp_design_parameters.csv"
 METADATA_CSV = "rsp_metadata.csv"
 REPORT_FILE = "regional_soil_parameterisation_report.docx"
-LAYER_FILE = "rsp_layers.qlr"
 
 # Graded confidence (replaces the v0.5.0 yes/no robustness).
 # Ksat uncertainty factor F = sqrt(P95 / P5): the median times or divided by F
@@ -88,7 +97,54 @@ DENSITY_WARNING = (
     "testing the P95/P5 ratio rose about seven-fold). Use it with measured or "
     "trusted bulk densities; leave it off for screening."
 )
-CENTRAL_PARAMS = ("theta_s", "theta_fc", "theta_wp", "paw", "ksat", "psi_f")
+CENTRAL_PARAMS = (
+    "theta_s",
+    "theta_fc",
+    "theta_wp",
+    "paw",
+    "ksat",
+    "psi_f",
+    "ima_dry",
+    "ima_moist",
+    "t_dry",
+)
+
+# Output keys (RunSettings.outputs maps key -> path). Parameter rasters are
+# "param_<code>"; the texture key gives the base path of one file per layer
+# (<stem>_<layer>.tif).
+OUT_TEXTURE = "texture"
+OUT_QUALITY = "quality"
+OUT_INPUTS = "inputs"
+OUT_DIFFERENCE = "difference"
+OUT_ZONES_CSV = "zones_csv"
+OUT_DESIGN_CSV = "design_csv"
+OUT_METADATA_CSV = "metadata_csv"
+OUT_REPORT = "report"
+LEGACY_NAMES = {
+    OUT_TEXTURE: CLASS_FILE,
+    OUT_QUALITY: QUALITY_FILE,
+    OUT_INPUTS: INPUTS_FILE,
+    OUT_DIFFERENCE: DIFF_FILE,
+    OUT_ZONES_CSV: ZONES_CSV,
+    OUT_DESIGN_CSV: DESIGN_CSV,
+    OUT_METADATA_CSV: METADATA_CSV,
+    OUT_REPORT: REPORT_FILE,
+}
+
+
+def param_key(code: str) -> str:
+    return f"param_{code}"
+
+
+def layer_path(base: str, lab: str) -> str:
+    """Per-layer file next to ``base``: <stem>_<layer><ext>."""
+    root, ext = os.path.splitext(base)
+    return f"{root}_{lab}{ext or '.tif'}"
+
+
+def texture_classes_styled() -> list[tuple[int, str, str]]:
+    """[(code, label, colour)] as in the layer style (for the colour table)."""
+    return [(c, class_label(c), TEXTURE_COLOURS[c]) for c, _, _ in TEXTURE_CLASSES]
 
 
 def ksat_factor(p05, p95):
@@ -146,6 +202,18 @@ class RunSettings:
     max_cells: int = MAX_CELLS_DEFAULT
     write_report: bool = True
     allow_unverified: bool = False  # tests only
+    # key -> path of the outputs to write (see OUT_* and param_key). Empty:
+    # every output in out_dir under the legacy rsp_* names.
+    outputs: dict = field(default_factory=dict)
+
+    def path(self, key: str) -> str | None:
+        if self.outputs:
+            return self.outputs.get(key) or None
+        if key == OUT_REPORT and not self.write_report:
+            return None
+        if key.startswith("param_"):
+            return os.path.join(self.out_dir, PARAM_FILE.format(code=key[6:]))
+        return os.path.join(self.out_dir, LEGACY_NAMES[key])
 
 
 @dataclass
@@ -176,6 +244,9 @@ class RunResult:
     comparison: list = field(default_factory=list)
     comparison_samples: dict = field(default_factory=dict)
     files: list = field(default_factory=list)  # (path, description)
+    outputs: dict = field(default_factory=dict)  # key -> [paths written]
+    texture_paths: dict = field(default_factory=dict)  # layer -> class raster
+    failed: list = field(default_factory=list)  # (path, reason)
     warnings: list = field(default_factory=list)
     notes: list = field(default_factory=list)
     seconds: float = 0.0
@@ -294,7 +365,11 @@ def run(
     write_fn=write_multiband_geotiff,
     zones_fn=rasterise_zones,
     report_fn=None,
+    map_fn=None,
 ) -> RunResult:
+    """``map_fn(result, layer, plot width cm, dpi) -> PlanMap`` renders the
+    texture layout maps for the report (QGIS); without it the report draws
+    them with matplotlib."""
     t0 = time.time()
     describe_fn = describe_fn or inp.band_descriptions
     read_fn = read_fn or inp.read_file
@@ -326,7 +401,12 @@ def run(
         )
     if settings.mc.draws < 10:
         raise SoilDataError("Use at least 10 Monte Carlo draws.")
-    os.makedirs(settings.out_dir, exist_ok=True)
+    if settings.outputs:
+        for path in settings.outputs.values():
+            if path:
+                os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    else:
+        os.makedirs(settings.out_dir, exist_ok=True)
 
     grid = processing_grid([f for _, f in folders], settings.resolution, describe_fn)
     n_cells = grid.width * grid.height
@@ -425,20 +505,75 @@ def run(
     _write_tables(result)
     progress_fn(0.9)
     result.seconds = time.time() - t0
-    if settings.write_report:
+    path = settings.path(OUT_REPORT)
+    tmp_dir = None
+    if path:
         try:
             if report_fn is None:
                 from .report import write_report as report_fn
-            path = os.path.join(settings.out_dir, REPORT_FILE)
-            report_fn(result, path)
-            result.report_path = path
-            result.files.append((path, "Word report"))
+            if not result.texture_paths:  # the layout maps need the rasters
+                import tempfile
+
+                tmp_dir = tempfile.mkdtemp(prefix="rsp_texture_")
+                _write_texture(
+                    result, os.path.join(tmp_dir, "USDA_Texture.tif"), record=False
+                )
+            _write_output(
+                result,
+                OUT_REPORT,
+                path,
+                "Word report",
+                lambda: (
+                    report_fn(result, path, map_fn=map_fn)
+                    if map_fn is not None
+                    else report_fn(result, path)
+                ),
+            )
+            if os.path.isfile(path) and (path, "Word report") in result.files:
+                result.report_path = path
         except ImportError as exc:
             result.warnings.append(f"Word report not written ({exc}).")
+        finally:
+            if tmp_dir:
+                import shutil
+
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+                result.texture_paths = {}
     _write_metadata(result)
     progress_fn(1.0)
     result.seconds = time.time() - t0
     return result
+
+
+def _write_output(result: RunResult, key: str, path: str, description: str, fn):
+    """Runs one writer; a failure (e.g. the file is open in QGIS or Word) is
+    reported and the other outputs are still written."""
+    try:
+        fn()
+    except (OSError, RuntimeError, PermissionError) as exc:
+        reason = str(exc).strip() or exc.__class__.__name__
+        result.failed.append((path, reason))
+        result.warnings.append(
+            f"{os.path.basename(path)} not written ({reason}). Close the file if "
+            "it is open (QGIS, Word, Excel) and run again."
+        )
+        return False
+    result.files.append((path, description))
+    result.outputs.setdefault(key, []).append(path)
+    return True
+
+
+def run_metadata(result: RunResult) -> dict:
+    """Run details embedded in the parameter rasters (read by 'Hydrologic
+    soil groups' when the metadata CSV is elsewhere)."""
+    s = result.settings
+    return {
+        "TOOL": f"{TOOL_NAME} (mayim_tools) v{TOOL_VERSION}",
+        "PRODUCTS": ", ".join(p.name for p in result.products),
+        "METHODS": ", ".join(METHOD_BY_CODE[m].name for m in s.mc.methods),
+        "MC_DRAWS": str(s.mc.draws),
+        "RUN_TIME": result.run_time_utc,
+    }
 
 
 def _snapshot(p):
@@ -924,15 +1059,54 @@ def band_name(code: str, lab: str, tag: str, units: str) -> str:
     return f"{code}_{lab}_{tag} ({units})"
 
 
+def _write_texture(result: RunResult, base: str, record: bool = True) -> None:
+    """One class raster per layer (band 1 = USDA code 1-12, colour table as
+    in the layer style), so the QML style applies directly."""
+    meta = {"SOURCE": f"{TOOL_NAME} (mayim_tools) v{TOOL_VERSION}"}
+    for lab in _layers_done(result):
+        path = layer_path(base, lab)
+        arr = result.texture_class[lab].astype(np.uint8)
+
+        def write(path=path, arr=arr, lab=lab):
+            write_class_geotiff(
+                path,
+                result.grid,
+                arr,
+                f"texture_class_{lab} (USDA code)",
+                texture_classes_styled(),
+                nodata=0,
+                metadata=meta,
+            )
+
+        if not record:
+            write()
+            result.texture_paths[lab] = path
+        elif _write_output(
+            result, OUT_TEXTURE, path, f"USDA texture class, {lab}", write
+        ):
+            result.texture_paths[lab] = path
+
+
 def _write_rasters(result: RunResult, write_fn) -> None:
-    out = result.settings.out_dir
+    s = result.settings
     grid = result.grid
     labs = _layers_done(result)
     src = f"{TOOL_NAME} (mayim_tools) v{TOOL_VERSION}"
     if not labs:
         raise SoilDataError("No depth layer could be processed (see warnings).")
+    meta = run_metadata(result)
+    active = {p.code for p in active_parameters(s.mc.methods)}
     order = (1, 0, 2)  # P50 first so band 1 is the 0-30 cm median
-    for prm in active_parameters(result.settings.mc.methods):
+    for prm in PARAMETERS:
+        path = s.path(param_key(prm.code))
+        if not path:
+            continue
+        if prm.code not in active:
+            result.notes.append(
+                f"{prm.label} is not given by the selected method(s); its raster "
+                "was not written."
+            )
+            continue
         bands = []
         for si in order:
             for lab in labs:
@@ -942,68 +1116,85 @@ def _write_rasters(result: RunResult, write_fn) -> None:
                         result.stats[prm.code][lab][si],
                     )
                 )
-        path = os.path.join(out, PARAM_FILE.format(code=prm.code))
-        write_fn(path, grid, bands, prm.units, src, TOOL_VERSION)
-        result.files.append((path, f"{prm.label}: P50, P05, P95 per layer"))
+        _write_output(
+            result,
+            param_key(prm.code),
+            path,
+            f"{prm.label}: P50, P05, P95 per layer",
+            lambda path=path, bands=bands, prm=prm: write_fn(
+                path, grid, bands, prm.units, src, TOOL_VERSION, metadata=meta
+            ),
+        )
 
-    bands = []
-    for key, units in INPUT_BANDS:
-        if key in ("bulk_density", "gravel") and all(
-            not np.isfinite(result.inputs_p50[key][lab]).any() for lab in labs
-        ):
-            continue
+    path = s.path(OUT_INPUTS)
+    if path:
+        bands = []
+        for key, units in INPUT_BANDS:
+            if key in ("bulk_density", "gravel") and all(
+                not np.isfinite(result.inputs_p50[key][lab]).any() for lab in labs
+            ):
+                continue
+            for lab in labs:
+                bands.append(
+                    (band_name(key, lab, "P50", units), result.inputs_p50[key][lab])
+                )
+        _write_output(
+            result,
+            OUT_INPUTS,
+            path,
+            "Harmonised inputs (USDA texture, OM, ...): median",
+            lambda: write_fn(path, grid, bands, "", src, TOOL_VERSION, metadata=meta),
+        )
+
+    path = s.path(OUT_TEXTURE)
+    if path:
+        _write_texture(result, path)
+
+    path = s.path(OUT_QUALITY)
+    if path:
+        bands = []
+        for lab in labs:
+            kc = result.ksat_class[lab].astype(float)
+            kc[kc == 0] = np.nan
+            bands.append((f"ksat_uncertainty_class_{lab} (code)", kc))
         for lab in labs:
             bands.append(
-                (band_name(key, lab, "P50", units), result.inputs_p50[key][lab])
+                (f"ksat_uncertainty_factor_{lab} (x/÷)", result.ksat_factor[lab])
             )
-    path = os.path.join(out, INPUTS_FILE)
-    write_fn(path, grid, bands, "", src, TOOL_VERSION)
-    result.files.append((path, "Harmonised inputs (USDA texture, OM, ...): median"))
-
-    bands = [
-        (f"texture_class_{lab} (USDA code)", result.texture_class[lab].astype(float))
-        for lab in labs
-    ]
-    for b in bands:
-        b[1][b[1] == 0] = np.nan
-    bands += [
-        (f"texture_class_share_{lab} (fraction of draws)", result.texture_share[lab])
-        for lab in labs
-    ]
-    path = os.path.join(out, CLASS_FILE)
-    write_fn(path, grid, bands, "", src, TOOL_VERSION)
-    result.files.append((path, "USDA texture class (mode of the draws) and its share"))
-
-    bands = []
-    for lab in labs:
-        kc = result.ksat_class[lab].astype(float)
-        kc[kc == 0] = np.nan
-        bands.append((f"ksat_uncertainty_class_{lab} (code)", kc))
-    for lab in labs:
-        bands.append((f"ksat_uncertainty_factor_{lab} (x/÷)", result.ksat_factor[lab]))
-    for lab in labs:
-        tc = result.texture_conf[lab].astype(float)
-        tc[tc == 0] = np.nan
-        bands.append((f"texture_confidence_class_{lab} (code)", tc))
-    for lab in labs:
-        fl = result.flags[lab].astype(float)
-        fl[~np.isfinite(result.stats["ksat"][lab][1])] = np.nan
-        bands.append((f"validity_flags_{lab} (bit mask)", fl))
-    for p in result.products:
         for lab in labs:
-            s = result.sources[p.name].get(lab)
-            if s is None:
-                continue
-            s = s.astype(float)
-            s[s == 0] = np.nan
-            bands.append((f"source_{SHORT[p.name]}_{lab} (code)", s))
-    path = os.path.join(out, QUALITY_FILE)
-    write_fn(path, grid, bands, "", src, TOOL_VERSION)
-    result.files.append(
-        (path, "Ksat uncertainty, texture confidence, validity flags, input sources")
-    )
+            tc = result.texture_conf[lab].astype(float)
+            tc[tc == 0] = np.nan
+            bands.append((f"texture_confidence_class_{lab} (code)", tc))
+        for lab in labs:
+            bands.append(
+                (
+                    f"texture_class_share_{lab} (fraction of draws)",
+                    result.texture_share[lab],
+                )
+            )
+        for lab in labs:
+            fl = result.flags[lab].astype(float)
+            fl[~np.isfinite(result.stats["ksat"][lab][1])] = np.nan
+            bands.append((f"validity_flags_{lab} (bit mask)", fl))
+        for p in result.products:
+            for lab in labs:
+                src_arr = result.sources[p.name].get(lab)
+                if src_arr is None:
+                    continue
+                src_arr = src_arr.astype(float)
+                src_arr[src_arr == 0] = np.nan
+                bands.append((f"source_{SHORT[p.name]}_{lab} (code)", src_arr))
+        _write_output(
+            result,
+            OUT_QUALITY,
+            path,
+            "Ksat uncertainty, texture confidence and share, validity flags, "
+            "input sources",
+            lambda: write_fn(path, grid, bands, "", src, TOOL_VERSION, metadata=meta),
+        )
 
-    if len(result.products) >= 2:
+    path = s.path(OUT_DIFFERENCE)
+    if path and len(result.products) >= 2:
         bands = []
         for a_name, b_name in product_pairs(result):
             tag = f"{SHORT[b_name]}-{SHORT[a_name]}"
@@ -1023,11 +1214,19 @@ def _write_rasters(result: RunResult, write_fn) -> None:
                         )
                     )
         if bands:
-            path = os.path.join(out, DIFF_FILE)
-            write_fn(path, grid, bands, "", src, TOOL_VERSION)
-            result.files.append(
-                (path, "Product differences per pair (central soils, USDA limits)")
+            _write_output(
+                result,
+                OUT_DIFFERENCE,
+                path,
+                "Product differences per pair (central soils, USDA limits)",
+                lambda: write_fn(
+                    path, grid, bands, "", src, TOOL_VERSION, metadata=meta
+                ),
             )
+    elif path:
+        result.notes.append(
+            "Product differences need two or more products; not written."
+        )
 
 
 def _fmt(v, nd=4):
@@ -1039,54 +1238,60 @@ def _fmt(v, nd=4):
     return _r(v, nd)
 
 
-def _write_tables(result: RunResult) -> None:
+def _csv_rows(path: str, cols: list, rows: list) -> None:
+    """UTF-8 with BOM, so Excel shows units such as m3/m3 and ψ correctly."""
     import csv
 
-    path = os.path.join(result.settings.out_dir, ZONES_CSV)
-    cols = [
-        "Zone",
-        "Layer",
-        "Parameter",
-        "Units",
-        "Cells",
-        "Area (km2)",
-        "Median of P50",
-        "Mean of P50",
-        "P5 of P50 (spatial)",
-        "P95 of P50 (spatial)",
-        "Median cell P5",
-        "Median cell P95",
-    ] + [f"Share {k}" for k in VARIANCE_PARTS]
-    for row in result.zone_rows:  # per-product central medians
-        cols += [k for k in row if k not in cols]
-    with open(path, "w", newline="", encoding="utf-8") as f:
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f)
         w.writerow(cols)
-        for row in result.zone_rows:
+        for row in rows:
             w.writerow(
                 [
                     v if isinstance(v, str) else _fmt(v)
                     for v in (row.get(c, "") for c in cols)
                 ]
             )
-    result.files.append((path, "Zone summary per layer and parameter"))
-    if result.design_rows:
-        path = os.path.join(result.settings.out_dir, DESIGN_CSV)
+
+
+def _write_tables(result: RunResult) -> None:
+    s = result.settings
+    path = s.path(OUT_ZONES_CSV)
+    if path:
+        cols = [
+            "Zone",
+            "Layer",
+            "Parameter",
+            "Units",
+            "Cells",
+            "Area (km2)",
+            "Median of P50",
+            "Mean of P50",
+            "P5 of P50 (spatial)",
+            "P95 of P50 (spatial)",
+            "Median cell P5",
+            "Median cell P95",
+        ] + [f"Share {k}" for k in VARIANCE_PARTS]
+        for row in result.zone_rows:  # per-product central medians
+            cols += [k for k in row if k not in cols]
+        _write_output(
+            result,
+            OUT_ZONES_CSV,
+            path,
+            "Zone summary per layer and parameter",
+            lambda: _csv_rows(path, cols, result.zone_rows),
+        )
+    path = s.path(OUT_DESIGN_CSV)
+    if path and result.design_rows:
         dcols = []
         for row in result.design_rows:
             dcols += [k for k in row if k not in dcols]
-        with open(path, "w", newline="", encoding="utf-8") as f:
-            w = csv.writer(f)
-            w.writerow(dcols)
-            for row in result.design_rows:
-                w.writerow(
-                    [
-                        v if isinstance(v, str) else _fmt(v)
-                        for v in (row.get(c, "") for c in dcols)
-                    ]
-                )
-        result.files.append(
-            (path, "Candidate design parameters (central value, range, confidence)")
+        _write_output(
+            result,
+            OUT_DESIGN_CSV,
+            path,
+            "Candidate design parameters (central value, range, confidence)",
+            lambda: _csv_rows(path, dcols, result.design_rows),
         )
 
 
@@ -1230,7 +1435,12 @@ def _write_metadata(result: RunResult) -> None:
             "Parameters",
             ["Code", "Parameter", "Units", "File"],
             [
-                [p.code, p.label, p.units, PARAM_FILE.format(code=p.code)]
+                [
+                    p.code,
+                    p.label,
+                    p.units,
+                    os.path.basename(s.path(param_key(p.code)) or "") or "-",
+                ]
                 for p in active_parameters(mc.methods)
             ],
         )
@@ -1240,7 +1450,12 @@ def _write_metadata(result: RunResult) -> None:
             "Outputs",
             ["File", "Content"],
             [[os.path.basename(f), d] for f, d in result.files]
-            + [[METADATA_CSV, "This file"]],
+            + [
+                [
+                    os.path.basename(s.path(OUT_METADATA_CSV) or METADATA_CSV),
+                    "This file",
+                ]
+            ],
         )
     )
     for title, rows in (
@@ -1258,6 +1473,12 @@ def _write_metadata(result: RunResult) -> None:
     sections.append(
         ("Warnings", ["Warning"], [[w] for w in result.warnings] or [["none"]])
     )
-    path = os.path.join(s.out_dir, METADATA_CSV)
-    write_metadata_csv(sections, path)
-    result.files.append((path, "Run metadata"))
+    path = s.path(OUT_METADATA_CSV)
+    if path:
+        _write_output(
+            result,
+            OUT_METADATA_CSV,
+            path,
+            "Run metadata",
+            lambda: write_metadata_csv(sections, path, encoding="utf-8-sig"),
+        )

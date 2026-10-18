@@ -164,10 +164,25 @@ def describe_catchment(attrs: dict, detail: dict) -> dict:
         )
         + f". Elevations range from {_fmt(a['z_min'], 1)} m to "
         f"{_fmt(a['z_max'], 1)} m (relief {_fmt(a['relief_m'], 1)} m, mean "
-        f"{_fmt(a['z_mean'], 1)} m). The longest flow path is "
+        f"{_fmt(a['z_mean'], 1)} m)"
+        + (
+            f", and the highest point is {_fmt(a['elev_gain'], 1)} m above "
+            "the outlet (elevation gain)"
+            if a.get("elev_gain") is not None
+            else ""
+        )
+        + ". The longest flow path is "
         f"{_fmt(a['lfp_km'], 3)} km long, with a 10-85 slope of "
         f"{_pct(a['s_1085'], 2)} and an equal-area slope of {_pct(a['s_ea'], 2)}."
     )
+    z_o, z_lo = a.get("z_outlet"), a.get("z_min")
+    if z_o is not None and z_lo is not None and z_lo < z_o - 0.01:
+        overview += (
+            f" Part of the catchment lies below the outlet (down to "
+            f"{_fmt(z_lo, 1)} m), which a hydrologically conditioned DEM "
+            "does not allow; check that the DEM is the conditioned DEM the "
+            "pointer was built from."
+        )
     if a["mode"] == "incremental" and a["ds_ids"]:
         overview += (
             f" It is an incremental sub-catchment draining into outlet(s) "

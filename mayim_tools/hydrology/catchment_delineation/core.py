@@ -110,6 +110,7 @@ from mayim_tools.hydrology._common.grid_polygons import (  # noqa: F401 - re-exp
 VALID_MODES = ("total", "incremental")
 DEFAULT_DEM_NODATA = -9999.0
 HYPSOMETRIC_STEPS = 21  # relative heights 0.00, 0.05, ... 1.00
+BELOW_OUTLET_TOL_M = 0.01  # cells this far below the outlet are flagged
 
 # Raised for invalid inputs (mismatched grids, bad mode, etc.). The same
 # class as the shared module's GridError, so either name catches both.
@@ -702,7 +703,28 @@ def delineate_catchments(
         z_max = float(zv.max()) if zv.size else None
         z_mean = float(zv.mean()) if zv.size else None
         z_outlet = z_local[outlet_local]
+        if outlet.kind == "line":
+            # a pour line has many outlet cells: its outlet is the lowest
+            z_seeds = dem_flat[seeds_all[k]]
+            z_seeds = z_seeds[~np.isnan(z_seeds)]
+            if z_seeds.size:
+                z_outlet = z_seeds.min()
         z_outlet = None if np.isnan(z_outlet) else float(z_outlet)
+        if z_outlet is not None and zv.size:
+            below = zv < z_outlet - BELOW_OUTLET_TOL_M
+            if below.any():
+                n_below = int(below.sum())
+                warn(
+                    f"Catchment '{outlet.outlet_id}': {n_below} cell(s) "
+                    f"({n_below * cell_area / 1e4:.2f} ha, "
+                    f"{100.0 * n_below / zv.size:.1f} % of the catchment) lie "
+                    f"below the outlet elevation of {z_outlet:.2f} m, down to "
+                    f"{float(zv.min()):.2f} m. Every cell drains to the outlet, "
+                    "so on a hydrologically conditioned DEM none can be lower. "
+                    "The DEM is probably not the conditioned DEM the pointer was "
+                    "built from (or contains pits). Relief (z_max - z_min) then "
+                    "exceeds the elevation gain (z_max - z_outlet)."
+                )
 
         # grid slope (Horn) on a padded window
         pr0, pr1 = max(r0 - 1, 0), min(r1 + 1, rows)
@@ -799,6 +821,7 @@ def delineate_catchments(
             "z_max": _none_round(z_max, 3),
             "z_mean": _none_round(z_mean, 3),
             "relief_m": _none_round((z_max - z_min) if zv.size else None, 3),
+            "elev_gain": _none_round(h_rel, 3),
             "cx": round(cx, 3),
             "cy": round(cy, 3),
             "lfp_km": round(lfp_km, 4),

@@ -42,8 +42,45 @@ PARAMETERS: tuple[Parameter, ...] = (
     Parameter("theta_r", "Residual water content (van Genuchten)", "m3/m3", False, 3),
     Parameter("alpha", "van Genuchten alpha", "1/cm", True, 4),
     Parameter("n_vg", "van Genuchten n", "-", False, 3),
+    Parameter("ima_dry", "Green-Ampt initial deficit, dry start", "m3/m3", False, 3),
+    Parameter(
+        "ima_moist", "Green-Ampt initial deficit, moist start", "m3/m3", False, 3
+    ),
+    Parameter("t_dry", "Green-Ampt drying time", "days", True, 1),
 )
 PARAMETER_BY_CODE = {p.code: p for p in PARAMETERS}
+
+# Green-Ampt (SWMM) parameters derived from every method's output, per draw:
+#   ima_dry   = theta_s - theta_wp  (soil starts at wilting point)
+#   ima_moist = theta_s - theta_fc  (soil starts at field capacity)
+#   t_dry     = DRYING_TIME_COEF / sqrt(Ksat), Ksat in mm/h, T in days
+# Rossman & Huber (2016) SWMM Reference Manual Vol. I; SI form as in
+# WRC Report 2747/1/20 (Eq. 8.2). Ksat 25 mm/h gives 3.2 days.
+GREEN_AMPT_DERIVED = ("ima_dry", "ima_moist", "t_dry")
+DRYING_TIME_COEF = 15.78
+
+
+def drying_time_days(ksat_mm_h):
+    import numpy as np
+
+    k = np.asarray(ksat_mm_h, dtype=np.float64)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.where(k > 0, DRYING_TIME_COEF / np.sqrt(k), np.nan)
+
+
+def _with_green_ampt(function):
+    """Adds the derived Green-Ampt parameters to a method's output."""
+
+    def run(inputs, options):
+        out = function(inputs, options)
+        out["ima_dry"] = out["theta_s"] - out["theta_wp"]
+        out["ima_moist"] = out["theta_s"] - out["theta_fc"]
+        out["t_dry"] = drying_time_days(out["ksat"])
+        return out
+
+    run.__name__ = getattr(function, "__name__", "run")
+    run.__wrapped__ = function
+    return run
 
 
 @dataclass(frozen=True)
@@ -66,8 +103,9 @@ METHODS: tuple[Method, ...] = (
         saxton_rawls.CITATION,
         "Campbell / Brooks-Corey retention; Ksat",
         ("sand", "clay", "om"),
-        saxton_rawls.run,
-        ("theta_s", "theta_fc", "theta_wp", "paw", "ksat", "psi_b", "lambda", "psi_f"),
+        _with_green_ampt(saxton_rawls.run),
+        ("theta_s", "theta_fc", "theta_wp", "paw", "ksat", "psi_b", "lambda", "psi_f")
+        + GREEN_AMPT_DERIVED,
         True,
         "USA (USDA/NRCS National Soil Characterization database, A horizons)",
     ),
@@ -77,11 +115,11 @@ METHODS: tuple[Method, ...] = (
         toth2015.CITATION,
         "Mualem-van Genuchten retention; Ksat",
         ("silt", "clay", "oc_pct", "bulk_density"),
-        toth2015.run,
+        _with_green_ampt(toth2015.run),
         (
             "theta_s", "theta_fc", "theta_wp", "paw", "ksat", "psi_f",
             "theta_r", "alpha", "n_vg",
-        ),
+        ) + GREEN_AMPT_DERIVED,
         toth2015.VERIFIED,
         "Europe (EU-HYDI database)",
     ),

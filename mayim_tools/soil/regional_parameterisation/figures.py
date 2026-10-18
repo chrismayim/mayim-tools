@@ -1,14 +1,18 @@
-"""Publication-quality figures for the Regional soil parameterisation report.
+"""Figures for the Regional soil parameterisation report, in the Mayim chart
+house style (report and figure standard, section 2; _common/report_figures).
 
 No QGIS. matplotlib's object API only (no pyplot), which is safe on QGIS's
-Processing worker thread. Every builder returns a PNG stream (300 dpi,
-16 cm wide). Common conventions:
+Processing worker thread. Every builder returns a PNG stream at 200 dpi,
+saved at its exact size of 16.5 cm wide (no cropping). Conventions:
 
-- one sans-serif type style, 7-8 pt, thin dark axes, light grid;
+- Arial Narrow 9 pt black; axis titles bold, legends italic; black 0.75 pt
+  plot border; major / minor gridlines #BFBFBF / #F2F2F2;
+- content colours from the house palette in order (yellow for fills only);
 - panel letters (a), (b), ... on multi-panel figures;
-- maps: cells outside the zones in light grey, zone outlines, a scale bar
-  and north arrow (projected CRS), colour bars with units;
-- perceptually uniform colour maps; log colour scales for Ksat and suctions.
+- parameter maps: cells outside the zones in light grey, zone outlines, a
+  scale bar and north arrow (projected CRS), colour bars with units; log
+  colour scales for Ksat and suctions. The texture layout maps are rendered
+  by QGIS with the layer style (texture_map.py).
 """
 
 from __future__ import annotations
@@ -19,28 +23,40 @@ from contextlib import contextmanager
 
 import numpy as np
 
-from mayim_tools._common.docx_report import C_AQUA, C_BLUE, C_INK, C_INK_2, C_ORANGE
+from mayim_tools._common.report_figures import (
+    CHART_COLOURS,
+    CHART_DPI,
+    CHART_INK,
+    CHART_LINE_PT,
+    CHART_SIZE,
+    REPORT_FIG_WIDTH_CM,
+    ChartStyle,
+)
 
 from .ptf import PARAMETER_BY_CODE, PARAMETERS, rawls_1983
-from .texture import CLASS_ABBR, TEXTURE_CLASSES, ternary_xy, usda_class
+from .texture import CLASS_ABBR, TEXTURE_COLOURS, ternary_xy, usda_class
 from .uncertainty import VARIANCE_PARTS
 
-WIDTH_CM = 16.0
-DPI = 300
-C_GRID = "#e6e6e6"
-C_OUTSIDE = "#f0f0f0"
+C_RED, C_AMBER, C_YELLOW, C_GREEN, C_BLUE, C_CYAN, C_MAGENTA = CHART_COLOURS
+C_INK = CHART_INK
+C_INK_2 = CHART_INK
+C_ORANGE = C_AMBER  # reference lines and markers (no thin yellow lines)
+WIDTH_CM = REPORT_FIG_WIDTH_CM
+DPI = CHART_DPI
+C_GRID = "#BFBFBF"
+C_OUTSIDE = "#F2F2F2"
 DIVERGING = {"RdBu_r", "RdBu", "PuOr", "BrBG", "coolwarm"}
-METHOD_COLOURS = {"SR2006": C_BLUE, "TOTH2015": C_AQUA}
+METHOD_COLOURS = {"SR2006": C_RED, "TOTH2015": C_BLUE}
 METHOD_SHORT = {"SR2006": "S&R", "TOTH2015": "Tóth"}
 PRODUCT_SHORT = {"SoilGrids 2.0": "SG", "OpenLandMap-soildb": "OLM", "iSDAsoil": "iSDA"}
 PRODUCT_MARKERS = {"SoilGrids 2.0": "o", "OpenLandMap-soildb": "s", "iSDAsoil": "^"}
-PRODUCT_COLOURS = ("#2a78d6", "#eb6834", "#8e44ad")
+PRODUCT_COLOURS = (C_RED, C_GREEN, C_BLUE)  # points: no yellow
 SHORT_MARKER = {PRODUCT_SHORT[k]: v for k, v in PRODUCT_MARKERS.items()}
 PART_COLOURS = {
-    "input": C_BLUE,
-    "product": C_ORANGE,
-    "method": C_AQUA,
-    "interaction": "#a0a0a0",
+    "input": C_RED,
+    "product": C_AMBER,
+    "method": C_YELLOW,
+    "interaction": C_GREEN,
 }
 PART_LABELS = {
     "input": "Input data",
@@ -60,50 +76,43 @@ SYMBOL = {
     "theta_r": "θr",
     "alpha": "α",
     "n_vg": "n",
+    "ima_dry": "IMD dry",
+    "ima_moist": "IMD moist",
+    "t_dry": "T",
 }
 
-RC = {
-    "font.family": "DejaVu Sans",
-    "font.size": 7.5,
-    "axes.titlesize": 8,
-    "axes.labelsize": 7.5,
-    "axes.linewidth": 0.6,
-    "axes.edgecolor": C_INK_2,
-    "axes.labelcolor": C_INK,
-    "xtick.labelsize": 7,
-    "ytick.labelsize": 7,
-    "xtick.color": C_INK_2,
-    "ytick.color": C_INK_2,
-    "xtick.major.width": 0.6,
-    "ytick.major.width": 0.6,
-    "xtick.major.size": 2.5,
-    "ytick.major.size": 2.5,
-    "legend.fontsize": 7,
-    "legend.frameon": False,
-    "lines.linewidth": 1.0,
-}
+_STYLE = None
+
+
+def chart_style() -> ChartStyle:
+    """The house chart style (fonts resolved once per session)."""
+    global _STYLE
+    if _STYLE is None:
+        _STYLE = ChartStyle()
+    return _STYLE
 
 
 @contextmanager
 def _style():
-    import matplotlib
-
-    with matplotlib.rc_context(RC):
+    with chart_style().context():
         yield
 
 
 def _figure(height_cm: float):
+    """16.5 cm wide figure at 200 dpi; saved at that size (see _png)."""
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     from matplotlib.figure import Figure
 
     fig = Figure(figsize=(WIDTH_CM / 2.54, height_cm / 2.54), dpi=DPI)
     FigureCanvasAgg(fig)
+    fig.patch.set_facecolor("white")
     return fig
 
 
 def _png(fig) -> io.BytesIO:
+    """PNG at the figure's exact size (no bbox cropping)."""
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=DPI, bbox_inches="tight", facecolor="white")
+    fig.savefig(buf, format="png", dpi=DPI, facecolor="white")
     buf.seek(0)
     return buf
 
@@ -117,15 +126,24 @@ def _sig(v, n=2) -> str:
 
 def _panel(ax, i: int, title: str = "") -> None:
     label = f"({chr(97 + i)})"
-    ax.set_title(f"{label} {title}".strip(), loc="left", fontsize=8, color=C_INK)
+    ax.set_title(
+        f"{label} {title}".strip(),
+        loc="left",
+        fontsize=CHART_SIZE,
+        fontweight="bold",
+        color=C_INK,
+    )
 
 
-def _clean(ax, grid=True) -> None:
-    for side in ("top", "right"):
-        ax.spines[side].set_visible(False)
-    if grid:
-        ax.grid(True, color=C_GRID, linewidth=0.5)
-        ax.set_axisbelow(True)
+def _clean(ax, grid=True, minor=True) -> None:
+    """House axes: black 0.75 pt border on four sides, black ticks and text,
+    bold axis titles, major / minor gridlines behind the data."""
+    log_axes = [a for a in (ax.xaxis, ax.yaxis) if a.get_scale() == "log"]
+    keep = [(a, a.get_minor_locator(), a.get_minor_formatter()) for a in log_axes]
+    chart_style().axes(ax, grid=grid, minor=minor)
+    for a, loc, fmt in keep:  # keep the readable log ticks of _log_axis
+        a.set_minor_locator(loc)
+        a.set_minor_formatter(fmt)
 
 
 def _log_axis(axis, lo, hi) -> None:
@@ -177,8 +195,9 @@ def _map_frame(ax, result, scalebar: bool) -> None:
     ax.set_xticks([])
     ax.set_yticks([])
     for side in ax.spines.values():
-        side.set_color(C_INK_2)
-        side.set_linewidth(0.5)
+        side.set_visible(True)
+        side.set_color(C_INK)
+        side.set_linewidth(CHART_LINE_PT)
     ax.set_aspect("equal")
     zones = result.zone_raster
     if zones is not None and (zones > 0).any() and not (zones > 0).all():
@@ -243,7 +262,7 @@ def _scale_bar(ax, grid) -> None:
         text,
         ha="center",
         va="bottom",
-        fontsize=6,
+        fontsize=CHART_SIZE,
         color=C_INK,
         zorder=7,
     )
@@ -257,7 +276,7 @@ def _north_arrow(ax) -> None:
         xycoords="axes fraction",
         ha="center",
         va="center",
-        fontsize=7,
+        fontsize=CHART_SIZE,
         color=C_INK,
         arrowprops={"arrowstyle": "-|>", "color": C_INK, "lw": 0.8},
         bbox={
@@ -317,11 +336,11 @@ def continuous_maps(result, panels, height_cm=7.2):
             cb = fig.colorbar(
                 im, ax=ax, orientation="horizontal", fraction=0.05, pad=0.04, aspect=25
             )
-            cb.outline.set_linewidth(0.4)
+            cb.outline.set_linewidth(CHART_LINE_PT)
             if log:
                 _log_axis(cb.ax.xaxis, lo, hi)
-            cb.ax.tick_params(labelsize=6, length=2)
-            cb.set_label(units, fontsize=7)
+            cb.ax.tick_params(labelsize=CHART_SIZE, length=2)
+            cb.set_label(units, fontsize=CHART_SIZE)
         fig.tight_layout(w_pad=1.0)
         return _png(fig)
 
@@ -375,9 +394,8 @@ def categorical_maps(result, panels, colours, labels, height_cm=7.2):
 
 
 def _class_colours():
-    from mayim_tools.soil._common.export import class_colour
-
-    return {c: class_colour(c) for c, _, _ in TEXTURE_CLASSES}
+    """Texture class colours of the layer style (SOIL_USDA_classification)."""
+    return dict(TEXTURE_COLOURS)
 
 
 def texture_triangle(result, lab):
@@ -433,7 +451,7 @@ def texture_triangle(result, lab):
                     x[sel].mean(),
                     y[sel].mean(),
                     CLASS_ABBR[c],
-                    fontsize=6.5,
+                    fontsize=CHART_SIZE,
                     ha="center",
                     va="center",
                     color=C_INK_2,
@@ -480,19 +498,47 @@ def texture_triangle(result, lab):
         )
         for v in (20, 40, 60, 80):
             xs, ys = ternary_xy(v, 0)
-            ax.text(xs, ys - 3.2, f"{v}", fontsize=6, ha="center", color=C_INK_2)
+            ax.text(
+                xs, ys - 3.2, f"{v}", fontsize=CHART_SIZE, ha="center", color=C_INK_2
+            )
             xc, yc = ternary_xy(100 - v, v)
             ax.text(
-                xc - 1.8, yc, f"{v}", fontsize=6, ha="right", va="center", color=C_INK_2
+                xc - 1.8,
+                yc,
+                f"{v}",
+                fontsize=CHART_SIZE,
+                ha="right",
+                va="center",
+                color=C_INK_2,
             )
             xr, yr = ternary_xy(0, 100 - v)
             ax.text(
-                xr + 1.8, yr, f"{v}", fontsize=6, ha="left", va="center", color=C_INK_2
+                xr + 1.8,
+                yr,
+                f"{v}",
+                fontsize=CHART_SIZE,
+                ha="left",
+                va="center",
+                color=C_INK_2,
             )
-        ax.text(50, -9.5, "Sand (%)", fontsize=7.5, ha="center", color=C_INK)
-        ax.text(15, 47, "Clay (%)", fontsize=7.5, rotation=60, ha="center", color=C_INK)
+        ax.text(50, -9.5, "Sand (%)", fontsize=CHART_SIZE, ha="center", color=C_INK)
         ax.text(
-            85, 47, "Silt (%)", fontsize=7.5, rotation=-60, ha="center", color=C_INK
+            15,
+            47,
+            "Clay (%)",
+            fontsize=CHART_SIZE,
+            rotation=60,
+            ha="center",
+            color=C_INK,
+        )
+        ax.text(
+            85,
+            47,
+            "Silt (%)",
+            fontsize=CHART_SIZE,
+            rotation=-60,
+            ha="center",
+            color=C_INK,
         )
         ax.set_xlim(-8, 108)
         ax.set_ylim(-13, 92)
@@ -546,7 +592,7 @@ def scatter_panels(panels, height_cm=6.4):
                     ),
                     linewidths=0,
                 )
-                ax.plot([lo, hi], [lo, hi], color=C_INK, lw=0.7, ls="--")
+                ax.plot([lo, hi], [lo, hi], color=C_INK, lw=CHART_LINE_PT, ls="--")
                 ax.set_xlim(lo, hi)
                 ax.set_ylim(lo, hi)
                 if log:
@@ -572,7 +618,7 @@ def scatter_panels(panels, height_cm=6.4):
                     transform=ax.transAxes,
                     va="top",
                     ha="left",
-                    fontsize=6.3,
+                    fontsize=CHART_SIZE,
                     color=C_INK,
                     bbox={
                         "facecolor": "white",
@@ -624,8 +670,8 @@ def profiles(result, zone):
                     r["Median of P50"],
                     r["Median cell P95"],
                 )
-                ax.fill_betweenx([top, bot], lo, hi, color=C_BLUE, alpha=0.18, lw=0)
-                ax.plot([med, med], [top, bot], color=C_BLUE, lw=1.4)
+                ax.fill_betweenx([top, bot], lo, hi, color=C_RED, alpha=0.12, lw=0)
+                ax.plot([med, med], [top, bot], color=C_RED, lw=1.5)
                 los.append(lo)
                 his.append(hi)
             ax.set_ylim(max(b for _, _, b in layers), 0)
@@ -683,7 +729,7 @@ def box_by_member(result, lab):
             v = result.stats[code][lab][1][zone]
             data.append(v[np.isfinite(v)])
             names.append("Pooled\nP50")
-            colours.append("#7f7f7f")
+            colours.append(C_GREEN)
             data = [d if d.size else np.array([np.nan]) for d in data]
             bp = ax.boxplot(
                 data,
@@ -699,7 +745,7 @@ def box_by_member(result, lab):
                 patch.set_facecolor(col)
                 patch.set_alpha(0.45)
             ax.set_xticks(range(1, len(names) + 1))
-            ax.set_xticklabels(names, fontsize=6)
+            ax.set_xticklabels(names, fontsize=CHART_SIZE)
             prm = PARAMETER_BY_CODE[code]
             if ref and code in ("ksat", "psi_f"):
                 val = ref[3] * 10 if code == "ksat" else ref[2] * 10
@@ -715,12 +761,12 @@ def box_by_member(result, lab):
                     _log_axis(ax.yaxis, lo, hi)
             ax.set_ylabel(f"{SYMBOL.get(code, code)} ({prm.units})")
             _panel(ax, i)
-            _clean(ax)
+            _clean(ax, minor=False)
         handles = [
             Patch(facecolor=METHOD_COLOURS[m], alpha=0.45, label=METHOD_SHORT[m])
             for m in result.settings.mc.methods
             if m in METHOD_COLOURS
-        ] + [Patch(facecolor="#7f7f7f", alpha=0.45, label="Pooled ensemble")]
+        ] + [Patch(facecolor=C_GREEN, alpha=0.45, label="Pooled ensemble")]
         if ref:
             from .texture import CLASS_NAME
 
@@ -759,8 +805,8 @@ def variance_bars(result, zone_index, lab):
                 height=0.62,
                 color=PART_COLOURS[part],
                 label=PART_LABELS[part],
-                edgecolor="white",
-                linewidth=0.5,
+                edgecolor=C_INK,
+                linewidth=CHART_LINE_PT,
             )
             for y, (l0, v) in enumerate(zip(left, vals, strict=True)):
                 if v >= 0.08:
@@ -770,8 +816,8 @@ def variance_bars(result, zone_index, lab):
                         f"{100 * v:.0f}%",
                         ha="center",
                         va="center",
-                        fontsize=6.3,
-                        color="white",
+                        fontsize=CHART_SIZE,
+                        color=C_INK,
                     )
             left += vals
         ax.set_yticks(ypos)
@@ -806,7 +852,7 @@ def design_forest(result, zone):
     layers = [
         lab for lab, _, _ in result.settings.layers if lab in result.texture_class
     ]
-    conf_col = {"High": "#1baf7a", "Medium": "#f0ad4e", "Low": "#d9534f"}
+    conf_col = {"High": C_GREEN, "Medium": C_AMBER, "Low": C_RED}
     with _style():
         fig = _figure(6.6)
         for i, code in enumerate(codes):
@@ -862,7 +908,7 @@ def design_forest(result, zone):
                     _log_axis(ax.xaxis, min(v), max(v))
             ax.set_xlabel(f"{SYMBOL.get(code, code)} ({prm.units})")
             _panel(ax, i)
-            _clean(ax)
+            _clean(ax, minor=False)
         handles = (
             [
                 Line2D(

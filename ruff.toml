@@ -49,3 +49,4 @@ ignore = [
 "mayim_tools/tests/test_curve_numbers_core.py" = ["E501"]
 "mayim_tools/hydrology/sanral_peak_flows/**/*.py" = ["E501", "N803"]
 "mayim_tools/tests/test_sanral_peak_flows_core.py" = ["E501", "N803"]
+"mayim_tools/hydrology/terrain_profile/figure.py" = ["E501"]

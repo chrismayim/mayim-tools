@@ -34,6 +34,7 @@ from mayim_tools.hydrology.d8_flow_direction.d8_flow_direction_algorithm import 
 from mayim_tools.hydrology.dem_hydro_processing import (
     dem_hydro_processing_algorithm as dem_hydro_processing_algo,
 )
+from mayim_tools.hydrology.dws_wr2012 import dws_wr2012_algorithm as dws_wr2012_algo
 from mayim_tools.hydrology.inundation_boundary import (
     inundation_boundary_algorithm as inundation_boundary_algo,
 )
@@ -42,6 +43,9 @@ from mayim_tools.hydrology.sanral_peak_flows import (
 )
 from mayim_tools.hydrology.stream_network import (
     stream_network_algorithm as stream_network_algo,
+)
+from mayim_tools.hydrology.terrain_profile import (
+    terrain_profile_algorithm as terrain_profile_algo,
 )
 from mayim_tools.hydrology.terrain_storage.terrain_storage_algorithm import (
     DemDepressionStageStorageAlgorithm,
@@ -148,3 +152,5 @@ class MayimToolsProvider(QgsProcessingProvider):
         self.addAlgorithm(dem_hydro_processing_algo.DemHydroProcessingAlgorithm())
         self.addAlgorithm(sanral_peak_flows_algo.SanralPeakFlowsAlgorithm())
         self.addAlgorithm(inundation_boundary_algo.InundationBoundaryAlgorithm())
+        self.addAlgorithm(terrain_profile_algo.TerrainProfileAlgorithm())
+        self.addAlgorithm(dws_wr2012_algo.DwsWr2012Algorithm())

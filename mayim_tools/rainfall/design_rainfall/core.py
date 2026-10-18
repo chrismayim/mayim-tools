@@ -137,6 +137,14 @@ class PointEstimate:
     av_cluster: int
     source: str
     results: list[DesignRainfallResult] = field(default_factory=list)
+    # Optional context for the report (None when not supplied): the
+    # requested (query) location, its distance to the grid point used,
+    # the grid point's 1-day L1 index and the 24 h : 1-day ratio.
+    requested_latitude: float | None = None
+    requested_longitude: float | None = None
+    distance_km: float | None = None
+    l1_1day: float | None = None
+    ratio_24h: float | None = None
 
 
 class DesignRainfallEngine:
@@ -216,6 +224,21 @@ class DesignRainfallEngine:
         df = self.stations.copy()
         df["DIST_KM"] = df.geometry.apply(lambda g: _haversine_km(lat, lon, g.y, g.x))
         return df.nsmallest(n, "DIST_KM")
+
+    def point_context(self, grid_row: pd.Series, lat: float, lon: float) -> dict:
+        """Report context for a query point and the grid point used for it:
+        the requested location, the distance to the grid point (km), the
+        grid point's 1-day L1 index and its 24 h : 1-day ratio. Keys match
+        the optional PointEstimate fields."""
+        return {
+            "requested_latitude": float(lat),
+            "requested_longitude": float(lon),
+            "distance_km": _haversine_km(
+                lat, lon, float(grid_row.geometry.y), float(grid_row.geometry.x)
+            ),
+            "l1_1day": float(grid_row["ADJ_L1_1D"]),
+            "ratio_24h": self._ratio_24h_median(int(grid_row["S_CLUSTER"])),
+        }
 
     def _growth_curve_row(self, cluster: int) -> pd.Series:
         gc = self.growth_curves
@@ -409,4 +432,5 @@ class DesignRainfallEngine:
             av_cluster=int(row["AV_CLUSTER"]),
             source="grid",
             results=results,
+            **self.point_context(row, lat, lon),
         )

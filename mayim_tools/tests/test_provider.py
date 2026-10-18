@@ -37,7 +37,7 @@ def test_provider_registers_seven_algorithms() -> None:
     provider = loaded_provider()
 
     algorithms = provider.algorithms()
-    assert len(algorithms) == 31
+    assert len(algorithms) == 33
 
     by_name = {algorithm.name(): algorithm for algorithm in algorithms}
 
@@ -73,6 +73,8 @@ def test_provider_registers_seven_algorithms() -> None:
         "curve_numbers",
         "dem_hydro_processing",
         "sanral_peak_flows",
+        "terrain_profile",
+        "dws_wr2012_extract",
     }
 
     expected = {
@@ -228,6 +230,16 @@ def test_provider_registers_seven_algorithms() -> None:
         ),
         "inundation_boundary": (
             "DEM Inundation Boundary",
+            "Hydrological Tools",
+            "hydrological_tools",
+        ),
+        "terrain_profile": (
+            "Flood Extent Terrain Profile",
+            "Hydrological Tools",
+            "hydrological_tools",
+        ),
+        "dws_wr2012_extract": (
+            "Extract: DWS and WR2012 data",
             "Hydrological Tools",
             "hydrological_tools",
         ),

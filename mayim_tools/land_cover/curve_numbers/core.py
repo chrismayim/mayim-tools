@@ -42,7 +42,7 @@ from . import lookup as lk
 from . import tables as tb
 
 TOOL_NAME = "Curve numbers"
-TOOL_VERSION = "0.1.0"
+TOOL_VERSION = "0.2.0"
 NODATA_OUT = -9999.0
 OUT_FILE = "curve_numbers.tif"
 BLOCK_ROWS = 1024
@@ -710,7 +710,9 @@ def _finish(r: RunResult, log_fn) -> None:
             "land-cover codes."
         )
     built = sum(
-        a.n for c, a in r.by_class.items() if c == 50 and r.lookup.table != "custom"
+        a.n
+        for c, a in r.by_class.items()
+        if c == 50 and r.settings.lookup_key.startswith("worldcover")
     )
     if built and built / tot >= 0.02:
         _warn(
@@ -750,10 +752,13 @@ def write_tables(r: RunResult) -> dict:
     path = os.path.join(d, "cn_lookup_used.csv")
     lk.write_lookup_csv(r.lookup, path)
     paths["lookup"] = path
-    if r.lookup.table in tb.TABLES:
-        path = os.path.join(d, f"cn_table_{r.lookup.table}.csv")
-        lk.write_reference_table(r.lookup.table, path)
-        paths["table"] = path
+    tables = [r.lookup.table] if r.lookup.table in tb.TABLES else []
+    if r.settings.lookup_key.startswith("sanlc"):
+        tables.append("wrc2747")
+    for t in tables:
+        path = os.path.join(d, f"cn_table_{t}.csv")
+        lk.write_reference_table(t, path)
+        paths[f"table_{t}"] = path
     r.files.extend(paths.values())
     return paths
 

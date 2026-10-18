@@ -17,6 +17,8 @@ were sourced.
 
 from __future__ import annotations
 
+import os
+from datetime import datetime
 from pathlib import Path
 
 from qgis.core import (
@@ -35,6 +37,7 @@ from qgis.core import (
     QgsProcessingException,
     QgsProcessingFeedback,
     QgsProcessingLayerPostProcessorInterface,
+    QgsProcessingParameterBoolean,
     QgsProcessingParameterEnum,
     QgsProcessingParameterFeatureSink,
     QgsProcessingParameterFeatureSource,
@@ -42,13 +45,22 @@ from qgis.core import (
     QgsProcessingParameterFileDestination,
     QgsProcessingParameterNumber,
     QgsProcessingParameterPoint,
+    QgsProcessingParameterString,
     QgsWkbTypes,
 )
 from qgis.PyQt.QtCore import QMetaType
 from qgis.PyQt.QtGui import QIcon
 
-from .core import DAILY_DURATIONS, RETURN_PERIODS, SHORT_DURATIONS, DesignRainfallEngine
-from .report import write_csv, write_csv_multi, write_docx, write_docx_multi
+from .core import (
+    DAILY_DURATIONS,
+    RETURN_PERIODS,
+    SHORT_DURATIONS,
+    DesignRainfallEngine,
+    PointEstimate,
+)
+from .report import REPORT_TITLE, write_csv, write_csv_multi, write_report_docx
+
+TOOL_VERSION = "1.1"
 
 WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
 
@@ -92,9 +104,33 @@ def _fields_from_dataframe(df, leading=()):
     return fields
 
 
+def _software_version() -> str:
+    """'Mayim Tools <version>, QGIS <version>' for the report title page."""
+    parts = []
+    metadata = Path(__file__).resolve().parents[2] / "metadata.txt"
+    try:
+        for line in metadata.read_text(encoding="utf-8").splitlines():
+            if line.startswith("version="):
+                parts.append(f"Mayim Tools {line.split('=', 1)[1].strip()}")
+                break
+    except OSError:
+        pass
+    parts.append(f"QGIS {Qgis.version()}")
+    return ", ".join(parts)
+
+
+def _location(dest_id: str) -> str:
+    """Report location of a sink output: its file path, or 'Temporary
+    layer' for a memory layer."""
+    path = str(dest_id).split("|")[0]
+    return path if os.path.exists(path) else "Temporary layer (QGIS project)"
+
+
 class DesignRainfallPointAlgorithm(QgsProcessingAlgorithm):
 
     POINT = "POINT"
+    PROJECT_NUMBER = "PROJECT_NUMBER"
+    PROJECT_NAME = "PROJECT_NAME"
     INPUT_POINTS = "INPUT_POINTS"
     NAME_FIELD = "NAME_FIELD"
     DURATIONS = "DURATIONS"
@@ -105,6 +141,7 @@ class DesignRainfallPointAlgorithm(QgsProcessingAlgorithm):
     OUTPUT_QUERY_POINTS = "OUTPUT_QUERY_POINTS"
     OUTPUT_STATIONS = "OUTPUT_STATIONS"
     NUM_STATIONS = "NUM_STATIONS"
+    REPORT_OSM = "REPORT_OSM"
 
     # Duration choices shown in the UI, mapped to internal (family, value)
     _DURATION_CHOICES = (
@@ -137,16 +174,47 @@ class DesignRainfallPointAlgorithm(QgsProcessingAlgorithm):
 
     def shortHelpString(self):
         return (
-            "Estimates design rainfall depths (median + 90% confidence bounds) "
-            "using the regional L-moment methodology. Provide EITHER a single "
-            "point (type coordinates or click the map canvas) OR a vector "
-            "point layer (every feature is processed). Outputs a report-ready "
-            "CSV (grouped by return period) and/or Word table, a point layer "
-            "with results as attributes, a point layer echoing the query "
-            "location(s), and optionally the nearest N daily rainfall "
-            "stations per site for reference (these are NOT used in the "
-            "grid-based calculation itself - listed for comparison only, "
-            "matching the original tool's behaviour)."
+            f"<b>{REPORT_TITLE} (version {TOOL_VERSION})</b><br><br>"
+            "<b>PURPOSE</b><br>"
+            "Estimates design rainfall depths (median and 90% prediction "
+            "interval bounds) for durations of 5 min to 7 days and return "
+            "periods of 2 to 200 years at any point in South Africa.<br><br>"
+            "<b>METHOD</b><br>"
+            "Each site is matched to the nearest point of the national 1 "
+            "arc-minute grid. The index value (L1) of each duration is "
+            "derived from the grid's 1-day L1 (short durations via the 24 h "
+            "ratio and cluster regressions; 2 to 7 days via the regional "
+            "power-law regressions) and scaled by the 1-day growth curve of "
+            "the site's cluster.<br><br>"
+            "<b>BACKGROUND</b><br>"
+            "Regional L-moment method of Smithers &amp; Schulze (2002), WRC "
+            "Report K5/1060, rebuilt from the rainfall3 dataset of the "
+            "'Design Rainfall Estimation in South Africa' program. The "
+            "nearest daily rainfall stations are listed for reference only "
+            "and are NOT used in the grid-based calculation.<br><br>"
+            "<b>PARAMETERS</b><br>"
+            "<i>Point of interest</i> - click the map or type coordinates; "
+            "OR <i>point layer</i> - every feature is processed (optional "
+            "site name field).<br>"
+            "<i>Project number / Project / site name</i> - optional, shown "
+            "on the report's title page.<br>"
+            "<i>Durations / Return periods</i> - the combinations to "
+            "estimate.<br>"
+            "<i>Output CSV</i> - duration x return period table (depth, "
+            "lower, upper), with the nearest stations appended.<br>"
+            "<i>Output Word report</i> - annexure in the Mayim report "
+            "standard: title page, summary, method, inputs, parameters, "
+            "depth tables, a "
+            "layout map per site (point of interest, snapped grid point and "
+            "nearest stations, drawn with the tool's layer styles), the "
+            "nearest rainfall stations (reference only), outputs, notes and "
+            "references.<br>"
+            "<i>OpenStreetMap background</i> - adds OSM tiles behind the "
+            "report map (needs internet access).<br>"
+            "<i>Snapped grid point / POI / Nearest rainfall stations</i> - "
+            "point layers loaded with their preset styles.<br>"
+            "<i>Nearest rainfall stations to list</i> - number of stations "
+            "per site (0 = none)."
         )
 
     def initAlgorithm(self, config=None):
@@ -170,6 +238,20 @@ class DesignRainfallPointAlgorithm(QgsProcessingAlgorithm):
                 self.NAME_FIELD,
                 "Site name field (optional, from point layer)",
                 parentLayerParameterName=self.INPUT_POINTS,
+                optional=True,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterString(
+                self.PROJECT_NUMBER,
+                "Project number (optional, for the report)",
+                optional=True,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterString(
+                self.PROJECT_NAME,
+                "Project / site name (optional, for the report)",
                 optional=True,
             )
         )
@@ -205,6 +287,13 @@ class DesignRainfallPointAlgorithm(QgsProcessingAlgorithm):
                 "Output Word report",
                 fileFilter="Word documents (*.docx)",
                 optional=True,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterBoolean(
+                self.REPORT_OSM,
+                "Add OpenStreetMap background to the report map",
+                defaultValue=True,
             )
         )
         self.addParameter(
@@ -253,9 +342,11 @@ class DesignRainfallPointAlgorithm(QgsProcessingAlgorithm):
         has_point = not point.isEmpty()
 
         if has_layer and has_point:
-            feedback.pushWarning(
+            message = (
                 "Both a point and a point layer were given - using the point layer."
             )
+            feedback.pushWarning(message)
+            self._warnings.append(message)
         if not has_layer and not has_point:
             raise QgsProcessingException(
                 "Provide a point of interest "
@@ -296,7 +387,9 @@ class DesignRainfallPointAlgorithm(QgsProcessingAlgorithm):
         self, parameters, context: QgsProcessingContext, feedback: QgsProcessingFeedback
     ):
         self._post_processors = []
+        self._warnings = []
         sites = self._collect_sites(parameters, context, feedback)
+        self._input_sites = sites
         feedback.pushInfo(f"{len(sites)} site(s) to process.")
 
         selected_idx = self.parameterAsEnums(parameters, self.DURATIONS, context)
@@ -330,8 +423,6 @@ class DesignRainfallPointAlgorithm(QgsProcessingAlgorithm):
                     grid_row, daily_durs, return_periods
                 )
 
-            from .core import PointEstimate
-
             estimates[label] = PointEstimate(
                 latitude=float(grid_row.geometry.y),
                 longitude=float(grid_row.geometry.x),
@@ -342,6 +433,7 @@ class DesignRainfallPointAlgorithm(QgsProcessingAlgorithm):
                 av_cluster=int(grid_row["AV_CLUSTER"]),
                 source="grid",
                 results=results,
+                **engine.point_context(grid_row, lat, lon),
             )
             feedback.pushInfo(
                 f"{label}: MAP={grid_row['MAP']}mm, {len(results)} estimates computed"
@@ -360,6 +452,33 @@ class DesignRainfallPointAlgorithm(QgsProcessingAlgorithm):
                     lat, lon, n=num_stations
                 )
 
+        # Layers first, so the report can list every output.
+        report_outputs = []
+        sink_result = self._write_output_layer(
+            parameters, context, estimates, return_periods
+        )
+        if sink_result:
+            outputs[self.OUTPUT_LAYER] = sink_result
+            self._register_style(context, sink_result, "snapped_grid_point.qml")
+            report_outputs.append(("Snapped grid point layer", _location(sink_result)))
+
+        query_points_result = self._write_query_points(parameters, context, sites)
+        if query_points_result:
+            outputs[self.OUTPUT_QUERY_POINTS] = query_points_result
+            self._register_style(context, query_points_result, "poi.qml")
+            report_outputs.append(("POI layer", _location(query_points_result)))
+
+        if num_stations > 0:
+            stations_result = self._write_stations_layer(
+                parameters, context, per_site_stations, feedback
+            )
+            if stations_result:
+                outputs[self.OUTPUT_STATIONS] = stations_result
+                self._register_style(context, stations_result, "nearest_stations.qml")
+                report_outputs.append(
+                    ("Nearest rainfall stations layer", _location(stations_result))
+                )
+
         csv_path = self.parameterAsFileOutput(parameters, self.OUTPUT_CSV, context)
         if csv_path:
             if len(estimates) == 1:
@@ -370,44 +489,110 @@ class DesignRainfallPointAlgorithm(QgsProcessingAlgorithm):
                     estimates, csv_path, stations_by_site=per_site_stations or None
                 )
             outputs[self.OUTPUT_CSV] = csv_path
+            report_outputs.append(("CSV table", csv_path))
             feedback.pushInfo(f"CSV written: {csv_path}")
 
         docx_path = self.parameterAsFileOutput(parameters, self.OUTPUT_DOCX, context)
-        if docx_path:
-            try:
-                if len(estimates) == 1:
-                    label, est = next(iter(estimates.items()))
-                    write_docx(est, docx_path, site_name=label)
-                else:
-                    write_docx_multi(estimates, docx_path)
-                outputs[self.OUTPUT_DOCX] = docx_path
-                feedback.pushInfo(f"Word report written: {docx_path}")
-            except ImportError:
-                feedback.reportError(
-                    "python-docx not installed - skipping Word output."
-                )
-
-        sink_result = self._write_output_layer(
-            parameters, context, estimates, return_periods
-        )
-        if sink_result:
-            outputs[self.OUTPUT_LAYER] = sink_result
-            self._register_style(context, sink_result, "snapped_grid_point.qml")
-
-        query_points_result = self._write_query_points(parameters, context, sites)
-        if query_points_result:
-            outputs[self.OUTPUT_QUERY_POINTS] = query_points_result
-            self._register_style(context, query_points_result, "poi.qml")
-
-        if num_stations > 0:
-            stations_result = self._write_stations_layer(
-                parameters, context, per_site_stations, feedback
+        if docx_path and estimates:
+            written = self._write_report(
+                parameters,
+                context,
+                feedback,
+                docx_path,
+                estimates,
+                per_site_stations,
+                num_stations,
+                report_outputs,
             )
-            if stations_result:
-                outputs[self.OUTPUT_STATIONS] = stations_result
-                self._register_style(context, stations_result, "nearest_stations.qml")
+            if written:
+                outputs[self.OUTPUT_DOCX] = docx_path
 
         return outputs
+
+    def _write_report(
+        self,
+        parameters,
+        context,
+        feedback,
+        docx_path,
+        estimates,
+        per_site_stations,
+        num_stations,
+        report_outputs,
+    ):
+        """Word report with a QGIS-rendered layout map per site. Returns
+        True when the report was written."""
+        try:
+            import docx  # noqa: F401
+        except ImportError:
+            feedback.reportError("python-docx not installed - skipping Word output.")
+            return False
+        source = self.parameterAsSource(parameters, self.INPUT_POINTS, context)
+        if source is not None and source.featureCount() > 0:
+            input_text = f"Point layer: {source.sourceName()}"
+        else:
+            _label, lat, lon = self._input_sites[0]
+            input_text = (
+                f"Point of interest (latitude {lat:.5f}°, longitude {lon:.5f}°)"
+            )
+
+        map_messages = []
+        plan_map = None
+        try:
+            from .qgis_map import make_plan_map
+
+            plan_sites = {
+                label: {
+                    "poi": (est.requested_longitude, est.requested_latitude),
+                    "grid": (est.longitude, est.latitude),
+                    "stations": per_site_stations.get(label),
+                }
+                for label, est in estimates.items()
+            }
+            plan_map = make_plan_map(
+                plan_sites,
+                context.transformContext(),
+                use_osm=self.parameterAsBoolean(parameters, self.REPORT_OSM, context),
+                messages=map_messages,
+            )
+        except Exception as e:  # the report is still written without it
+            map_messages.append(f"Layout map not rendered in QGIS ({e}).")
+
+        report_context = {
+            "tool": REPORT_TITLE,
+            "version": TOOL_VERSION,
+            "run_time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "input": input_text,
+            "software": _software_version(),
+            "project_number": self.parameterAsString(
+                parameters, self.PROJECT_NUMBER, context
+            ).strip(),
+            "project_name": self.parameterAsString(
+                parameters, self.PROJECT_NAME, context
+            ).strip(),
+            "num_stations": num_stations,
+            "outputs": report_outputs + [("This report", docx_path)],
+            "warnings": list(self._warnings),
+            # filled while the maps are rendered; read by the report's notes
+            "map_messages": map_messages,
+        }
+        try:
+            messages = write_report_docx(
+                docx_path,
+                estimates,
+                report_context,
+                stations_by_site=per_site_stations,
+                plan_map=plan_map,
+            )
+        except PermissionError:
+            feedback.reportError(
+                f"Word report not written - the file is open or locked: {docx_path}"
+            )
+            return False
+        for message in dict.fromkeys(map_messages + (messages or [])):
+            feedback.pushWarning(message)
+        feedback.pushInfo(f"Word report written: {docx_path}")
+        return True
 
     def _register_style(self, context, dest_id, style_filename):
         """Attaches a saved QML style to an output layer via a

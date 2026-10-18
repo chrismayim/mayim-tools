@@ -18,6 +18,8 @@ from mayim_tools.soil.regional_parameterisation.figures import (
     continuous_maps,
 )
 
+OTHER_CODE = 9999
+
 
 def preview_view(result):
     """A stand-in 'result' for the shared map helpers: the decimated preview
@@ -53,12 +55,29 @@ def cn_maps(result):
 def landcover_map(result, colours):
     v = preview_view(result)
     lc = result.preview["lc"]
-    present = sorted(int(c) for c in np.unique(lc) if int(c) in result.lookup.classes)
-    if not present:
+    codes, counts = np.unique(lc, return_counts=True)
+    known = [
+        (int(c), int(n))
+        for c, n in zip(codes, counts, strict=True)
+        if int(c) in result.lookup.classes
+    ]
+    if not known:
         raise ValueError("no mapped classes")
-    cols = {c: colours.get(c, "#999999") for c in present}
-    labels = {c: result.lookup.classes[c].name for c in present}
-    return categorical_maps(v, [(lc.astype(float), "Land cover")], cols, labels)
+    total = sum(n for _, n in known)
+    # Legend: the largest classes (at least 1 % of the area, at most 14); the
+    # rest are drawn grey as "other classes".
+    ranked = sorted(known, key=lambda cn: -cn[1])
+    shown = {c for c, n in ranked[:14] if n / total >= 0.01} or {ranked[0][0]}
+    other = OTHER_CODE
+    arr = lc.astype(float)
+    small = np.isin(lc, [c for c, _ in known if c not in shown])
+    arr[small] = other
+    cols = {c: colours.get(c, "#999999") for c in sorted(shown)}
+    labels = {c: result.lookup.classes[c].name for c in cols}
+    if small.any():
+        cols[other] = "#c8c8c8"
+        labels[other] = "Other classes (< 1 % each)"
+    return categorical_maps(v, [(arr, "Land cover")], cols, labels)
 
 
 def histogram(result):

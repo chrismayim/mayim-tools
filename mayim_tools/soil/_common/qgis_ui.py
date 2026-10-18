@@ -59,13 +59,15 @@ class OutputLayer:
     ``classes`` (value, label[, colour]) gives a categorised (paletted) style
     on band 1 (colour defaults to a stable colour per value); ``ramp``
     [(value, colour, label)] gives a linear pseudo-colour style on band 1;
-    otherwise band 1 is shown as stretched single-band grey."""
+    otherwise band 1 is shown as stretched single-band grey. ``qml`` (a
+    style file path) takes precedence over both when the file exists."""
 
     path: str
     name: str
     main: bool = False
     classes: list = field(default_factory=list)
     ramp: list = field(default_factory=list)
+    qml: str = ""
 
 
 def apply_style(layer, out: OutputLayer) -> None:
@@ -78,6 +80,14 @@ def apply_style(layer, out: OutputLayer) -> None:
     )
     from qgis.PyQt.QtGui import QColor
 
+    if out.qml:
+        import os
+
+        if os.path.isfile(out.qml):
+            _msg, ok = layer.loadNamedStyle(out.qml)
+            if ok:
+                layer.triggerRepaint()
+                return
     if out.classes:
         from mayim_tools.soil._common.export import class_colour
 
