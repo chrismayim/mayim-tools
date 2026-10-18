@@ -1,11 +1,12 @@
 # Mayim Report, Figure and Graph Standard
 
-*House design standard for every Word report, graph, chart and map produced by Mayim tools and analyses (version 1, October 2026).*
+*House design standard for every Word report, graph, chart and map produced by Mayim tools and analyses (version 2, October 2026).*
+
+*Version 2: title page added (section 1.4); report structure and checklist updated to match; font availability rule added (section 2.2).*
 
 **How to use this document:** give it to Claude in any chat with the instruction "apply the Mayim report and figure standard". Every value below is a requirement unless it is marked as a default. If something is not covered here, follow the closest rule and say which choice was made.
 
 ---
-Font availability: Report figures must use the house fonts (Arial; Arial Narrow for chart text). If a font is installed in Windows but not seen by the figure software, the tool must find it in the Windows font folders, including the per-user folder (%LOCALAPPDATA%\Microsoft\Windows\Fonts), before falling back to a substitute; any substitution must be named in the run log.
 
 ## 1. Word reports (.docx)
 
@@ -14,11 +15,12 @@ Font availability: Report figures must use the house fonts (Arial; Arial Narrow 
 | Element | Font | Size | Weight / style | Colour | Other |
 |---|---|---|---|---|---|
 | Normal (body) text | Arial | 10 pt | Regular | Black #000000 | Also used for bullets, numbered lists and table text (tables use 9 pt, see 1.3) |
-| Headings (levels 1 and 2: report title and main sections) | Arial | 12 pt | Bold, not italic | #0F0F36 | ALL CAPS (set as the font's All caps property, so the text itself keeps normal case) |
+| Headings (levels 1 and 2: main sections) | Arial | 12 pt | Bold, not italic | #0F0F36 | ALL CAPS (set as the font's All caps property, so the text itself keeps normal case) |
 | Sub-headings (level 3 and below, plus run-in labels such as "Geomorphological description") | Arial | 10 pt | Bold, not italic | #0F0F36 | Normal case |
 | Table and figure headings (captions) | Arial | 9 pt | Italic | Black | "Table n: text" above the table; "Figure n: text" below the figure |
+| Report title (title page only, see 1.4) | Arial | 20 pt | Bold, not italic | #0F0F36 | Centre-aligned, normal case (not all caps) |
 
-- Set the fonts on the **styles** (Normal, Heading 1–4, Caption) rather than on individual runs. Set them for every script (ascii, hAnsi, eastAsia, cs) and remove the theme-font links, otherwise Word falls back to Calibri or Aptos.
+- Set the fonts on the **styles** (Normal, Title, Heading 1–4, Caption) rather than on individual runs. Set them for every script (ascii, hAnsi, eastAsia, cs) and remove the theme-font links, otherwise Word falls back to Calibri or Aptos.
 - Remove theme colours from the heading styles so that #0F0F36 is used exactly.
 - Keep each table heading with its table, and each figure with its caption (keep-with-next).
 - Number tables and figures consecutively through the report.
@@ -39,9 +41,38 @@ Font availability: Report figures must use the house fonts (Arial; Arial Narrow 
 - **Parameter tables:** use three columns, Parameter (with symbol and unit) | Value | Definition/equation (with source), at widths of about 6.2 / 2.8 / 7.5 cm.
 - Leave one empty paragraph after each table.
 
-### 1.4 Report structure (default for tool annexures)
+### 1.4 Title page
 
-1. Title (Heading 1). There is **no title block or cover page**, because reports are used as annexures.
+Every report starts with a title page on its own (page 1), followed by a page break. When the report is used as an annexure, the title page is its cover.
+
+Content, all centre-aligned, in this order:
+
+| # | Element | Format | Content |
+|---|---|---|---|
+| 1 | Report title | Arial 20 pt bold, #0F0F36 ("Title" style), placed about one third of the way down the page | The tool or report name, e.g. "Design Rainfall Estimation (South Africa)" |
+| 2 | Subtitle (optional) | Arial 12 pt bold, #0F0F36, normal case | The project or site name, when given |
+| 3 | Purpose and goal | Arial 10 pt regular, black; at most 2–3 sentences (about 60 words) | What the report covers and what it is for, e.g. "This report gives design rainfall depths for the site, estimated with the regional L-moment method, as input to the stormwater design." |
+| 4 | Report details | Borderless two-column table, Arial 10 pt, labels bold, about 5 + 7 cm wide, centred | See the list below |
+
+Report details (show "-" for an item that is not available):
+
+- Project number
+- Project / site
+- Prepared by: Mayim Consulting
+- Tool and version, e.g. "Design Rainfall Estimation (South Africa), version 1.1"
+- Software, e.g. "Mayim Tools 0.18.2, QGIS 4.0.3"
+- Report date (the date the report was written, YYYY-MM-DD)
+- Document status (default "Draft")
+
+Rules:
+
+- No page number, header or footer on the title page.
+- The no-thousands-separators rule (1.2) applies here too.
+- The title is not repeated as a heading on page 2; the report body starts with the Summary.
+
+### 1.5 Report structure (default for tool annexures)
+
+1. Title page (1.4), then a page break.
 2. Summary, with a summary table.
 3. Tool and method, as numbered steps.
 4. Inputs and settings (table).
@@ -72,7 +103,8 @@ Write guideline-neutral content unless a specific standard (e.g. SANRAL, ARR) is
 | Legend entries | Arial Narrow | 9 pt | *Italic*, black |
 | Headings, e.g. axis titles and figure titles | Arial Narrow | 9 pt | **Bold**, black |
 
-- If Arial Narrow is not installed, substitute a metric-compatible font (Liberation Sans Narrow, then Arial) and report the substitution to the user.
+- **Font availability:** report figures must use the house fonts (Arial; Arial Narrow for chart text). If a font is installed in Windows but not seen by the figure software, the tool must find it in the Windows font folders, including the per-user folder (`%LOCALAPPDATA%\Microsoft\Windows\Fonts`), before falling back to a substitute. Any substitution must be named in the run log.
+- Only if the font cannot be found in any of those folders, substitute a metric-compatible font (Liberation Sans Narrow, then Arial) and report the substitution to the user.
 
 ### 2.3 Plot area, axes and grid
 
@@ -116,7 +148,7 @@ Content colours, used in any order:
 ### 3.1 Approach
 
 - QGIS renders the map content (all layers, with their saved QML styles), so maps always match the layer styles in the GIS project.
-- If QML styles or not known or specified, request it from the user.
+- If the QML styles are not known or specified, request them from the user.
 - The frame around the map is then composed in the chart style above: coordinate axes, legend, scale bar, north arrow and attribution.
 - The map frame is about 14 cm wide inside the 16.5 cm figure. Its height follows the map extent.
 - Render the map at 150 dpi so that symbol sizes in mm stay true to the QML styles.
@@ -177,10 +209,11 @@ The standard is implemented in shared modules. Reuse them rather than re-coding 
 
 | What | Where | How to use it |
 |---|---|---|
-| Report text styles, tables, captions, 16.5 cm pictures | `mayim_tools/_common/docx_report.py` | `Doc(house_style=True)`, then `.heading()`, `.para()`, `.label()`, `.bullet()`, `.numbered()`, `.caption()`, `.table()`, `.picture()` |
+| Report text styles, title page, tables, captions, 16.5 cm pictures | `mayim_tools/_common/docx_report.py` | `Doc(house_style=True)`, then `.title_page(title, purpose, details, subtitle)`, `.heading()`, `.para()`, `.label()`, `.bullet()`, `.numbered()`, `.caption()`, `.table()`, `.picture()` |
 | Chart style (fonts, border, grids, palette, exact-size PNG) | `mayim_tools/_common/report_figures.py` | `style = ChartStyle()`; `with style.context(): fig = style.figure(height_cm)` … `style.axes(ax)`; `style.legend(ax)`; `style.png(fig)`. The constants are `CHART_SIZE = 9`, `CHART_COLOURS`, `CHART_GRID_MAJOR` and `CHART_GRID_MINOR` |
-| Map composition (legend with symbol images, scale bar, north arrow) | `hydrology/catchment_delineation/report.py` | `PlanMap`, `_figure_plan_rendered`, `_scale_bar`, `_north_arrow`, `_image_legend` (candidates to move to `_common` when a second tool needs them) |
-| QGIS map render, legend keys, QML loading, shapefile export | `hydrology/catchment_delineation/qgis_outputs.py` | `render_map`, `legend_entries`, `apply_style`, `save_shapefile`, `load_on_completion`, `make_plan_map` |
+| Map composition (legend with symbol images, scale bar, north arrow) | `mayim_tools/_common/report_maps.py` | `PlanMap`, `figure_rendered_map`, `scale_bar`, `north_arrow`, `image_legend`, `OSM_ATTRIBUTION`, `OSM_LICENCE_NOTE` |
+| QGIS map render, legend keys, OSM background | `mayim_tools/_common/qgis_maps.py` | `render_map`, `legend_entries`, `osm_layer`, `osm_has_tiles`, `map_crs_and_extent` |
+| Shapefile export, loading layers with styles | `hydrology/catchment_delineation/qgis_outputs.py` | `apply_style`, `save_shapefile`, `load_on_completion`, `make_plan_map` |
 | Output names and folders | `mayim_tools/_common/output_files.py` | `OutputSpec`, `output_file_name`, `shapefile_field_names` |
 | DEM contours | `hydrology/_common/contours.py` | `dem_contours(dem, geotransform, interval, extent)` |
 
@@ -222,10 +255,12 @@ with matplotlib.rc_context(RC):
 
 ## 6. Checklist before delivering
 
+- [ ] Title page: title Arial 20 pt bold, #0F0F36, centred; short purpose and goal; report details (project number, tool and version, date, status); page break after it.
 - [ ] Body Arial 10 pt black; headings Arial 12 pt bold, #0F0F36, all caps; sub-headings Arial 10 pt bold, #0F0F36; captions Arial 9 pt italic.
 - [ ] No thousands separators anywhere: text, tables, axis labels or CSVs.
 - [ ] Every figure is 16.5 cm wide, saved without cropping.
 - [ ] Figure text is Arial Narrow 9 pt: regular for text, bold for axis titles, italic for legends.
+- [ ] House fonts found (including the per-user Windows font folder); any substitution named in the run log.
 - [ ] Black 0.75 pt plot border; major and minor gridlines in #BFBFBF and #F2F2F2.
 - [ ] Content colours follow the palette order, with no thin yellow lines.
 - [ ] Natural ground profiles are black, 1 pt, dashed.
