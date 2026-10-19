@@ -46,7 +46,7 @@ def _two_pit_dem():
 
 
 def _read_report(path):
-    with open(path, newline="") as f:
+    with open(path, newline="", encoding="utf-8-sig") as f:
         return list(csv.DictReader(f))
 
 
@@ -225,6 +225,22 @@ def test_report_centroid_within_footprint_bounds():
         assert abs(float(rows[leaf_a]["centroid_row"]) - 2.0) < 1e-6
         assert abs(float(rows[leaf_a]["centroid_col"]) - 2.0) < 1e-6
     print("test_report_centroid_within_footprint_bounds: PASS")
+
+
+def test_report_has_bom_and_reads_tables_without_one():
+    dem = _two_pit_dem()
+    h = build_depression_hierarchy(dem)
+    classifications = classify_all_nodes(
+        dem, h, vertical_error_std=0.2, n_iterations=20, seed=1
+    )
+    with tempfile.TemporaryDirectory() as d:
+        out = Path(d) / "report.csv"
+        write_classification_report(out, dem, h, classifications)
+        raw = out.read_bytes()
+        assert raw.startswith(b"\xef\xbb\xbf")
+        plain = Path(d) / "plain.csv"  # a table written before the BOM was added
+        plain.write_bytes(raw[3:])
+        assert read_classification_report(plain) == read_classification_report(out)
 
 
 def test_read_classification_report_round_trip():

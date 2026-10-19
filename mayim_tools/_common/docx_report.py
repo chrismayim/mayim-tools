@@ -333,6 +333,8 @@ class Doc:
                 cells[i].text = ""
                 run = cells[i].paragraphs[0].add_run(str(value))
                 run.font.size = Pt(9)
+        if self.house_style:
+            self._keep_table_together(t)
         if widths_cm:
             for i, w in enumerate(widths_cm):
                 t.columns[i].width = Cm(w)
@@ -341,6 +343,32 @@ class Doc:
                     if i < len(row.cells):
                         row.cells[i].width = Cm(w)
         self.doc.add_paragraph()
+        return t
+
+    KEEP_TOGETHER_ROWS = 30  # tables up to this many rows are not split
+
+    @staticmethod
+    def _keep_table_together(t):
+        """The header row repeats on every page, rows are not split across
+        pages, and a short table (up to KEEP_TOGETHER_ROWS rows) is kept on
+        one page with its heading (keep-with-next on every row but the
+        last)."""
+        from docx.oxml import OxmlElement
+
+        rows = t.rows
+        for i, row in enumerate(rows):
+            tr_pr = row._tr.get_or_add_trPr()
+            tr_pr.append(OxmlElement("w:cantSplit"))
+            if i == 0:
+                tr_pr.append(OxmlElement("w:tblHeader"))
+            if len(rows) <= Doc.KEEP_TOGETHER_ROWS and i < len(rows) - 1:
+                for cell in row.cells:
+                    for paragraph in cell.paragraphs:
+                        paragraph.paragraph_format.keep_with_next = True
+        if len(rows) > Doc.KEEP_TOGETHER_ROWS:  # at least header + first row
+            for cell in rows[0].cells:
+                for paragraph in cell.paragraphs:
+                    paragraph.paragraph_format.keep_with_next = True
         return t
 
     def picture(self, stream, caption, width_cm=None):

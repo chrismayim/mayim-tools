@@ -144,7 +144,7 @@ def write_classification_report(
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", newline="") as f:
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:  # BOM for Excel
         writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
         writer.writeheader()
         writer.writerows(rows)
@@ -170,7 +170,9 @@ def read_classification_report(path: str | Path) -> dict[int, str]:
     walk needs nothing more than each node's own label).
     """
     labels: dict[int, str] = {}
-    with open(path, newline="") as f:
+    # utf-8-sig reads files with and without the byte-order mark (older runs
+    # wrote none; a table saved from Excel may have one)
+    with open(path, newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
         for row in reader:
             labels[int(row["feature_id"])] = row["classification"]

@@ -1,5 +1,7 @@
-"""Processing Toolbox algorithm: DEM in -> hydrologically corrected DEM,
-remaining-sink points, a sectioned CSV and an optional Word report out.
+"""Processing Toolbox algorithm: DEM in -> hydrologically corrected DEM, the
+elevation change, remaining-sink points, a sectioned CSV, a classification
+table and a Word report out (Mayim report and figure standard; outputs are
+ticked, written to per-kind folders and named <project number>_<description>).
 
 Default is continuous drainage: every depression is resolved (filled or
 breached, whichever disturbs the DEM less) and a drainage-enforcement pass
@@ -12,6 +14,7 @@ independently testable; see tests/test_dem_hydro_processing_*.py).
 """
 
 import math
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -20,31 +23,31 @@ from osgeo import gdal
 from qgis.core import (
     Qgis,
     QgsCoordinateTransform,
-    QgsFeature,
-    QgsFeatureSink,
-    QgsField,
-    QgsFields,
     QgsGeometry,
-    QgsMarkerSymbol,
-    QgsPointXY,
     QgsProcessing,
     QgsProcessingAlgorithm,
     QgsProcessingException,
-    QgsProcessingLayerPostProcessorInterface,
     QgsProcessingParameterBoolean,
     QgsProcessingParameterEnum,
-    QgsProcessingParameterFeatureSink,
     QgsProcessingParameterFeatureSource,
     QgsProcessingParameterField,
     QgsProcessingParameterFile,
-    QgsProcessingParameterFileDestination,
+    QgsProcessingParameterFolderDestination,
     QgsProcessingParameterNumber,
-    QgsProcessingParameterRasterDestination,
     QgsProcessingParameterRasterLayer,
-    QgsSingleSymbolRenderer,
+    QgsProcessingParameterString,
+    QgsProcessingUtils,
 )
-from qgis.PyQt.QtCore import QMetaType
 from qgis.PyQt.QtGui import QIcon
+
+from mayim_tools._common.output_files import (
+    CSV,
+    RASTER,
+    SHAPEFILE,
+    WORD,
+    OutputSpec,
+)
+from mayim_tools.hydrology._common.contours import dem_contours
 
 from .core.classification import DEM_SOURCE_VERTICAL_ERROR_M
 from .core.conditioning import (
@@ -58,9 +61,18 @@ from .core.keep_sinks import KeepFeature
 from .core.report import read_classification_report, write_classification_report
 from .core.stream_evidence import RasterTransform
 from .export import write_sectioned_csv
-from .report import write_report_docx
+from .qgis_map import (
+    STYLE_CHANGE,
+    STYLE_SINKS,
+    copy_source_layer,
+    load_on_completion,
+    make_plan_map,
+    save_shapefile,
+    sinks_layer,
+)
+from .report import change_classes_present, elevation_change, write_report_docx
 
-TOOL_VERSION = "1.0.1"
+TOOL_VERSION = "1.1.0"
 SOURCE_KEYS = list(DEM_SOURCE_VERTICAL_ERROR_M) + ["custom"]
 SOURCE_LABELS = {
     "survey": "Ground survey",
@@ -82,29 +94,50 @@ def _advanced(param):
     return param
 
 
-def _describe_destination(dest) -> str:
-    text = str(dest or "")
-    if text.startswith("memory:") or "TEMPORARY_OUTPUT" in text or not text:
-        return "Temporary layer (not saved)"
-    return text
+# Selectable outputs: (key, dialog label, file-name description, folder kind,
+# ticked by default).
+OUTPUT_SPECS = [
+    OutputSpec("OUTPUT_DEM", "Corrected DEM", "Corrected DEM", RASTER),
+    OutputSpec(
+        "OUTPUT_CHANGE",
+        "Elevation change (corrected minus original)",
+        "DEM Elevation Change",
+        RASTER,
+        default=False,
+    ),
+    OutputSpec("OUTPUT_SINKS", "Remaining sinks", "Remaining Sinks", SHAPEFILE),
+    OutputSpec("OUTPUT_CSV", "Results (CSV)", "DEM Processing Results", CSV),
+    OutputSpec(
+        "OUTPUT_CLASSES",
+        "Classification table (CSV, reusable)",
+        "Depression Classification",
+        CSV,
+        default=False,
+    ),
+    OutputSpec("OUTPUT_DOCX", "Report (Word)", "DEM Processing Report", WORD),
+]
+SPEC_BY_KEY = {spec.key: spec for spec in OUTPUT_SPECS}
+FOLDER_PARAMS = {
+    RASTER: ("FOLDER_RASTER", "Output folder for rasters (GeoTIFF)"),
+    SHAPEFILE: ("FOLDER_SHP", "Output folder for vector layers (shapefiles)"),
+    CSV: ("FOLDER_CSV", "Output folder for CSV files"),
+    WORD: ("FOLDER_WORD", "Output folder for Word reports"),
+}
 
 
-class _SinkStyle(QgsProcessingLayerPostProcessorInterface):
-    def postProcessLayer(self, layer, context, feedback):
-        try:
-            symbol = QgsMarkerSymbol.createSimple(
-                {
-                    "name": "circle",
-                    "color": "#eb6834",
-                    "size": "3",
-                    "outline_color": "#0b0b0b",
-                }
-            )
-            layer.setRenderer(QgsSingleSymbolRenderer(symbol))
-            layer.triggerRepaint()
-        except Exception as e:  # styling must never fail the run
-            if feedback is not None:
-                feedback.pushWarning(f"Sink styling skipped: {e}")
+def _software_version() -> str:
+    """'Mayim Tools <version>, QGIS <version>' for the report title page."""
+    parts = []
+    metadata = Path(__file__).resolve().parents[2] / "metadata.txt"
+    try:
+        for line in metadata.read_text(encoding="utf-8").splitlines():
+            if line.startswith("version="):
+                parts.append(f"Mayim Tools {line.split('=', 1)[1].strip()}")
+                break
+    except OSError:
+        pass
+    parts.append(f"QGIS {Qgis.version()}")
+    return ", ".join(parts)
 
 
 def _read_raster(path):
@@ -124,10 +157,21 @@ def _read_raster(path):
 
 
 def _write_raster(path, array, template_path, nodata):
+    """Float32 GeoTIFF on the template's grid, replacing an existing file."""
+    if os.path.exists(path):
+        try:
+            os.remove(path)
+        except OSError as e:
+            raise RuntimeError(
+                f"{Path(path).name} exists and could not be replaced - it is "
+                "probably open in QGIS. Remove it from the project and run again."
+            ) from e
     template = gdal.Open(template_path)
     out = gdal.GetDriverByName("GTiff").Create(
         path, template.RasterXSize, template.RasterYSize, 1, gdal.GDT_Float32
     )
+    if out is None:
+        raise RuntimeError(f"{Path(path).name} could not be created.")
     out.SetGeoTransform(template.GetGeoTransform())
     out.SetProjection(template.GetProjection())
     band = out.GetRasterBand(1)
@@ -155,11 +199,21 @@ class DemHydroProcessingAlgorithm(QgsProcessingAlgorithm):
     MAX_BREACH_LEN = "MAX_BREACH_LEN"
     MAX_BREACH_DEPTH = "MAX_BREACH_DEPTH"
     SEED = "SEED"
+    STUDY_AREA = "STUDY_AREA"
+    CONTOUR_INTERVAL = "CONTOUR_INTERVAL"
+    REPORT_OSM = "REPORT_OSM"
+    PROJECT_NUMBER = "PROJECT_NUMBER"
+    PROJECT_NAME = "PROJECT_NAME"
     OUTPUT_DEM = "OUTPUT_DEM"
+    OUTPUT_CHANGE = "OUTPUT_CHANGE"
     OUTPUT_SINKS = "OUTPUT_SINKS"
     OUTPUT_CSV = "OUTPUT_CSV"
     OUTPUT_DOCX = "OUTPUT_DOCX"
     OUTPUT_CLASSES = "OUTPUT_CLASSES"
+
+    def __init__(self):
+        super().__init__()
+        self._post_processors = []
 
     def icon(self):
         return QIcon(
@@ -210,11 +264,22 @@ class DemHydroProcessingAlgorithm(QgsProcessingAlgorithm):
             "\n"
             "INPUTS:\tA north-up DEM. Cell size is taken in metres (converted "
             "approximately for geographic CRS). Choose the DEM source so the "
-            "vertical error is right; the Word report needs python-docx and "
-            "matplotlib in QGIS's Python.\n"
+            "vertical error is right. The study area and contour interval are "
+            "used on the report's layout map only.\n"
             "\n"
-            "OUTPUTS:\tCorrected DEM, remaining sinks (points), sectioned "
-            "CSV report, optional Word report, optional classification table."
+            "OUTPUTS:\tTick the outputs you need and choose a folder for each "
+            "kind (rasters, shapefiles, CSV, Word). Files are named "
+            "<project number>_<description>, e.g. MC2025_014_Corrected_DEM.tif; "
+            "existing files are replaced. Layers are loaded with the Mayim "
+            "styles. Outputs: corrected DEM, elevation change (corrected minus "
+            "original), remaining sinks (points; fields sink_id, kind, reason, "
+            "cells, elev_m), results CSV, reusable classification table and "
+            "the Word report (title page, layout map, tables; needs "
+            "python-docx and matplotlib in QGIS's Python).\n"
+            "\n"
+            "Version 1.1.0 replaced the file outputs with output tick boxes "
+            "and folders; Processing models saved with 1.0 need the outputs "
+            "set again."
         )
 
     def initAlgorithm(self, config=None):
@@ -348,41 +413,56 @@ class DemHydroProcessingAlgorithm(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
-            QgsProcessingParameterRasterDestination(self.OUTPUT_DEM, "Corrected DEM")
-        )
-        self.addParameter(
-            QgsProcessingParameterFeatureSink(
-                self.OUTPUT_SINKS,
-                "Remaining sinks",
-                type=QgsProcessing.SourceType.TypeVectorPoint,
+            QgsProcessingParameterFeatureSource(
+                self.STUDY_AREA,
+                "Study area boundary for the report layout map (optional)",
+                types=[QgsProcessing.SourceType.TypeVectorPolygon],
                 optional=True,
             )
         )
         self.addParameter(
-            QgsProcessingParameterFileDestination(
-                self.OUTPUT_CSV,
-                "Results report (CSV)",
-                fileFilter="CSV files (*.csv)",
+            QgsProcessingParameterNumber(
+                self.CONTOUR_INTERVAL,
+                "Contour interval for the report layout map (m; 0 = no contours)",
+                type=QgsProcessingParameterNumber.Type.Double,
+                minValue=0.0,
+                defaultValue=1.0,
             )
         )
         self.addParameter(
-            QgsProcessingParameterFileDestination(
-                self.OUTPUT_DOCX,
-                "Results report (Word)",
-                fileFilter="Word documents (*.docx)",
-                optional=True,
-                createByDefault=False,
+            _advanced(
+                QgsProcessingParameterBoolean(
+                    self.REPORT_OSM,
+                    "Word report: OpenStreetMap background on the layout map "
+                    "(needs internet)",
+                    defaultValue=True,
+                )
             )
         )
         self.addParameter(
-            QgsProcessingParameterFileDestination(
-                self.OUTPUT_CLASSES,
-                "Classification table (CSV, reusable)",
-                fileFilter="CSV files (*.csv)",
+            QgsProcessingParameterString(
+                self.PROJECT_NUMBER,
+                "Project number (file name prefix and report, optional)",
                 optional=True,
-                createByDefault=False,
             )
         )
+        self.addParameter(
+            QgsProcessingParameterString(
+                self.PROJECT_NAME,
+                "Project / site name (report title page, optional)",
+                optional=True,
+            )
+        )
+        for spec in OUTPUT_SPECS:
+            self.addParameter(
+                QgsProcessingParameterBoolean(
+                    spec.key, f"Output: {spec.label}", defaultValue=spec.default
+                )
+            )
+        for name, label in FOLDER_PARAMS.values():
+            self.addParameter(
+                QgsProcessingParameterFolderDestination(name, label, optional=True)
+            )
 
     # ------------------------------------------------------------------
 
@@ -469,6 +549,30 @@ class DemHydroProcessingAlgorithm(QgsProcessingAlgorithm):
         dem_layer = self.parameterAsRasterLayer(parameters, self.DEM, context)
         if dem_layer is None:
             raise QgsProcessingException("Select a DEM.")
+
+        # outputs and folders first, so a missing folder stops the run early
+        project_number = self.parameterAsString(
+            parameters, self.PROJECT_NUMBER, context
+        ).strip()
+        project_name = self.parameterAsString(
+            parameters, self.PROJECT_NAME, context
+        ).strip()
+        selected = [
+            spec
+            for spec in OUTPUT_SPECS
+            if self.parameterAsBoolean(parameters, spec.key, context)
+        ]
+        if not selected:
+            raise QgsProcessingException("Tick at least one output.")
+        folders = {}
+        for kind in {spec.kind for spec in selected}:
+            name, label = FOLDER_PARAMS[kind]
+            folder = self.parameterAsFileOutput(parameters, name, context)
+            if not folder:
+                raise QgsProcessingException(f"Choose the {label.lower()}.")
+            os.makedirs(folder, exist_ok=True)
+            folders[kind] = folder
+        paths = {spec.key: spec.path(folders, project_number) for spec in selected}
         dem_path = dem_layer.source()
         crs = dem_layer.crs()
         dem, nodata, gt = _read_raster(dem_path)
@@ -594,95 +698,224 @@ class DemHydroProcessingAlgorithm(QgsProcessingAlgorithm):
         if n_unres:
             feedback.pushWarning(
                 f"{n_unres} sink cluster(s) remain that were not confirmed; "
-                "see the remaining sinks layer and report section 6."
+                "see the remaining sinks layer and report section 5.3."
             )
         for w in result.warnings:
             feedback.pushWarning(w)
 
-        out_dem = self.parameterAsOutputLayer(parameters, self.OUTPUT_DEM, context)
-        _write_raster(out_dem, result.corrected, dem_path, nodata)
+        outputs = {
+            name: folders[kind]
+            for kind, (name, _) in FOLDER_PARAMS.items()
+            if kind in folders
+        }
+        written = []  # (label, path) for the report
 
-        results = {self.OUTPUT_DEM: out_dem}
+        def done(key, path):
+            outputs[key] = path
+            written.append((SPEC_BY_KEY[key].label, path))
 
-        fields = QgsFields()
-        for fname, ftype in [
-            ("sink_id", QMetaType.Type.Int),
-            ("kind", QMetaType.Type.QString),
-            ("reason", QMetaType.Type.QString),
-            ("cells", QMetaType.Type.Int),
-            ("elev_m", QMetaType.Type.Double),
-        ]:
-            fields.append(QgsField(fname, ftype))
-        sink, sink_id = self.parameterAsSink(
-            parameters,
-            self.OUTPUT_SINKS,
-            context,
-            fields,
-            Qgis.WkbType.Point,
-            crs,
-        )
-        if sink is not None:
-            for k in result.sinks:
-                x = transform.origin_x + (k.col + 0.5) * transform.pixel_width
-                y = transform.origin_y - (k.row + 0.5) * transform.pixel_height
-                f = QgsFeature(fields)
-                f.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(x, y)))
-                f.setAttributes(
-                    [k.sink_id, k.kind, k.reason, k.cells, float(k.elevation)]
+        def failed(key, error):
+            feedback.reportError(
+                f"{SPEC_BY_KEY[key].label} not written: {error}", fatalError=False
+            )
+
+        diff = elevation_change(result, nodata)
+        diff_nodata = nodata if nodata is not None else -9999.0
+        diff_out = np.where(np.isfinite(diff), diff, diff_nodata)
+
+        # rasters
+        if self.OUTPUT_DEM in paths:
+            path = paths[self.OUTPUT_DEM]
+            try:
+                _write_raster(path, result.corrected, dem_path, nodata)
+                load_on_completion(context, path, None, self._post_processors)
+                done(self.OUTPUT_DEM, path)
+            except Exception as e:
+                failed(self.OUTPUT_DEM, e)
+        change_path = None
+        if self.OUTPUT_CHANGE in paths:
+            path = paths[self.OUTPUT_CHANGE]
+            try:
+                _write_raster(path, diff_out, dem_path, diff_nodata)
+                load_on_completion(context, path, STYLE_CHANGE, self._post_processors)
+                done(self.OUTPUT_CHANGE, path)
+                change_path = path
+            except Exception as e:
+                failed(self.OUTPUT_CHANGE, e)
+
+        # remaining sinks (memory layer: written as a shapefile and mapped)
+        sinks = sinks_layer(result.sinks, gt, crs)
+        if self.OUTPUT_SINKS in paths:
+            try:
+                path = save_shapefile(
+                    sinks, paths[self.OUTPUT_SINKS], context.transformContext()
                 )
-                sink.addFeature(f, QgsFeatureSink.Flag.FastInsert)
-            results[self.OUTPUT_SINKS] = sink_id
-            if context.willLoadLayerOnCompletion(sink_id):
-                self._style = _SinkStyle()
-                context.layerToLoadOnCompletionDetails(sink_id).setPostProcessor(
-                    self._style
-                )
+                load_on_completion(context, path, STYLE_SINKS, self._post_processors)
+                done(self.OUTPUT_SINKS, path)
+            except Exception as e:
+                failed(self.OUTPUT_SINKS, e)
 
         ctx = {
-            "tool": "DEM Hydrological Processing",
+            "tool": self.displayName(),
             "version": TOOL_VERSION,
+            "software": _software_version(),
+            "project_number": project_number,
+            "project_name": project_name,
             "run_time": datetime.now().strftime("%Y-%m-%d %H:%M"),
             "dem_path": dem_path,
-            "crs": crs.authid(),
+            "crs": f"{crs.authid()} - {crs.description()}",
             "cell_size": f"{cell_size[0]:.4g} x {cell_size[1]:.4g}",
+            "cell_area_m2": cell_size[0] * cell_size[1],
             "grid": f"{cols} x {rows}",
             "dem_source": SOURCE_LABELS[src_key],
             "stream_layer": "yes" if streams is not None else "no",
             "keep_layer": f"yes ({len(keep)} feature(s))" if keep else "no",
             "review_table": review_path or "no",
+            "geotransform": gt,
+            "nodata": nodata,
         }
-        out_csv = self.parameterAsFileOutput(parameters, self.OUTPUT_CSV, context)
-        write_sectioned_csv(out_csv, result, ctx)
-        results[self.OUTPUT_CSV] = out_csv
-        feedback.pushInfo(f"CSV report: {_describe_destination(out_csv)}")
 
-        out_docx = self.parameterAsFileOutput(parameters, self.OUTPUT_DOCX, context)
-        if out_docx:
+        # tables
+        if self.OUTPUT_CSV in paths:
+            path = paths[self.OUTPUT_CSV]
             try:
-                write_report_docx(out_docx, result, ctx)
-                results[self.OUTPUT_DOCX] = out_docx
-                feedback.pushInfo(f"Word report: {out_docx}")
-            except ImportError as e:
-                feedback.pushWarning(
-                    f"Word report skipped: {e}. Install python-docx and matplotlib."
-                )
-
-        out_cls = self.parameterAsFileOutput(parameters, self.OUTPUT_CLASSES, context)
-        if out_cls:
+                write_sectioned_csv(path, result, ctx)
+                done(self.OUTPUT_CSV, path)
+            except Exception as e:
+                failed(self.OUTPUT_CSV, e)
+        if self.OUTPUT_CLASSES in paths:
             if result.classifications is None:
                 feedback.pushWarning(
                     "No classification was run, so no classification table was "
                     "written. Tick the classify option or use Preserve mode."
                 )
             else:
-                write_classification_report(
-                    out_cls,
-                    dem,
-                    result.hierarchy,
-                    result.classifications,
-                    ira_results=result.ira_results,
-                    cell_area=cell_size[0] * cell_size[1],
+                path = paths[self.OUTPUT_CLASSES]
+                try:
+                    write_classification_report(
+                        path,
+                        dem,
+                        result.hierarchy,
+                        result.classifications,
+                        ira_results=result.ira_results,
+                        cell_area=cell_size[0] * cell_size[1],
+                    )
+                    done(self.OUTPUT_CLASSES, path)
+                except Exception as e:
+                    failed(self.OUTPUT_CLASSES, e)
+
+        # Word report
+        if self.OUTPUT_DOCX in paths:
+            path = paths[self.OUTPUT_DOCX]
+            feedback.setProgressText("Writing the report")
+            self._write_report(
+                path,
+                result,
+                ctx,
+                written,
+                diff,
+                diff_out,
+                diff_nodata,
+                change_path,
+                dem_path,
+                sinks,
+                crs,
+                parameters,
+                context,
+                feedback,
+            )
+            if Path(path).exists():
+                outputs[self.OUTPUT_DOCX] = path
+
+        for label, path in written:
+            feedback.pushInfo(f"{label}: {path}")
+        return outputs
+
+    def _write_report(
+        self,
+        path,
+        result,
+        ctx,
+        written,
+        diff,
+        diff_out,
+        diff_nodata,
+        change_path,
+        dem_path,
+        sinks,
+        crs,
+        parameters,
+        context,
+        feedback,
+    ):
+        """Word report with the QGIS layout map; problems are logged, never
+        fatal."""
+        study_source = self.parameterAsSource(parameters, self.STUDY_AREA, context)
+        interval = self.parameterAsDouble(parameters, self.CONTOUR_INTERVAL, context)
+        use_osm = self.parameterAsBoolean(parameters, self.REPORT_OSM, context)
+        map_messages = []
+        try:
+            if change_path is None:  # the map needs the change as a file
+                change_path = QgsProcessingUtils.generateTempFilename(
+                    "dem_elevation_change.tif", context
                 )
-                results[self.OUTPUT_CLASSES] = out_cls
-                feedback.pushInfo(f"Classification table: {out_cls}")
-        return results
+                _write_raster(change_path, diff_out, dem_path, diff_nodata)
+            study = None
+            if study_source is not None:
+                study = copy_source_layer(
+                    study_source, "Study area", crs, context.transformContext()
+                )
+
+            surface = result.corrected.astype("float64")  # NoData as NaN
+            surface[~np.isfinite(diff)] = np.nan
+
+            def contours(extent):
+                lines, warnings = dem_contours(
+                    surface, ctx["geotransform"], interval, extent=extent
+                )
+                map_messages.extend(warnings)
+                return lines
+
+            plan_map = make_plan_map(
+                change_path,
+                sinks,
+                crs,
+                context.transformContext(),
+                ctx["geotransform"],
+                result.corrected.shape,
+                study_area=study,
+                contours=contours,
+                contour_interval=interval,
+                present_classes=change_classes_present(diff),
+                use_osm=use_osm,
+                messages=map_messages,
+            )
+        except Exception as e:
+            plan_map = None
+            map_messages.append(f"Layout map not prepared ({e}).")
+        ctx = dict(ctx)
+        ctx.update(
+            {
+                "study_area": "yes" if study_source is not None else "no",
+                "contour_interval": interval,
+                "outputs": list(written)
+                + [(SPEC_BY_KEY[self.OUTPUT_DOCX].label, path)],
+                "map_messages": map_messages,
+            }
+        )
+        try:
+            messages = write_report_docx(path, result, ctx, plan_map=plan_map)
+            written.append((SPEC_BY_KEY[self.OUTPUT_DOCX].label, path))
+            for message in dict.fromkeys(messages + map_messages):
+                feedback.pushWarning(message)
+        except ImportError as e:
+            feedback.pushWarning(
+                f"Word report skipped: {e}. Install python-docx and matplotlib in "
+                "QGIS's Python."
+            )
+        except Exception as e:
+            feedback.reportError(
+                f"{Path(path).name} could not be written ({e}) - it may be open "
+                "in Word.",
+                fatalError=False,
+            )

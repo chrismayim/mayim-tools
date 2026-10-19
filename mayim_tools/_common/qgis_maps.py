@@ -25,6 +25,7 @@ from qgis.core import (
     QgsRasterLayer,
     QgsRectangle,
     QgsRenderContext,
+    QgsSingleBandPseudoColorRenderer,
     QgsSingleSymbolRenderer,
 )
 from qgis.PyQt.QtCore import QBuffer, QIODevice, QSize
@@ -97,7 +98,8 @@ def colour_key_image(color: QColor, dpi: float = LEGEND_DPI) -> bytes:
 def legend_entries(layer, title: str, present_values=None) -> list:
     """[(label, key image)] from a styled layer: one entry (``title``) for a
     single-symbol style, one per category / palette class present for a
-    categorised vector or paletted raster style."""
+    categorised vector or paletted raster style, and one per colour class of
+    a pseudocolour raster style (``present_values`` = class labels)."""
     renderer = layer.renderer()
     if renderer is None:
         return []
@@ -114,6 +116,25 @@ def legend_entries(layer, title: str, present_values=None) -> list:
             color = QColor(cls.color)
             color.setAlphaF(color.alphaF() * opacity)
             entries.append((cls.label or key, colour_key_image(color)))
+        return entries
+    if isinstance(renderer, QgsSingleBandPseudoColorRenderer):
+        # one key per colour ramp class; transparent classes are left out and
+        # ``present_values`` are class labels
+        shader = renderer.shader()
+        function = shader.rasterShaderFunction() if shader is not None else None
+        if function is None or not hasattr(function, "colorRampItemList"):
+            return []
+        opacity = renderer.opacity() if hasattr(renderer, "opacity") else 1.0
+        entries = []
+        for item in function.colorRampItemList():
+            color = QColor(item.color)
+            if color.alpha() == 0:
+                continue
+            label = item.label or f"{item.value:g}"
+            if present is not None and label not in present:
+                continue
+            color.setAlphaF(color.alphaF() * opacity)
+            entries.append((label, colour_key_image(color)))
         return entries
     if isinstance(renderer, QgsSingleSymbolRenderer):
         return [(title, symbol_image(renderer.symbol()))]
