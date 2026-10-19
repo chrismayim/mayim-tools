@@ -20,7 +20,6 @@ from qgis.core import (
     QgsFields,
     QgsFillSymbol,
     QgsGeometry,
-    QgsLineSymbol,
     QgsMapRendererCustomPainterJob,
     QgsMapSettings,
     QgsMemoryProviderUtils,
@@ -37,6 +36,7 @@ from qgis.PyQt.QtCore import QBuffer, QIODevice, QMetaType, QSize
 from qgis.PyQt.QtGui import QColor, QImage, QPainter
 
 from mayim_tools._common.output_files import shapefile_field_names
+from mayim_tools._common.qgis_maps import contour_layers
 from mayim_tools._common.report_figures import CHART_SIZE
 
 from .report import OSM_ATTRIBUTION, PlanMap, plan_extent
@@ -52,6 +52,8 @@ STYLE_NODES = "DRN_stream_nodes.qml"
 OSM_XYZ_SOURCE = (
     "type=xyz&url=https://tile.openstreetmap.org/{z}/{x}/{y}.png&zmin=0&zmax=19"
 )
+# single contour weight, still used by DEM Inundation Boundary (Catchment
+# Delineation uses the minor / major contours of _common.qgis_maps)
 CONTOUR_SYMBOL = {
     "line_color": "0,0,0,255",
     "line_width": "0.2",
@@ -365,7 +367,8 @@ def make_plan_map(
     """Returns the report's PlanMapFn. ``keys`` maps the roles 'catchments',
     'flowpaths', 'outlets', 'centroids', 'nodes' to MemoryLayers keys (a
     missing role is left off the map). ``contours_for(extent)`` returns
-    [(level, coords)] contour lines for an extent."""
+    (minor, major) contour lines [(level, coords)] for an extent, with
+    ``contour_interval`` the minor interval (major = 5 x minor)."""
     messages = messages if messages is not None else []
     osm = osm_layer() if use_osm else None
     if use_osm and osm is None:
@@ -427,15 +430,11 @@ def make_plan_map(
             top_down.append(base["catchments"])
         if study_area is not None and study_area.featureCount():
             top_down.append(study_area)
-        contour_layer = None
+        contour_sets = []  # [(layer, legend label)], major first
         if contours_for is not None and contour_interval > 0:
-            lines = contours_for(extent)
-            if lines:
-                contour_layer = lines_layer("Contours", lines, crs, "elev_m")
-                contour_layer.setRenderer(
-                    QgsSingleSymbolRenderer(QgsLineSymbol.createSimple(CONTOUR_SYMBOL))
-                )
-                top_down.append(contour_layer)
+            minor, major = contours_for(extent)
+            contour_sets = contour_layers(minor, major, crs, contour_interval)
+            top_down += [layer for layer, _label in contour_sets]
         osm_ok = False
         if osm is not None:
             osm_ok = _osm_has_tiles(
@@ -460,10 +459,8 @@ def make_plan_map(
             legend += legend_entries(base["catchments"], titles["catchments"])
         if study_area is not None and study_area.featureCount():
             legend += legend_entries(study_area, "Study area")
-        if contour_layer is not None:
-            legend += legend_entries(
-                contour_layer, f"Contours ({contour_interval:g} m interval)"
-            )
+        for layer, label in reversed(contour_sets):  # minor, then major
+            legend += legend_entries(layer, label)
         if stream_layer is not None:
             orders = sorted({int(o) for o in streams[:, 4]})
             for label, img in legend_entries(stream_layer, "Streams", orders):

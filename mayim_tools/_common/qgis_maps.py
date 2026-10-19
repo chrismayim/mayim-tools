@@ -18,17 +18,24 @@ from qgis.core import (
     QgsCategorizedSymbolRenderer,
     QgsCoordinateReferenceSystem,
     QgsCoordinateTransform,
+    QgsFeature,
+    QgsField,
+    QgsFields,
     QgsFillSymbol,
+    QgsGeometry,
+    QgsLineSymbol,
     QgsMapRendererCustomPainterJob,
     QgsMapSettings,
+    QgsMemoryProviderUtils,
     QgsPalettedRasterRenderer,
+    QgsPointXY,
     QgsRasterLayer,
     QgsRectangle,
     QgsRenderContext,
     QgsSingleBandPseudoColorRenderer,
     QgsSingleSymbolRenderer,
 )
-from qgis.PyQt.QtCore import QBuffer, QIODevice, QSize
+from qgis.PyQt.QtCore import QBuffer, QIODevice, QMetaType, QSize
 from qgis.PyQt.QtGui import QColor, QImage, QPainter
 
 from .report_figures import CHART_SIZE
@@ -42,6 +49,18 @@ STUDY_AREA_SYMBOL = {
     "outline_width": "0.5",
     "outline_width_unit": "MM",
     "outline_style": "dash",
+}
+# contours on report maps (report standard 3.2): fine minor lines and
+# thicker major lines every MAJOR_FACTOR (5) minor intervals
+MINOR_CONTOUR_SYMBOL = {
+    "line_color": "0,0,0,255",
+    "line_width": "0.15",
+    "line_width_unit": "MM",
+}
+MAJOR_CONTOUR_SYMBOL = {
+    "line_color": "0,0,0,255",
+    "line_width": "0.35",
+    "line_width_unit": "MM",
 }
 # legend key size in the report figure (w, h): the legend's handlelength 2.0
 # and handleheight 1.0, in units of the figure font size
@@ -223,3 +242,48 @@ def map_crs_and_extent(crs, extent, transform_context):
     tr = QgsCoordinateTransform(crs, dest, transform_context)
     box = tr.transformBoundingBox(QgsRectangle(*extent))
     return dest, (box.xMinimum(), box.yMinimum(), box.xMaximum(), box.yMaximum())
+
+
+def contour_layer(lines, crs, name: str, symbol: dict):
+    """Memory line layer of contour lines [(level, [(x, y), ...])] drawn with
+    ``symbol``."""
+    fields = QgsFields()
+    fields.append(QgsField("elev_m", QMetaType.Type.Double))
+    layer = QgsMemoryProviderUtils.createMemoryLayer(
+        name, fields, Qgis.WkbType.LineString, crs
+    )
+    feats = []
+    for level, coords in lines:
+        if len(coords) < 2:
+            continue
+        feat = QgsFeature(fields)
+        feat.setGeometry(
+            QgsGeometry.fromPolylineXY([QgsPointXY(x, y) for x, y in coords])
+        )
+        feat["elev_m"] = float(level)
+        feats.append(feat)
+    layer.dataProvider().addFeatures(feats)
+    layer.updateExtents()
+    layer.setRenderer(QgsSingleSymbolRenderer(QgsLineSymbol.createSimple(symbol)))
+    return layer
+
+
+def contour_layers(minor, major, crs, minor_interval: float, factor: int = 5):
+    """[(layer, legend label)] for the major then the minor contours (the
+    draw order, top first); empty sets are left out."""
+    out = []
+    if major:
+        out.append(
+            (
+                contour_layer(major, crs, "Major contours", MAJOR_CONTOUR_SYMBOL),
+                f"Major contours ({factor * minor_interval:g} m interval)",
+            )
+        )
+    if minor:
+        out.append(
+            (
+                contour_layer(minor, crs, "Minor contours", MINOR_CONTOUR_SYMBOL),
+                f"Minor contours ({minor_interval:g} m interval)",
+            )
+        )
+    return out

@@ -47,7 +47,7 @@ from mayim_tools._common.output_files import (
     WORD,
     OutputSpec,
 )
-from mayim_tools.hydrology._common.contours import dem_contours
+from mayim_tools.hydrology._common.contours import minor_major_contours
 
 from .core.classification import DEM_SOURCE_VERTICAL_ERROR_M
 from .core.conditioning import (
@@ -72,7 +72,7 @@ from .qgis_map import (
 )
 from .report import change_classes_present, elevation_change, write_report_docx
 
-TOOL_VERSION = "1.1.0"
+TOOL_VERSION = "1.2.0"
 SOURCE_KEYS = list(DEM_SOURCE_VERTICAL_ERROR_M) + ["custom"]
 SOURCE_LABELS = {
     "survey": "Ground survey",
@@ -200,6 +200,7 @@ class DemHydroProcessingAlgorithm(QgsProcessingAlgorithm):
     MAX_BREACH_DEPTH = "MAX_BREACH_DEPTH"
     SEED = "SEED"
     STUDY_AREA = "STUDY_AREA"
+    SHOW_CONTOURS = "SHOW_CONTOURS"
     CONTOUR_INTERVAL = "CONTOUR_INTERVAL"
     REPORT_OSM = "REPORT_OSM"
     PROJECT_NUMBER = "PROJECT_NUMBER"
@@ -264,7 +265,7 @@ class DemHydroProcessingAlgorithm(QgsProcessingAlgorithm):
             "\n"
             "INPUTS:\tA north-up DEM. Cell size is taken in metres (converted "
             "approximately for geographic CRS). Choose the DEM source so the "
-            "vertical error is right. The study area and contour interval are "
+            "vertical error is right. The study area and contours are "
             "used on the report's layout map only.\n"
             "\n"
             "OUTPUTS:\tTick the outputs you need and choose a folder for each "
@@ -421,9 +422,17 @@ class DemHydroProcessingAlgorithm(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
+            QgsProcessingParameterBoolean(
+                self.SHOW_CONTOURS,
+                "Show contours on the report layout map",
+                defaultValue=True,
+            )
+        )
+        self.addParameter(
             QgsProcessingParameterNumber(
                 self.CONTOUR_INTERVAL,
-                "Contour interval for the report layout map (m; 0 = no contours)",
+                "Minor contour interval for the report layout map (m; major "
+                "contours every 5 x this; 0 = no contours)",
                 type=QgsProcessingParameterNumber.Type.Double,
                 minValue=0.0,
                 defaultValue=1.0,
@@ -852,6 +861,8 @@ class DemHydroProcessingAlgorithm(QgsProcessingAlgorithm):
         fatal."""
         study_source = self.parameterAsSource(parameters, self.STUDY_AREA, context)
         interval = self.parameterAsDouble(parameters, self.CONTOUR_INTERVAL, context)
+        if not self.parameterAsBoolean(parameters, self.SHOW_CONTOURS, context):
+            interval = 0.0
         use_osm = self.parameterAsBoolean(parameters, self.REPORT_OSM, context)
         map_messages = []
         try:
@@ -870,11 +881,11 @@ class DemHydroProcessingAlgorithm(QgsProcessingAlgorithm):
             surface[~np.isfinite(diff)] = np.nan
 
             def contours(extent):
-                lines, warnings = dem_contours(
+                minor, major, warnings = minor_major_contours(
                     surface, ctx["geotransform"], interval, extent=extent
                 )
                 map_messages.extend(warnings)
-                return lines
+                return minor, major
 
             plan_map = make_plan_map(
                 change_path,

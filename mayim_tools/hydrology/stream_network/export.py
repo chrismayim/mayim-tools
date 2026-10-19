@@ -62,11 +62,23 @@ REACH_FIELDS = [
         "-",
         "Muskingum stability check 2KX <= dt <= 2K(1-X) per sub-reach",
     ),
+    (
+        "split_from",
+        "i",
+        "-",
+        "original reach id when the reach was split at stream breakpoints",
+    ),
+    ("piece", "i", "-", "piece number of a split reach, 1 = lowest"),
 ]
 
 NODE_FIELDS = [
     ("node_id", "i", "-", "node identifier"),
-    ("node_type", "s", "-", "channel head, confluence, pour point or outlet"),
+    (
+        "node_type",
+        "s",
+        "-",
+        "channel head, confluence, pour point, outlet or stream breakpoint",
+    ),
     ("network_id", "s", "-", "drainage network"),
     ("link_id", "i", "-", "reach starting here (or ending here, for the outlet)"),
     ("x", "d", "m", "easting"),

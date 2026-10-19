@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import csv
 import math
+import re
 
 import numpy as np
 import pytest
@@ -408,13 +409,30 @@ def test_word_report(terrain, tmp_path):
     write_report_docx(str(path), res, {"tool": "Stream Network", "version": "t"})
     doc = docx.Document(str(path))
     text = "\n".join(p.text for p in doc.paragraphs)
-    for heading in (
-        "Stream Network Extraction and Classification",
-        "4. Stream threshold and constant-drop test",
-        "5. Stream ordering systems",
-        "10. References",
-    ):
-        assert heading in text
+    assert doc.paragraphs[0].style.name == "Title"
+    assert doc.paragraphs[0].text == "Stream Network Extraction and Classification"
+    headings = [p.text for p in doc.paragraphs if p.style.name.startswith("Heading")]
+    main = [h for h in headings if re.match(r"^\d+\. ", h)]
+    assert main == [
+        "1. Summary",
+        "2. Tool and method",
+        "3. Inputs and settings",
+        "4. Parameters and calculations",
+        "5. Results",
+        "6. Outputs",
+        "7. Notes and limitations",
+        "8. References",
+    ]
+    assert "5.1 Stream threshold and constant-drop test" in headings
+    assert "Strahler order." in text
+    h2 = doc.styles["Heading 2"].font
+    assert h2.name == "Arial" and h2.all_caps and str(h2.color.rgb) == "0F0F36"
+    params = next(
+        t for t in doc.tables if t.rows[0].cells[0].text == "Parameter (symbol, unit)"
+    )
+    assert len(params.columns) == 3
+    if pytest.importorskip("matplotlib"):
+        assert len(doc.inline_shapes) >= 3
 
 
 def test_catchment_outlets_give_same_network_as_pour_points(terrain):

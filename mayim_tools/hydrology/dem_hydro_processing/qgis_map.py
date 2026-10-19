@@ -24,7 +24,6 @@ from qgis.core import (
     QgsFields,
     QgsFillSymbol,
     QgsGeometry,
-    QgsLineSymbol,
     QgsMemoryProviderUtils,
     QgsPointXY,
     QgsProcessingContext,
@@ -38,6 +37,7 @@ from qgis.PyQt.QtCore import QMetaType
 from mayim_tools._common.output_files import shapefile_field_names
 from mayim_tools._common.qgis_maps import (
     STUDY_AREA_SYMBOL,
+    contour_layers,
     legend_entries,
     map_crs_and_extent,
     osm_has_tiles,
@@ -49,11 +49,6 @@ from mayim_tools._common.report_maps import OSM_ATTRIBUTION, PlanMap
 STYLES_DIR = Path(__file__).resolve().parent / "styles"
 STYLE_CHANGE = STYLES_DIR / "DEM_elevation_change.qml"
 STYLE_SINKS = STYLES_DIR / "DEM_remaining_sinks.qml"
-CONTOUR_SYMBOL = {
-    "line_color": "0,0,0,255",
-    "line_width": "0.2",
-    "line_width_unit": "MM",
-}
 MAP_PAD_FRACTION = 0.02
 
 SINK_FIELDS = (  # (name, type, length; 0 = default)
@@ -187,30 +182,6 @@ def sinks_layer(sinks, geotransform, crs):
     return layer
 
 
-def _contour_layer(lines, crs):
-    fields = QgsFields()
-    fields.append(QgsField("elev_m", QMetaType.Type.Double))
-    layer = QgsMemoryProviderUtils.createMemoryLayer(
-        "Contours", fields, Qgis.WkbType.LineString, crs
-    )
-    feats = []
-    for level, coords in lines:
-        if len(coords) < 2:
-            continue
-        feat = QgsFeature(fields)
-        feat.setGeometry(
-            QgsGeometry.fromPolylineXY([QgsPointXY(x, y) for x, y in coords])
-        )
-        feat["elev_m"] = float(level)
-        feats.append(feat)
-    layer.dataProvider().addFeatures(feats)
-    layer.updateExtents()
-    layer.setRenderer(
-        QgsSingleSymbolRenderer(QgsLineSymbol.createSimple(CONTOUR_SYMBOL))
-    )
-    return layer
-
-
 def dem_extent(geotransform, shape):
     """(xmin, ymin, xmax, ymax) of a north-up raster."""
     gt = geotransform
@@ -238,8 +209,9 @@ def make_plan_map(
     PlanMap. ``change_path`` is a GeoTIFF of the elevation change (corrected
     minus original); ``sinks`` the remaining sink memory layer (or None);
     ``study_area`` a memory polygon layer in ``crs`` (or None);
-    ``contours(extent)`` returns [(level, [(x, y), ...])] DEM contour lines
-    for an extent in ``crs``; ``present_classes`` the labels of the change
+    ``contours(extent)`` returns (minor, major) DEM contour lines
+    [(level, [(x, y), ...])] for an extent in ``crs``, ``contour_interval``
+    being the minor interval (major = 5 x minor; 0 = no contours); ``present_classes`` the labels of the change
     classes that occur (legend)."""
     messages = messages if messages is not None else []
     osm = osm_layer() if use_osm else None
@@ -280,11 +252,10 @@ def make_plan_map(
             study_area.setRenderer(
                 QgsSingleSymbolRenderer(QgsFillSymbol.createSimple(STUDY_AREA_SYMBOL))
             )
-        contour_layer = None
+        contour_sets = []  # [(layer, legend label)], major first
         if contours is not None and contour_interval > 0:
-            lines = contours(dem_extent(geotransform, shape))
-            if lines:
-                contour_layer = _contour_layer(lines, crs)
+            minor, major = contours(dem_extent(geotransform, shape))
+            contour_sets = contour_layers(minor, major, crs, contour_interval)
 
         # draw order: first in the list is on top
         top_down = []
@@ -294,8 +265,7 @@ def make_plan_map(
             top_down.append(study_area)
         if change is not None:
             top_down.append(change)
-        if contour_layer is not None:
-            top_down.append(contour_layer)
+        top_down += [layer for layer, _label in contour_sets]
         osm_ok = False
         if osm is not None:
             osm_ok = osm_has_tiles(
@@ -323,10 +293,8 @@ def make_plan_map(
             legend += legend_entries(sink_map, "Remaining sink", kinds)
         if study_area is not None and study_area.featureCount():
             legend += legend_entries(study_area, "Study area")
-        if contour_layer is not None:
-            legend += legend_entries(
-                contour_layer, f"Contours ({contour_interval:g} m interval)"
-            )
+        for layer, label in reversed(contour_sets):  # minor, then major
+            legend += legend_entries(layer, label)
         return PlanMap(
             image=image,
             extent=rendered,

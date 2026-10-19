@@ -252,3 +252,59 @@ def _split_at_nodata(line_rc: np.ndarray, nodata: np.ndarray) -> list[np.ndarray
     if len(current) >= 2:
         pieces.append(np.asarray(current))
     return pieces
+
+
+MAJOR_FACTOR = 5  # major contour interval = 5 x the minor interval
+MAX_MAP_LEVELS = 120  # more levels than this crowd a 14 cm report map
+
+
+def _is_multiple(level: float, interval: float) -> bool:
+    k = level / interval
+    return abs(k - round(k)) < 1e-6
+
+
+def minor_major_contours(
+    dem: np.ndarray,
+    geotransform,
+    minor_interval: float,
+    extent: tuple[float, float, float, float] | None = None,
+    max_levels: int = MAX_MAP_LEVELS,
+    **kwargs,
+):
+    """Minor and major contours for a report layout map (report standard
+    3.2): the major interval is MAJOR_FACTOR x the minor one, and levels on
+    a major contour are left out of the minor set. When the minor contours
+    would be too many for the map only the major ones are returned; when
+    those are too many as well, none. Returns (minor lines, major lines,
+    warnings), the lines as [(level, [(x, y), ...])]."""
+    if minor_interval is None or minor_interval <= 0:
+        return [], [], []
+    major_interval = MAJOR_FACTOR * minor_interval
+    major, warnings = dem_contours(
+        dem, geotransform, major_interval, extent, max_levels=max_levels, **kwargs
+    )
+    if warnings:  # even the major contours are too many
+        return (
+            [],
+            [],
+            [
+                f"Contours not drawn: {major_interval:g} m major contours would be "
+                f"too many for the map (more than {max_levels} levels). Use a "
+                "larger minor contour interval."
+            ],
+        )
+    minor, minor_warnings = dem_contours(
+        dem, geotransform, minor_interval, extent, max_levels=max_levels, **kwargs
+    )
+    if minor_warnings:
+        return (
+            [],
+            major,
+            [
+                f"Minor contours ({minor_interval:g} m) not drawn: they would be too "
+                f"many for the map (more than {max_levels} levels); only the "
+                f"{major_interval:g} m major contours are shown."
+            ],
+        )
+    minor = [(lvl, xy) for lvl, xy in minor if not _is_multiple(lvl, major_interval)]
+    return minor, major, []

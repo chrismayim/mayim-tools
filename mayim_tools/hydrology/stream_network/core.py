@@ -75,6 +75,8 @@ VELOCITY_METHODS = ("constant", "manning")
 DEFAULT_MIN_SLOPE = 0.0005  # m/m - floor for routing velocities on flat reaches
 PROFILE_MAX_POINTS = 1000
 DROP_TEST_T = 2.0
+BREAKPOINT_NODE = "stream breakpoint"
+BREAK_MIN_REMAINDER = 0.10  # break only if the rest is longer than 10 % of the max
 
 
 # ---------------------------------------------------------------------------
@@ -479,6 +481,135 @@ def reach_routing(length_m: float, slope, settings: RoutingSettings) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Stream breakpoints (maximum reach length)
+# ---------------------------------------------------------------------------
+
+
+def split_positions(
+    seg_len, max_len: float, min_remainder: float = BREAK_MIN_REMAINDER
+) -> list[int]:
+    """Vertex indices at which a reach is broken so that no piece is longer
+    than ``max_len``. ``seg_len[i]`` is the length from vertex i to vertex
+    i + 1, vertices running upstream to downstream. Lengths are measured
+    from the downstream (lowest) end; at each step the break is placed at
+    the furthest vertex upstream still within ``max_len`` of the previous
+    break, and only when the rest of the reach upstream of it is longer
+    than ``min_remainder`` x ``max_len``. Returns the indices downstream
+    first."""
+    seg = np.asarray(seg_len, dtype=np.float64)
+    if max_len is None or max_len <= 0 or seg.size == 0:
+        return []
+    d = np.concatenate([np.cumsum(seg[::-1])[::-1], [0.0]])  # to the low end
+    total = float(d[0])
+    breaks: list[int] = []
+    current = seg.size  # vertex index of the current piece's low end
+    base = 0.0
+    while True:
+        reach = np.flatnonzero((d <= base + max_len + 1e-9) & (d > base + 1e-9))
+        k = int(reach.min()) if reach.size else current - 1
+        if k <= 0 or total - float(d[k]) <= min_remainder * max_len + 1e-9:
+            break
+        breaks.append(k)
+        current, base = k, float(d[k])
+    return breaks
+
+
+def _apply_breakpoints(
+    reaches,
+    nodes,
+    max_len,
+    steps,
+    z,
+    acc_km2,
+    routing,
+    min_remainder=BREAK_MIN_REMAINDER,
+):
+    """Splits reaches longer than ``max_len`` at stream breakpoints (see
+    split_positions) and adds a 'stream breakpoint' node at each break. The
+    lowest piece keeps the reach's id and downstream link; the pieces above
+    get new ids, and reaches that flowed into a split reach now flow into
+    its top piece. Network statistics computed before the split are not
+    affected. Returns (reaches, nodes, number of breakpoints)."""
+    next_id = max(r["link_id"] for r in reaches) + 1
+    redirect: dict[int, int] = {}
+    out = []
+    new_nodes = []
+    for r in reaches:
+        cells = np.asarray(r["_cells"])
+        seg = steps[cells[:-1]]
+        bks = split_positions(seg, max_len, min_remainder)
+        if not bks:
+            out.append(r)
+            continue
+        bounds = [cells.size - 1] + bks + [0]  # vertex indices, low end first
+        coords = r["coords"]
+        below_len = 0.0
+        pieces = []
+        for p in range(len(bounds) - 1):
+            hi, lo = bounds[p], bounds[p + 1]
+            pc = cells[lo : hi + 1]
+            length = float(seg[lo:hi].sum())
+            z0, z1 = z[pc[0]], z[pc[-1]]
+            drop = None if np.isnan(z0) or np.isnan(z1) else float(z0 - z1)
+            xs, ys = coords[lo], coords[hi]
+            straight = math.hypot(ys[0] - xs[0], ys[1] - xs[1])
+            piece = dict(r)
+            piece.update(
+                {
+                    "link_id": r["link_id"] if p == 0 else next_id,
+                    "ds_link": r["ds_link"] if p == 0 else pieces[-1]["link_id"],
+                    "split_from": r["link_id"],
+                    "piece": p + 1,
+                    "length_m": length,
+                    "us_km2": (
+                        r["us_km2"] if p == 0 else float(acc_km2[cells[hi - 1]])
+                    ),
+                    "z_start": None if np.isnan(z0) else float(z0),
+                    "z_end": None if np.isnan(z1) else float(z1),
+                    "drop_m": drop,
+                    "slope": drop / length if drop is not None and length > 0 else None,
+                    "sinuosity": length / straight if straight > 0 else None,
+                    "coords": coords[lo : hi + 1],
+                    "dist_out_m": (r.get("dist_out_m") or 0.0) + below_len,
+                    "up_len_m": (r.get("up_len_m") or length) - below_len,
+                    "_cells": pc,
+                    "_start_cell": int(pc[0]),
+                    "_end_cell": int(pc[-1]),
+                    "_internal": p > 0,
+                }
+            )
+            piece.update(reach_routing(length, piece["slope"], routing))
+            if p > 0:
+                next_id += 1
+                bx, by = coords[hi]
+                new_nodes.append(
+                    {
+                        "node_type": BREAKPOINT_NODE,
+                        "network_id": r["network_id"],
+                        "link_id": pieces[-1]["link_id"],
+                        "x": bx,
+                        "y": by,
+                        "z": None if np.isnan(z[cells[hi]]) else float(z[cells[hi]]),
+                        "us_km2": float(acc_km2[cells[hi]]),
+                        "n_inflow": 1,
+                        "strahler": r["strahler"],
+                        "shreve": r["shreve"],
+                    }
+                )
+            below_len += length
+            pieces.append(piece)
+        redirect[r["link_id"]] = pieces[-1]["link_id"]
+        out.extend(pieces)
+    for r in out:
+        if not r.pop("_internal", False) and r["ds_link"] in redirect:
+            r["ds_link"] = redirect[r["ds_link"]]
+    nodes = nodes + new_nodes
+    for i, nd in enumerate(nodes, start=1):
+        nd["node_id"] = i
+    return out, nodes, len(new_nodes)
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -507,6 +638,7 @@ def extract_stream_network(
     progress: Callable[[float, str], None] | None = None,
     is_canceled: Callable[[], bool] | None = None,
     outlet_cells: Sequence[tuple[str, Sequence[int]]] | None = None,
+    max_reach_length_m: float | None = None,
 ) -> NetworkResult:
     """Extracts, orders and characterises the stream network.
 
@@ -514,7 +646,11 @@ def extract_stream_network(
     have already placed their outlets (e.g. Catchment Delineation, whose
     pour points are snapped and whose pour lines cover many cells): a list
     of (name, flat cell indices). The network is then everything upstream
-    of those cells, exactly as with pour points."""
+    of those cells, exactly as with pour points.
+
+    ``max_reach_length_m`` (optional) splits longer reaches at stream
+    breakpoints, measured from each reach's downstream end, wherever the rest
+    of the reach is longer than 10 % of the maximum (see split_positions)."""
     routing = routing or RoutingSettings()
     if routing.method not in VELOCITY_METHODS:
         raise StreamNetworkError(f"Unknown velocity method {routing.method!r}")
@@ -882,8 +1018,17 @@ def extract_stream_network(
             }
         )
 
+    # stream breakpoints (after the network statistics, which they do not change)
+    n_breaks = 0
+    if max_reach_length_m:
+        reaches, res.nodes, n_breaks = _apply_breakpoints(
+            reaches, res.nodes, max_reach_length_m, steps, z, acc_km2, routing
+        )
+
     # tidy reach output
     for r in reaches:
+        r.setdefault("split_from", None)
+        r.setdefault("piece", None)
         for key in ("length_m", "drop_m", "z_start", "z_end", "dist_out_m", "up_len_m"):
             r[key] = _r(r.get(key), 3)
         r["us_km2"] = _r(r["us_km2"], 6)
@@ -902,6 +1047,8 @@ def extract_stream_network(
         "grid": (cols, rows),
         "n_pour_points": len(res.pour_points),
         "min_network_km2": min_network_km2,
+        "max_reach_length_m": max_reach_length_m or None,
+        "n_breakpoints": n_breaks,
     }
     report(1.0, "Done")
     return res

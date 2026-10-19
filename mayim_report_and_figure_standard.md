@@ -1,8 +1,8 @@
 # Mayim Report, Figure and Graph Standard
 
-*House design standard for every Word report, graph, chart and map produced by Mayim tools and analyses (version 2, October 2026).*
+*House design standard for every Word report, graph, chart and map produced by Mayim tools and analyses (version 2.1, October 2026).*
 
-*Version 2: title page added (section 1.4); report structure and checklist updated to match; font availability rule added (section 2.2).*
+*Version 2: title page added (section 1.4); report structure and checklist updated to match; font availability rule added (section 2.2). Version 2.1: minor and major contours, with an option to leave contours off (section 3.2).*
 
 **How to use this document:** give it to Claude in any chat with the instruction "apply the Mayim report and figure standard". Every value below is a requirement unless it is marked as a default. If something is not covered here, follow the closest rule and say which choice was made.
 
@@ -161,7 +161,12 @@ Content colours, used in any order:
   - Add a note in the report giving the licence (ODbL, openstreetmap.org/copyright).
   - If no tiles are received (e.g. offline), leave the background out and warn the user. Never show a blank background with an attribution.
 - **Study area boundary** (optional input): black, 0.5 mm, dashed outline, no fill.
-- **Contours:** generated from the DEM at a user-set interval (default 1 m, 0 = none). Black, 0.2 mm, solid.
+- **Contours:** generated from the DEM, in two weights so they do not overwhelm the map.
+  - **Inputs:** a tick box "Show contours on the layout map" (default on) and the **minor contour interval** in metres (default 1 m). Unticking the box, or an interval of 0, leaves the contours off altogether.
+  - **Major contours** are every fifth minor contour (major interval = 5 × minor interval, e.g. 1 m minor and 5 m major).
+  - **Minor contours:** black, 0.15 mm, solid. **Major contours:** black, 0.35 mm, solid, drawn above the minor ones. A level is drawn once only: minor lines are not drawn where a major line falls.
+  - **Legend:** two entries, e.g. "Minor contours (1 m interval)" and "Major contours (5 m interval)".
+  - **Too dense:** if the minor contours would be too many for the map (e.g. a large area with much relief), draw the major contours only and say so in the run log and the report's processing messages; if even the major contours are too many, leave the contours off with a message suggesting a larger interval.
 - **Layers** use the Mayim QML layer styles (folder `D:\Dropbox\MAYIM\6 TEGNIESE DATA EN DOKUMENTE\QGIS\QGIS Layer styles`). Copies are kept in each tool's `styles/` folder.
 
 | Layer | Style file | Key field |
@@ -173,7 +178,7 @@ Content colours, used in any order:
 | Streams by Strahler order | DRN_strahler_stream_order.qml | `strahler` |
 | Stream nodes | DRN_stream_nodes.qml | `node_type` |
 
-- **Drawing order** (top to bottom): centroids, outlets, stream nodes, flow paths, streams, catchments, study area, contours, OSM.
+- **Drawing order** (top to bottom): centroids, outlets, stream nodes, flow paths, streams, catchments, study area, major contours, minor contours, OSM.
 
 ### 3.3 Map furniture
 
@@ -215,7 +220,7 @@ The standard is implemented in shared modules. Reuse them rather than re-coding 
 | QGIS map render, legend keys, OSM background | `mayim_tools/_common/qgis_maps.py` | `render_map`, `legend_entries`, `osm_layer`, `osm_has_tiles`, `map_crs_and_extent` |
 | Shapefile export, loading layers with styles | `hydrology/catchment_delineation/qgis_outputs.py` | `apply_style`, `save_shapefile`, `load_on_completion`, `make_plan_map` |
 | Output names and folders | `mayim_tools/_common/output_files.py` | `OutputSpec`, `output_file_name`, `shapefile_field_names` |
-| DEM contours | `hydrology/_common/contours.py` | `dem_contours(dem, geotransform, interval, extent)` |
+| DEM contours | `hydrology/_common/contours.py` | `dem_contours(dem, geotransform, interval, extent)`; minor and major contours are drawn from two calls (minor interval, then 5 × minor) with the major levels left out of the minor set |
 
 ### Minimal matplotlib equivalent (outside mayim_tools)
 
@@ -267,7 +272,7 @@ with matplotlib.rc_context(RC):
 - [ ] Maps:
   - [ ] QML layer styles applied.
   - [ ] OSM background with attribution, or a warning when no tiles are received.
-  - [ ] Study area: black dashed 0.5 mm. Contours: black 0.2 mm.
+  - [ ] Study area: black dashed 0.5 mm. Contours: minor black 0.15 mm, major (5 × minor interval) black 0.35 mm, or left off when the user unticks them.
   - [ ] Legend below the map, scale bar, north arrow.
 - [ ] Output files:
   - [ ] Named `<project number>_<description>` with underscores.

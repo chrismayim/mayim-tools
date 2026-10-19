@@ -98,6 +98,13 @@ def text(value) -> str:
     return s if s and s.lower() not in ("nan", "none") else "-"
 
 
+def contour_text(minor_interval) -> str:
+    """'1 m minor, 5 m major' or 'none'."""
+    if not minor_interval:
+        return "none"
+    return f"{minor_interval:g} m minor, {5 * minor_interval:g} m major"
+
+
 def _limit(value, unit: str) -> str:
     return "unlimited" if not value else f"{value:g} {unit}"
 
@@ -304,10 +311,7 @@ def inputs_rows(result: ConditioningResult, ctx: dict) -> list[list[str]]:
         ]
     rows += [
         ["Study area on the layout map", text(ctx.get("study_area") or "no")],
-        [
-            "Contour interval on the layout map (m)",
-            num(ctx.get("contour_interval"), "{:g}"),
-        ],
+        ["Contours on the layout map", contour_text(ctx.get("contour_interval"))],
         ["Run", text(ctx.get("run_time"))],
     ]
     return rows

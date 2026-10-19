@@ -148,6 +148,7 @@
     <categories>
       <category label="channel head" render="true" symbol="0" type="string" uuid="{aabba680-e5fe-42c8-8c76-2c6e8c1b4dcd}" value="channel head"/>
       <category label="outlet" render="true" symbol="1" type="string" uuid="{39a6838c-5549-4c6a-9fd4-8e6a7eca7a4e}" value="outlet"/>
+      <category label="stream breakpoint" render="true" symbol="3" type="string" uuid="{b793a6a1-7ca5-4105-8965-0268d9c071b2}" value="stream breakpoint"/>
       <category label="" render="true" symbol="2" type="NULL" uuid="{ad2016e7-f291-433d-b1d6-db79790bad60}" value="NULL"/>
     </categories>
     <symbols>
@@ -216,6 +217,45 @@
             <Option name="outline_width_unit" type="QString" value="MM"/>
             <Option name="scale_method" type="QString" value="diameter"/>
             <Option name="size" type="QString" value="2"/>
+            <Option name="size_map_unit_scale" type="QString" value="3x:0,0,0,0,0,0"/>
+            <Option name="size_unit" type="QString" value="MM"/>
+            <Option name="vertical_anchor_point" type="QString" value="1"/>
+          </Option>
+          <data_defined_properties>
+            <Option type="Map">
+              <Option name="name" type="QString" value=""/>
+              <Option name="properties"/>
+              <Option name="type" type="QString" value="collection"/>
+            </Option>
+          </data_defined_properties>
+        </layer>
+      </symbol>
+      <symbol alpha="1" clip_to_extent="1" force_rhr="0" frame_rate="10" is_animated="0" name="3" type="marker">
+        <data_defined_properties>
+          <Option type="Map">
+            <Option name="name" type="QString" value=""/>
+            <Option name="properties"/>
+            <Option name="type" type="QString" value="collection"/>
+          </Option>
+        </data_defined_properties>
+        <layer class="SimpleMarker" enabled="1" id="{6fcb8adc-77a4-48b3-8c83-748eec27486e}" locked="0" pass="0">
+          <Option type="Map">
+            <Option name="angle" type="QString" value="0"/>
+            <Option name="cap_style" type="QString" value="square"/>
+            <Option name="color" type="QString" value="0,0,255,255,rgb:0,0,1,1"/>
+            <Option name="horizontal_anchor_point" type="QString" value="1"/>
+            <Option name="joinstyle" type="QString" value="bevel"/>
+            <Option name="name" type="QString" value="diamond"/>
+            <Option name="offset" type="QString" value="0,0"/>
+            <Option name="offset_map_unit_scale" type="QString" value="3x:0,0,0,0,0,0"/>
+            <Option name="offset_unit" type="QString" value="MM"/>
+            <Option name="outline_color" type="QString" value="35,35,35,255,rgb:0.1372549,0.1372549,0.1372549,1"/>
+            <Option name="outline_style" type="QString" value="solid"/>
+            <Option name="outline_width" type="QString" value="0"/>
+            <Option name="outline_width_map_unit_scale" type="QString" value="3x:0,0,0,0,0,0"/>
+            <Option name="outline_width_unit" type="QString" value="MM"/>
+            <Option name="scale_method" type="QString" value="diameter"/>
+            <Option name="size" type="QString" value="2.4"/>
             <Option name="size_map_unit_scale" type="QString" value="3x:0,0,0,0,0,0"/>
             <Option name="size_unit" type="QString" value="MM"/>
             <Option name="vertical_anchor_point" type="QString" value="1"/>

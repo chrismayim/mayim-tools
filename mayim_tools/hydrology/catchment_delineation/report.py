@@ -646,6 +646,84 @@ def figure_histogram(c: CatchmentResult, style: ChartStyle) -> io.BytesIO | None
 # ---------------------------------------------------------------------------
 
 
+# value of each PARAMETER_DEFINITIONS row for a single catchment:
+# name -> (attribute key, format, scale)
+PARAMETER_VALUE_KEYS = {
+    "Contributing area": ("area_km2", "{:.4f}", 1),
+    "Polygon area": ("poly_km2", "{:.4f}", 1),
+    "Perimeter": ("perim_km", "{:.3f}", 1),
+    "Relief": ("relief_m", "{:.2f}", 1),
+    "Elevation gain": ("elev_gain", "{:.2f}", 1),
+    "Longest flow path": ("lfp_km", "{:.3f}", 1),
+    "Centroid distance": ("lca_km", "{:.3f}", 1),
+    "Basin length": ("lb_km", "{:.3f}", 1),
+    "Average slope": ("s_avg", "{:.4f}", 1),
+    "10-85 slope": ("s_1085", "{:.4f}", 1),
+    "Equal-area slope": ("s_ea", "{:.4f}", 1),
+    "Mean catchment slope": ("s_mean_pc", "{:.2f}", 1),
+    "Form factor": ("form_f", "{:.3f}", 1),
+    "Circularity ratio": ("circ_r", "{:.3f}", 1),
+    "Elongation ratio": ("elong_r", "{:.3f}", 1),
+    "Compactness coefficient": ("gravel_kc", "{:.3f}", 1),
+    "Hypsometric integral": ("hyps_int", "{:.3f}", 1),
+    "Relief ratio": ("relief_r", "{:.4f}", 1),
+    "Melton ratio": ("melton_r", "{:.3f}", 1),
+    "Ruggedness number": ("rugged_n", "{:.3f}", 1),
+    "Stream order": ("strm_ord", "{:d}", None),
+    "Bifurcation ratio": ("bif_r", "{:.2f}", 1),
+    "Drainage density": ("dd_kmkm2", "{:.3f}", 1),
+    "Stream frequency": ("strm_freq", "{:.3f}", 1),
+    "Length of overland flow": ("lo_km", "{:.3f}", 1),
+    "Constant of channel maintenance": ("c_maint", "{:.3f}", 1),
+    "Sinuosity": ("sinuosity", "{:.3f}", 1),
+    "Tc - Kirpich": ("tc_kirp_mn", "{:.1f}", 1),
+    "Tc - USBR": ("tc_usbr_mn", "{:.1f}", 1),
+    "Tc - Bransby-Williams": ("tc_bw_mn", "{:.1f}", 1),
+}
+
+
+def parameter_rows(catchments) -> list[list[str]]:
+    """Parameter (symbol, unit) | Value | Definition / equation (source), with
+    values when a single catchment is reported (otherwise '-'; the values per
+    catchment are in Section 5)."""
+    single = catchments[0].attributes if len(catchments) == 1 else None
+    rows = []
+    for name, symbol, definition, source in PARAMETER_DEFINITIONS:
+        label = name if symbol in ("-", "") else f"{name}, {symbol}"
+        value = "-"
+        if single is not None and name in PARAMETER_VALUE_KEYS:
+            key, fmt, scale = PARAMETER_VALUE_KEYS[name]
+            value = format_value(single.get(key), fmt, scale)
+        text = definition if source in ("-", "") else f"{definition} ({source})"
+        rows.append([label, value, text])
+    return rows
+
+
+def title_details(ctx: dict, catchments) -> list[tuple[str, str]]:
+    from datetime import date
+
+    site = ctx.get("project_name")
+    if not site and len(catchments) == 1:
+        site = f"Catchment {catchments[0].outlet_id}"
+    tool = ctx.get("tool", REPORT_TITLE)
+    version = ctx.get("version")
+    return [
+        ("Project number", ctx.get("project_number") or "-"),
+        ("Project / site", site or "-"),
+        ("Prepared by", ctx.get("prepared_by") or "Mayim Consulting"),
+        ("Tool and version", f"{tool}, version {version}" if version else tool),
+        ("Software", ctx.get("software") or "-"),
+        ("Report date", ctx.get("report_date") or date.today().isoformat()),
+        ("Document status", ctx.get("status") or "Draft"),
+    ]
+
+
+def contour_text(minor_interval) -> str:
+    if not minor_interval:
+        return "none"
+    return f"{minor_interval:g} m minor, {5 * minor_interval:g} m major"
+
+
 def _tc_range(a):
     vals = [a.get(k) for k in ("tc_kirp_mn", "tc_usbr_mn", "tc_bw_mn")]
     vals = [v for v in vals if v is not None]
@@ -684,7 +762,20 @@ def write_report_docx(
     dem = ctx.get("dem", {})
     mode = ctx.get("mode", "total")
 
-    d.heading(REPORT_TITLE, 1)
+    n_c = len(catchments)
+    d.title_page(
+        REPORT_TITLE,
+        purpose=(
+            "This report documents the delineation and characterisation of "
+            f"{'the catchment' if n_c == 1 else f'{n_c} catchments'} from a "
+            "digital elevation model: the catchment boundaries, their "
+            "geometric, relief, shape and drainage-network parameters and "
+            "times of concentration, as input to hydrological assessment and "
+            "modelling."
+        ),
+        details=title_details(ctx, catchments),
+        subtitle=ctx.get("project_name") or None,
+    )
 
     # 1. Summary ---------------------------------------------------------------
     d.heading("1. Summary", 2)
@@ -724,6 +815,7 @@ def write_report_docx(
             ]
             for c in catchments
         ],
+        widths_cm=[2.8, 2.2, 2.0, 2.2, 2.0, 1.8, 3.5],
     )
 
     # 2. Tool and method -------------------------------------------------------
@@ -761,7 +853,16 @@ def write_report_docx(
         "The DEM was clipped to the catchment outlines, and the parameters, "
         "longest flow path, stream network and figures in this annexure were "
         "derived from the DEM and flow network.",
-    ]:
+    ] + (
+        [
+            "Stream network reaches longer than the maximum stream length "
+            f"({ctx['max_stream_length_m']:g} m) were split at stream "
+            "breakpoints, measured upstream from each reach's lower end, where "
+            "the rest of the reach was longer than 10 % of the maximum."
+        ]
+        if ctx.get("max_stream_length_m")
+        else []
+    ):
         d.numbered(step)
 
     # 3. Inputs ---------------------------------------------------------------
@@ -794,9 +895,23 @@ def write_report_docx(
                 "Stream threshold",
                 f"{ctx.get('stream_threshold_km2', '-')} km² upstream area",
             ],
+            ["Project number", ctx.get("project_number") or "-"],
+            ["Project / site", ctx.get("project_name") or "-"],
+            [
+                "Maximum stream length",
+                (
+                    f"{ctx['max_stream_length_m']:g} m "
+                    f"({ctx.get('n_breakpoints') if ctx.get('n_breakpoints') is not None else '-'}"
+                    " stream breakpoints)"
+                    if ctx.get("max_stream_length_m")
+                    else "none"
+                ),
+            ],
+            ["Study area on the layout map", ctx.get("study_area") or "no"],
+            ["Contours on the layout map", contour_text(ctx.get("contour_interval"))],
             ["Run", ctx.get("run_time", "-")],
         ],
-        widths_cm=[5.0, 11.0],
+        widths_cm=[5.5, 11.0],
     )
     d.para(
         "The DEM is assumed to be hydrologically conditioned (pits filled or "
@@ -806,11 +921,13 @@ def write_report_docx(
 
     # 4. Parameters ------------------------------------------------------------
     d.heading("4. Parameters and calculations", 2)
-    d.caption("Table", "Parameter definitions")
+    if n_c > 1:
+        d.para("The values for each catchment are given in Section 5.")
+    d.caption("Table", "Parameters, values and definitions")
     d.table(
-        ["Parameter", "Symbol (unit)", "Definition / equation", "Source"],
-        [list(r) for r in PARAMETER_DEFINITIONS],
-        widths_cm=[3.4, 2.6, 7.0, 3.0],
+        ["Parameter (symbol, unit)", "Value", "Definition / equation (source)"],
+        parameter_rows(catchments),
+        widths_cm=[6.2, 2.8, 7.5],
     )
     d.para(
         "Kirpich uses S_avg, USBR uses S_1085 and Bransby-Williams uses S_e, "
@@ -936,12 +1053,23 @@ def write_report_docx(
         "Time-of-concentration values are empirical estimates for guidance; "
         "the design method and parameters should follow the governing local "
         "guideline.",
-    ]:
+    ] + (
+        [
+            "Background map data © OpenStreetMap contributors, available under "
+            "the Open Database License (ODbL); see openstreetmap.org/copyright."
+        ]
+        if osm_used
+        else []
+    ):
         d.bullet(note)
-    warnings = ctx.get("warnings", [])
+    warnings = (
+        list(ctx.get("warnings", []))
+        + list(ctx.get("map_messages") or [])
+        + list(messages)
+    )
     if warnings:
         d.para("Processing messages recorded during this run:")
-        for w in warnings:
+        for w in dict.fromkeys(warnings):
             d.bullet(w)
 
     # 8. References --------------------------------------------------------------
@@ -949,10 +1077,5 @@ def write_report_docx(
     for ref in REFERENCES:
         d.para(ref)
 
-    if osm_used:
-        d.para(
-            "Map background: © OpenStreetMap contributors, available under the "
-            "Open Database Licence (openstreetmap.org/copyright)."
-        )
     d.doc.save(path)
     return list(dict.fromkeys(messages))  # unique, in order

@@ -45,7 +45,7 @@ from mayim_tools._common.output_files import (
     WORD,
     OutputSpec,
 )
-from mayim_tools.hydrology._common.contours import dem_contours
+from mayim_tools.hydrology._common.contours import minor_major_contours
 from mayim_tools.hydrology.stream_network.core import (
     StreamNetworkError,
     extract_stream_network,
@@ -87,7 +87,7 @@ from .qgis_outputs import (
 )
 from .report import write_report_docx
 
-TOOL_VERSION = "0.6.0"
+TOOL_VERSION = "0.7.0"
 
 MODE_OPTIONS = [
     "Total (full catchment per outlet; nested catchments overlap)",
@@ -176,7 +176,7 @@ OUTPUT_SPECS = [
     ),
     OutputSpec(
         "OUTPUT_STREAM_NODES",
-        "Stream nodes (channel heads, confluences, outlets)",
+        "Stream nodes (channel heads, confluences, outlets, breakpoints)",
         "Stream Nodes",
         SHAPEFILE,
         default=False,
@@ -229,6 +229,25 @@ FOLDER_PARAMS = {
 }
 
 
+def _software_version() -> str:
+    """'Mayim Tools <version>, QGIS <version>' for the report title page."""
+    parts = []
+    metadata = Path(__file__).resolve().parents[2] / "metadata.txt"
+    try:
+        for line in metadata.read_text(encoding="utf-8").splitlines():
+            if line.startswith("version="):
+                parts.append(f"Mayim Tools {line.split('=', 1)[1].strip()}")
+                break
+    except OSError:
+        pass
+    parts.append(f"QGIS {Qgis.version()}")
+    return ", ".join(parts)
+
+
+def source_name(source) -> str:
+    return source.sourceName() if source is not None else "no"
+
+
 def _fields(specs) -> QgsFields:
     fields = QgsFields()
     for name, qtype, _ in specs:
@@ -245,10 +264,13 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
     SNAP_RADIUS = "SNAP_RADIUS"
     MODE = "MODE"
     STREAM_THRESHOLD = "STREAM_THRESHOLD"
+    MAX_STREAM_LENGTH = "MAX_STREAM_LENGTH"
     REPORT_BASEMAP = "REPORT_BASEMAP"
     STUDY_AREA = "STUDY_AREA"
+    SHOW_CONTOURS = "SHOW_CONTOURS"
     CONTOUR_INTERVAL = "CONTOUR_INTERVAL"
     PROJECT_NUMBER = "PROJECT_NUMBER"
+    PROJECT_NAME = "PROJECT_NAME"
     # output selection tick boxes (same keys as the result dictionary)
     OUTPUT_CATCHMENTS = "OUTPUT_CATCHMENTS"
     OUTPUT_DEM = "OUTPUT_DEM"
@@ -334,7 +356,8 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
             "every confluence and at intermediate outlets, each with Strahler, "
             "Shreve, Horton and Hack orders, geometry, upstream area and "
             "routing inputs (one layer, styled by Strahler order); nodes "
-            "(channel heads, confluences, outlets); main stems; the sectioned "
+            "(channel heads, confluences, outlets and stream breakpoints); main "
+            "stems; the sectioned "
             "stream network CSV (abbreviation key, drop test, networks, Horton "
             "statistics and ratios, reaches, nodes, profiles, definitions); and "
             "an optional stream network Word report. The constant-drop test "
@@ -343,13 +366,25 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
             "stream network is only computed when one of these outputs is "
             "requested.\n"
             "\n"
+            "MAXIMUM STREAM LENGTH:\tOptional (0 = none). Each reach (the stretch "
+            "between two nodes) is measured upstream from its lower end; at "
+            "every maximum length a 'stream breakpoint' node is added and the "
+            "reach is split there, but only where the rest of the reach is "
+            "longer than 10 % of the maximum. E.g. a maximum of 500 m on a "
+            "1320 m reach gives breakpoints at 500 and 1000 m; a 540 m reach "
+            "is not split. Split reaches keep their id on the lowest piece "
+            "and record split_from and piece. Network statistics (Horton, "
+            "Hack, main stems) are not affected.\n"
+            "\n"
             "CENTROIDS:\tOptional point layer of each catchment's area "
             "centroid, with its elevation, whether it falls inside the "
             "catchment (inside = 0 for strongly curved shapes), and the point "
             "on the longest flow path nearest to it (lca_x, lca_y) that "
             "defines Lca.\n"
             "\n"
-            "REPORT:\tThe Word (.docx) annexure: summary, tool and method, "
+            "REPORT:\tThe Word (.docx) annexure in the Mayim report standard: "
+            "title page (project number and project / site name), summary, "
+            "tool and method, "
             "inputs, parameter definitions with sources, and for each "
             "catchment a description, general, shape and relief parameter "
             "tables, slope, aspect and stream-order tables, figures (layout "
@@ -358,7 +393,9 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
             "map is drawn by QGIS with the same layer styles as the outputs, "
             "over an OpenStreetMap background (needs internet; Advanced "
             "parameters), with the optional study area boundary and contours "
-            "generated from the DEM at the contour interval (0 = none), a "
+            "generated from the DEM (minor contours fine, major contours every "
+            "5 x the minor interval and slightly thicker; untick to leave "
+            "them off), a "
             "legend, scale bar and north arrow. It needs python-docx (and "
             "matplotlib for figures) in QGIS's Python.\n"
             "\n"
@@ -437,6 +474,16 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
+            QgsProcessingParameterNumber(
+                self.MAX_STREAM_LENGTH,
+                "Maximum stream length (m; stream breakpoints, 0 = none)",
+                type=QgsProcessingParameterNumber.Type.Double,
+                minValue=0.0,
+                defaultValue=0.0,
+                optional=True,
+            )
+        )
+        self.addParameter(
             QgsProcessingParameterFeatureSource(
                 self.STUDY_AREA,
                 "Study area boundary for the report layout map (optional)",
@@ -445,9 +492,17 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
+            QgsProcessingParameterBoolean(
+                self.SHOW_CONTOURS,
+                "Show contours on the report layout map",
+                defaultValue=True,
+            )
+        )
+        self.addParameter(
             QgsProcessingParameterNumber(
                 self.CONTOUR_INTERVAL,
-                "Contour interval for the report layout map (m; 0 = no contours)",
+                "Minor contour interval for the report layout map (m; major "
+                "contours every 5 x this; 0 = no contours)",
                 type=QgsProcessingParameterNumber.Type.Double,
                 minValue=0.0,
                 defaultValue=1.0,
@@ -467,7 +522,14 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterString(
                 self.PROJECT_NUMBER,
-                "Project number (file name prefix, optional)",
+                "Project number (file name prefix and report, optional)",
+                optional=True,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterString(
+                self.PROJECT_NAME,
+                "Project / site name (report title page, optional)",
                 optional=True,
             )
         )
@@ -557,6 +619,16 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
         contour_interval = self.parameterAsDouble(
             parameters, self.CONTOUR_INTERVAL, context
         )
+        if not self.parameterAsBoolean(parameters, self.SHOW_CONTOURS, context):
+            contour_interval = 0.0
+        max_stream_m = (
+            self.parameterAsDouble(parameters, self.MAX_STREAM_LENGTH, context)
+            if parameters.get(self.MAX_STREAM_LENGTH) is not None
+            else 0.0
+        )
+        project_name = self.parameterAsString(
+            parameters, self.PROJECT_NAME, context
+        ).strip()
         project_number = self.parameterAsString(
             parameters, self.PROJECT_NUMBER, context
         )
@@ -580,6 +652,12 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
         paths = {spec.key: spec.path(folders, project_number) for spec in selected}
         want = set(paths)
         want_streams = bool(want & set(STREAM_OUTPUT_KEYS))
+        if max_stream_m > 0 and not want_streams:
+            feedback.pushWarning(
+                "The maximum stream length only affects the stream network "
+                "outputs (stream network, nodes, main stems, stream CSV and "
+                "report); none of them is ticked."
+            )
 
         outlets = self._read_outlets(source, id_field, crs, context, feedback)
         if not outlets:
@@ -648,10 +726,16 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
                     routing=routing,
                     is_canceled=feedback.isCanceled,
                     outlet_cells=result.outlet_cells,
+                    max_reach_length_m=max_stream_m or None,
                 )
             except StreamNetworkError as e:
                 feedback.pushWarning(f"Stream network not written: {e}")
             if network is not None:
+                if max_stream_m > 0:
+                    feedback.pushInfo(
+                        f"Stream breakpoints: {network.settings['n_breakpoints']} "
+                        f"(maximum stream length {max_stream_m:g} m)."
+                    )
                 for message in network.warnings:
                     feedback.pushWarning(f"Stream network: {message}")
                 write_reaches(
@@ -735,6 +819,10 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
                 "pointer_path": pointer_layer.source(),
                 "encoding": "ESRI" if esri_style else "WhiteboxTools",
                 "crs": f"{crs.authid()} - {crs.description()}",
+                "software": _software_version(),
+                "project_number": project_number,
+                "project_name": project_name,
+                "max_stream_length_m": max_stream_m,
             }
             if self.OUTPUT_STREAM_CSV in want:
                 write_sectioned_csv(paths[self.OUTPUT_STREAM_CSV], network, net_context)
@@ -769,12 +857,16 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
                     study_source, "Study area", crs, context.transformContext()
                 )
 
+            surface = np.asarray(dem, dtype="float64").copy()  # NoData as NaN
+            if d_nodata is not None:
+                surface[surface == d_nodata] = np.nan
+
             def contours_for(extent):
-                lines, warnings = dem_contours(
-                    dem, d_gt, contour_interval, extent=extent
+                minor, major, warnings = minor_major_contours(
+                    surface, d_gt, contour_interval, extent=extent
                 )
                 map_messages.extend(warnings)
-                return lines
+                return minor, major
 
             plan_map = make_plan_map(
                 crs,
@@ -800,6 +892,15 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
             context_info = {
                 "tool": self.displayName(),
                 "version": TOOL_VERSION,
+                "software": _software_version(),
+                "project_number": project_number,
+                "project_name": project_name,
+                "study_area": source_name(study_source),
+                "contour_interval": contour_interval,
+                "max_stream_length_m": max_stream_m,
+                "n_breakpoints": (
+                    network.settings.get("n_breakpoints") if network else None
+                ),
                 "run_time": datetime.now().strftime("%Y-%m-%d %H:%M"),
                 "dem": {
                     "path": dem_layer.source(),
@@ -823,12 +924,13 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
                 "stream_threshold_km2": threshold,
                 "outputs": written + [("This report", docx_path)],
                 "warnings": result.warnings,
+                "map_messages": map_messages,
             }
             try:
                 messages = write_report_docx(
                     docx_path, result.catchments, context_info, plan_map=plan_map
                 )
-                for message in dict.fromkeys(map_messages + (messages or [])):
+                for message in dict.fromkeys((messages or []) + map_messages):
                     feedback.pushWarning(message)
                 done(self.OUTPUT_DOCX, docx_path)
             except ImportError:
