@@ -285,3 +285,63 @@ def test_incremental_report_is_compact(setup, tmp_path):
     write_report_docx(str(path), banks.catchments[:3], ctx, include_figures=False)
     text = "\n".join(p.text for p in docx.Document(str(path)).paragraphs)
     assert "5.1 Sub-catchment A1a" in text and "drains to node A1 (the outlet)" in text
+
+
+def test_guo_urbonas_width():
+    from mayim_tools.hydrology.catchment_delineation.widths import guo_urbonas_width
+
+    # a long catchment (A = 100 x 1000 m, L = 1000 m), symmetric (Z = 0.5)
+    w, x = guo_urbonas_width(1e5, 1000.0, 0.5)
+    assert x == pytest.approx(0.1)
+    assert w == pytest.approx(1000.0 * (2.286 * 0.1 - 0.286 * 0.01))
+    # all area on one side halves the factor (1.5 - Z: 1.0 -> 0.5)
+    assert guo_urbonas_width(1e5, 1000.0, 1.0)[0] == pytest.approx(w / 2)
+    # the shape factor is capped at 4, where the parabola peaks
+    w4, x4 = guo_urbonas_width(9e6, 1000.0, 0.5)
+    assert x4 == 4.0 and w4 == pytest.approx(1000.0 * (2.286 * 4 - 0.286 * 16))
+    assert guo_urbonas_width(1e5, 0.0, 0.5) == (None, None)
+
+
+def test_skew_factor_about_the_waterway():
+    from mayim_tools.hydrology.catchment_delineation.widths import skew_factor
+
+    g = box_grid()
+    cells = np.arange(g.rows * g.cols)
+    centre = np.arange(g.rows) * g.cols + 10
+    assert skew_factor(g, cells, centre) == pytest.approx(0.5)
+    edge = np.arange(g.rows) * g.cols + 2  # 2 columns west, 18 east
+    assert skew_factor(g, cells, edge) == pytest.approx(18.5 / 21)
+
+
+def test_width_estimates():
+    from mayim_tools.hydrology.catchment_delineation.widths import width_estimates
+
+    w = width_estimates(1e5, 50.0, 1000.0, 0.5)
+    assert w["w_flow_m"] == 2000.0 and w["w_chan_m"] == 2000.0
+    assert w["gu_z"] == 0.5 and w["w_ratio"] == pytest.approx(
+        w["w_gu_m"] / 2000.0, abs=1e-3
+    )
+    bank = width_estimates(5e4, 50.0, 1000.0, 0.7, one_sided=True)
+    assert bank["w_chan_m"] == 1000.0 and bank["gu_z"] == 1.0
+    capped = width_estimates(1e5, 50.0, 1000.0, 0.5, max_overland_m=25.0)
+    assert capped["w_flow_m"] == 4000.0 and capped["lo_mean_m"] == 50.0
+
+
+def test_subcatchment_widths(setup):
+    net, plain, banks, _root = setup
+    length = {x["name"]: x["length_m"] for x in net.reaches}
+    for c in plain.catchments + banks.catchments:
+        a = c.attributes
+        assert a["lo_mean_m"] > 0
+        assert a["w_flow_m"] == pytest.approx(
+            a["area_km2"] * 1e6 / a["lo_mean_m"], rel=0.01
+        )
+        if a["sub_type"] == SUB_STREAM:
+            assert a["chan_len_m"] == pytest.approx(length[a["stream"]], abs=0.01)
+            factor = 1.0 if a["bank"] else 2.0
+            assert a["w_chan_m"] == pytest.approx(factor * a["chan_len_m"], abs=0.1)
+            if a["bank"]:
+                assert a["gu_z"] == 1.0
+        else:  # channel head: the waterway is the longest flow path
+            assert a["chan_len_m"] == pytest.approx(a["lfp_km"] * 1000, abs=0.1)
+        assert 0.5 <= a["gu_z"] <= 1.0

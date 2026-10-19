@@ -134,6 +134,7 @@ def delineate_network_subcatchments(
     split_banks: bool = False,
     min_split_cells: int = DEFAULT_MIN_SPLIT_CELLS,
     min_split_width_cells: float = DEFAULT_MIN_SPLIT_WIDTH_CELLS,
+    max_overland_m: float = 0.0,
     progress: Callable[[float, str], None] | None = None,
     is_canceled: Callable[[], bool] | None = None,
 ) -> DelineationResult:
@@ -298,6 +299,16 @@ def delineate_network_subcatchments(
             route_cells=route,
             info={"ds_ids": ds_stream or ""},
             extra=extra,
+            **(
+                {
+                    "channel_line": np.asarray(r["_cells"], dtype=np.int64),
+                    "channel_length_m": r.get("length_m"),
+                    "one_sided": letter is not None,
+                }
+                if sub["sub_type"] == SUB_STREAM
+                else {}
+            ),
+            max_overland_m=max_overland_m,
         )
         catchment.detail["network_sub"] = extra
         if split is not None:  # for the polygon cut in the QGIS wrapper

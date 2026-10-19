@@ -87,6 +87,14 @@ PARAMETER_DEFINITIONS = [
     ("Tc - Kirpich", "t_c (min)", "t_c = 0.0195 L^0.77 S_avg^-0.385 (L in m).", "Kirpich (1940)"),
     ("Tc - USBR", "t_c (min)", "t_c = 60 (0.87 L² / (1000 S_1085))^0.385 (L in km).", "USBR (1973)"),
     ("Tc - Bransby-Williams", "t_c (min)", "t_c = 58 L / (A^0.1 S_e^0.2) (L in km, A in km², S_e in m/km).", "Bransby-Williams (1922)"),
+    ("Waterway length", "L_w (m)", "Length of the stream through a stream sub-catchment; the longest flow path L otherwise.", "-"),
+    ("Mean overland flow length", "L_om (m)", "Mean D8 flow length from every cell to the nearest stream cell (to the outlet where no stream is reached).", "-"),
+    ("SWMM width - flow length", "W_f (m)", "W_f = A / L_om, with L_om capped at the maximum overland flow length when one is set.", "Rossman & Huber (2016)"),
+    ("SWMM width - channel", "W_c (m)", "W_c = 2 L_w for a sub-catchment drained by a central waterway; W_c = L_w for one bank of a stream.", "Rossman & Huber (2016)"),
+    ("Shape factor", "X", "X = A / L_w², capped at 4 (Guo & Urbonas recommend 4 to 6; UDFCD uses 4).", "Guo & Urbonas (2009)"),
+    ("Skew factor", "Z", "Z = A_m / A, A_m the larger of the areas on either side of the waterway (0.5 to 1; 1 for one bank).", "Guo & Urbonas (2009)"),
+    ("SWMM width - Guo & Urbonas", "W_g (m)", "W_g = L_w (1.5 - Z) (2.286 X - 0.286 X²): equivalent kinematic-wave plane conserving the area and the fall along the waterway.", "Guo & Urbonas (2009)"),
+    ("Width ratio", "W_g / W_f", "Agreement of the two estimates; far from 1 means a shape far from a rectangle, where calibration should decide.", "-"),
 ]  # fmt: skip
 
 # General parameters: (group heading, [(label, attribute key, format, scale)])
@@ -131,6 +139,19 @@ RESULT_GROUPS = [
             ("Kirpich (min)", "tc_kirp_mn", "{:.1f}", 1),
             ("USBR (min)", "tc_usbr_mn", "{:.1f}", 1),
             ("Bransby-Williams (min)", "tc_bw_mn", "{:.1f}", 1),
+        ],
+    ),
+    (
+        "SWMM width",
+        [
+            ("Waterway length L_w (m)", "chan_len_m", "{:.1f}", 1),
+            ("Mean overland flow length L_om (m)", "lo_mean_m", "{:.1f}", 1),
+            ("Width from flow length W_f = A / L_om (m)", "w_flow_m", "{:.1f}", 1),
+            ("Width from channel W_c (m)", "w_chan_m", "{:.1f}", 1),
+            ("Shape factor X", "gu_x", "{:.3f}", 1),
+            ("Skew factor Z", "gu_z", "{:.3f}", 1),
+            ("Width, Guo & Urbonas W_g (m)", "w_gu_m", "{:.1f}", 1),
+            ("Width ratio W_g / W_f", "w_ratio", "{:.2f}", 1),
         ],
     ),
 ]
@@ -684,6 +705,14 @@ PARAMETER_VALUE_KEYS = {
     "Tc - Kirpich": ("tc_kirp_mn", "{:.1f}", 1),
     "Tc - USBR": ("tc_usbr_mn", "{:.1f}", 1),
     "Tc - Bransby-Williams": ("tc_bw_mn", "{:.1f}", 1),
+    "Waterway length": ("chan_len_m", "{:.1f}", 1),
+    "Mean overland flow length": ("lo_mean_m", "{:.1f}", 1),
+    "SWMM width - flow length": ("w_flow_m", "{:.1f}", 1),
+    "SWMM width - channel": ("w_chan_m", "{:.1f}", 1),
+    "Shape factor": ("gu_x", "{:.3f}", 1),
+    "Skew factor": ("gu_z", "{:.3f}", 1),
+    "SWMM width - Guo & Urbonas": ("w_gu_m", "{:.1f}", 1),
+    "Width ratio": ("w_ratio", "{:.2f}", 1),
 }
 
 
@@ -771,6 +800,24 @@ def link_text(a: dict) -> str:
     node = a.get("node") or "-"
     into = a.get("ds_stream")
     return f"node {node}" + (f", then stream {into}" if into else " (the outlet)")
+
+
+def width_note(ctx: dict) -> str:
+    cap = ctx.get("max_overland_m") or 0
+    return (
+        "SWMM width W cannot be measured, so three published estimates are "
+        "given: from the mean overland flow length (W_f = A / L_om"
+        + (f", L_om capped at {cap:g} m" if cap else "")
+        + "), from the waterway (W_c = 2 L_w, or L_w for one bank of a "
+        "stream) and by Guo & Urbonas (2009) (W_g). W_f and W_c treat the "
+        "overland flow as running across to the waterway; W_g converts the "
+        "whole sub-catchment into an equivalent plane that conserves its area "
+        "and the fall along the waterway, and gives a much narrower, longer "
+        "plane for elongated shapes. Where W_g / W_f is far from 1 the shape is "
+        "far from a rectangle; choose the estimate that matches how runoff "
+        "reaches the drainage system, and calibrate W where flow records exist "
+        "(runoff peaks are sensitive to W)."
+    )
 
 
 def _tc_range(a):
@@ -1079,6 +1126,7 @@ def write_report_docx(
         "overland from channel flow, so they apply the whole path length as "
         "channel-type flow."
     )
+    d.para(width_note(ctx))
 
     # 5. Results ---------------------------------------------------------------
     d.heading("5. Catchment results", 2)
@@ -1160,6 +1208,35 @@ def write_report_docx(
                 for c in catchments
             ],
             widths_cm=[2.5, 2.4, 2.4, 3.2, 3.0, 3.0],
+        )
+        d.caption("Table", "Sub-catchment SWMM width estimates")
+        d.table(
+            [
+                "Sub-catchment",
+                "A (ha)",
+                "L_w (m)",
+                "L_om (m)",
+                "W_f (m)",
+                "W_c (m)",
+                "Z",
+                "W_g (m)",
+                "W_g / W_f",
+            ],
+            [
+                [
+                    c.outlet_id,
+                    format_value(c.attributes["area_ha"], "{:.2f}", 1),
+                    format_value(c.attributes.get("chan_len_m"), "{:.1f}", 1),
+                    format_value(c.attributes.get("lo_mean_m"), "{:.1f}", 1),
+                    format_value(c.attributes.get("w_flow_m"), "{:.1f}", 1),
+                    format_value(c.attributes.get("w_chan_m"), "{:.1f}", 1),
+                    format_value(c.attributes.get("gu_z"), "{:.2f}", 1),
+                    format_value(c.attributes.get("w_gu_m"), "{:.1f}", 1),
+                    format_value(c.attributes.get("w_ratio"), "{:.2f}", 1),
+                ]
+                for c in catchments
+            ],
+            widths_cm=[2.3, 1.6, 1.6, 1.7, 1.7, 1.7, 1.2, 1.7, 1.6],
         )
         detailed = []
     for i, c in enumerate(detailed, start=first):

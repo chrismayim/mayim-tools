@@ -48,6 +48,9 @@ REFERENCES = [
     "FAO (2006). Guidelines for Soil Description, 4th edition. Food and "
     "Agriculture Organization of the United Nations, Rome.",
     "Gravelius, H. (1914). Flusskunde. Göschen, Berlin.",
+    "Guo, J.C.Y. & Urbonas, B. (2009). Conversion of natural watershed to "
+    "kinematic wave cascading plane. Journal of Hydrologic Engineering, "
+    "14(8), 839-846.",
     "Horn, B.K.P. (1981). Hill shading and the reflectance map. Proceedings "
     "of the IEEE, 69(1), 14-47.",
     "Horton, R.E. (1932). Drainage-basin characteristics. Transactions of "
@@ -69,6 +72,9 @@ REFERENCES = [
     "America Bulletin, 82, 1079-1084.",
     "Ponce, V.M. (1989). Engineering Hydrology: Principles and Practices. "
     "Prentice Hall, Englewood Cliffs, NJ.",
+    "Rossman, L.A. & Huber, W.C. (2016). Storm Water Management Model "
+    "Reference Manual, Volume I - Hydrology (Revised). EPA/600/R-15/162A, "
+    "US Environmental Protection Agency, Cincinnati, OH.",
     "Schumm, S.A. (1956). Evolution of drainage systems and slopes in "
     "badlands at Perth Amboy, New Jersey. Geological Society of America "
     "Bulletin, 67, 597-646.",

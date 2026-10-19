@@ -89,7 +89,7 @@ from .qgis_outputs import (
 from .report import write_report_docx
 from .subcatchments import delineate_network_subcatchments
 
-TOOL_VERSION = "0.8.1"
+TOOL_VERSION = "0.9.0"
 
 MODE_OPTIONS = [
     "Total (full catchment per outlet; nested catchments overlap)",
@@ -162,6 +162,14 @@ CATCHMENT_FIELDS = [
     ("tc_kirp_mn", _D, "Tc Kirpich (L, s_avg), min"),
     ("tc_usbr_mn", _D, "Tc USBR / SANRAL (L, s_1085), min"),
     ("tc_bw_mn", _D, "Tc Bransby-Williams (L, A, s_ea), min"),
+    ("chan_len_m", _D, "SWMM width: waterway length L_w (stream, else LFP), m"),
+    ("lo_mean_m", _D, "SWMM width: mean overland flow length to a stream, m"),
+    ("w_flow_m", _D, "SWMM width W_f = A / mean overland flow length, m"),
+    ("w_chan_m", _D, "SWMM width W_c = 2 L_w (L_w for one bank), m"),
+    ("gu_x", _D, "Guo & Urbonas shape factor X = A / L_w^2 (max 4)"),
+    ("gu_z", _D, "Guo & Urbonas skew factor Z (0.5-1; 1 for one bank)"),
+    ("w_gu_m", _D, "SWMM width, Guo & Urbonas (2009), m"),
+    ("w_ratio", _D, "width ratio W_g / W_f"),
 ]
 
 
@@ -278,6 +286,7 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
     SPLIT_BANKS = "SPLIT_BANKS"
     REPORT_DETAIL = "REPORT_DETAIL"
     SPLIT_MIN_CELLS = "SPLIT_MIN_CELLS"
+    MAX_OVERLAND = "MAX_OVERLAND"
     SPLIT_MIN_WIDTH = "SPLIT_MIN_WIDTH"
     REPORT_BASEMAP = "REPORT_BASEMAP"
     STUDY_AREA = "STUDY_AREA"
@@ -384,6 +393,17 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
             "polygon is passed through makeValid and checked. Perimeter "
             "is the stepped cell outline, so it runs longer than a "
             "smooth boundary, and circularity/Gravelius reflect that.\n"
+            "\n"
+            "SWMM WIDTH:\tThree estimates of the SWMM sub-catchment width, "
+            "which cannot be measured (calibrate it where flows are recorded): "
+            "w_flow_m = A / mean overland flow length (D8 flow length from every "
+            "cell to the nearest stream cell; optionally capped, Advanced); "
+            "w_chan_m = 2 x the waterway length, or 1 x for one bank of a "
+            "stream; and w_gu_m by Guo & Urbonas (2009), W = L (1.5 - Z) "
+            "(2.286 X - 0.286 X^2) with X = A / L^2 (max 4) and the skew Z = "
+            "larger side area / A. The waterway is the stream through a stream "
+            "sub-catchment and the longest flow path otherwise. w_ratio = "
+            "w_gu_m / w_flow_m flags shapes far from a rectangle.\n"
             "\n"
             "TIME OF CONCENTRATION:\tKirpich (metric, with the average "
             "slope), USBR as used in the SANRAL Drainage Manual (defined "
@@ -589,6 +609,18 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
             )
         )
         add_network_parameters(self, include_min_network=False)
+        overland_param = QgsProcessingParameterNumber(
+            self.MAX_OVERLAND,
+            "SWMM width: maximum overland flow length (m; 0 = no cap, e.g. 30 "
+            "after NRCS, 150 after UDFCD)",
+            type=QgsProcessingParameterNumber.Type.Double,
+            minValue=0.0,
+            defaultValue=0.0,
+        )
+        overland_param.setFlags(
+            overland_param.flags() | Qgis.ProcessingParameterFlag.Advanced
+        )
+        self.addParameter(overland_param)
         detail_param = QgsProcessingParameterBoolean(
             self.REPORT_DETAIL,
             "Word report, incremental mode: a full section for every "
@@ -721,6 +753,7 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
         )
         split_banks = self.parameterAsBoolean(parameters, self.SPLIT_BANKS, context)
         split_min_cells = self.parameterAsInt(parameters, self.SPLIT_MIN_CELLS, context)
+        max_overland = self.parameterAsDouble(parameters, self.MAX_OVERLAND, context)
         split_min_width = self.parameterAsDouble(
             parameters, self.SPLIT_MIN_WIDTH, context
         )
@@ -793,6 +826,7 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
                 stream_threshold_km2=threshold,
                 progress=progress,
                 is_canceled=feedback.isCanceled,
+                max_overland_m=max_overland,
             )
             if mode == "incremental" and result.catchments:
                 network_stage = True
@@ -830,6 +864,7 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
                     split_banks=split_banks,
                     min_split_cells=split_min_cells,
                     min_split_width_cells=split_min_width,
+                    max_overland_m=max_overland,
                     progress=progress,
                     is_canceled=feedback.isCanceled,
                 )
@@ -1066,6 +1101,7 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
                 "split_banks": split_banks,
                 "split_min_cells": split_min_cells,
                 "split_min_width": split_min_width,
+                "max_overland_m": max_overland,
                 "detail_sections": self.parameterAsBoolean(
                     parameters, self.REPORT_DETAIL, context
                 ),

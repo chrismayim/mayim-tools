@@ -467,6 +467,10 @@ def catchment_from_cells(
     route_cells: np.ndarray | None = None,
     info: dict | None = None,
     extra: dict | None = None,
+    channel_line: np.ndarray | None = None,
+    channel_length_m: float | None = None,
+    one_sided: bool = False,
+    max_overland_m: float = 0.0,
 ) -> tuple[CatchmentResult, tuple[int, int, np.ndarray]]:
     """Polygon, longest flow path and parameters of the catchment made of
     ``flat_cells``, draining to ``seed_cells`` (its outlet cell(s)).
@@ -478,7 +482,12 @@ def catchment_from_cells(
     so the flow path of a bank continues down the stream to the node.
     ``info`` holds the outlet placement (x_in, y_in, x_out, y_out, snap_m,
     ds_ids); ``extra`` attributes are added at the front of the attribute
-    table. Returns (result, (row0, col0, filled window))."""
+    table. The SWMM width estimates (see widths.py) use the waterway
+    ``channel_line`` (flat cells in flow order) of length
+    ``channel_length_m`` - the longest flow path when not given;
+    ``one_sided`` marks one bank of a stream (skew 1), and
+    ``max_overland_m`` caps the overland flow length (0 = no cap). Returns
+    (result, (row0, col0, filled window))."""
     g = grid
     geotransform, rows, cols = g.geotransform, g.rows, g.cols
     sx, sy, cell_area = g.sx, g.sy, g.cell_area
@@ -651,6 +660,23 @@ def catchment_from_cells(
             }
         )
 
+    # SWMM width: mean overland flow length to the nearest stream cell (on
+    # the routing cells, so a bank's flow reaches the stream on the other)
+    stream_r = in_route & (acc_local >= thr_cells)
+    next_o = local_next.copy()
+    next_o[stream_r] = loc[stream_r]
+    _, dist_o, _ = resolve_terminals(next_o, np.where(stream_r, 0.0, weights))
+    lo_mean = float(dist_o[in_mask].mean()) if in_mask.any() else None
+    if channel_line is None:
+        channel_line = gflat[path_arr[::-1]]  # the LFP, in flow order
+        channel_length_m = lfp_m
+    from .widths import skew_factor, width_estimates
+
+    skew = 1.0 if one_sided else skew_factor(g, flat_cells, channel_line)
+    widths = width_estimates(
+        area_km2 * 1e6, lo_mean, channel_length_m, skew, one_sided, max_overland_m
+    )
+
     # extra geomorphometry
     h_rel = (z_max - z_outlet) if (zv.size and z_outlet is not None) else None
     ox, oy = float(px[0]), float(py[0])
@@ -746,6 +772,8 @@ def catchment_from_cells(
             "tc_bw_mn": _none_round(
                 tc_bransby_williams_minutes(lfp_km, area_km2, s_ea), 2
             ),
+            "chan_len_m": _none_round(channel_length_m, 2),
+            **widths,
         }
     )
     if hole_ha > 0:
@@ -861,6 +889,7 @@ def delineate_catchments(
     stream_threshold_km2: float = 0.1,
     progress: Callable[[float, str], None] | None = None,
     is_canceled: Callable[[], bool] | None = None,
+    max_overland_m: float = 0.0,
 ) -> DelineationResult:
     """Delineates one catchment per outlet. See module docstring."""
     if mode not in VALID_MODES:
@@ -1062,6 +1091,7 @@ def delineate_catchments(
             mode=mode,
             keep_out=(label != 0) if mode == "incremental" else None,
             info=info,
+            max_overland_m=max_overland_m,
         )
         result.catchments.append(catchment)
         windows.append(window)
