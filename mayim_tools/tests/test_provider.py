@@ -37,7 +37,7 @@ def test_provider_registers_seven_algorithms() -> None:
     provider = loaded_provider()
 
     algorithms = provider.algorithms()
-    assert len(algorithms) == 33
+    assert len(algorithms) == 34
 
     by_name = {algorithm.name(): algorithm for algorithm in algorithms}
 
@@ -75,6 +75,7 @@ def test_provider_registers_seven_algorithms() -> None:
         "sanral_peak_flows",
         "terrain_profile",
         "dws_wr2012_extract",
+        "rational_c",
     }
 
     expected = {
@@ -215,6 +216,11 @@ def test_provider_registers_seven_algorithms() -> None:
         ),
         "curve_numbers": (
             "Curve numbers",
+            "Land Cover Tools",
+            "land_cover_tools",
+        ),
+        "rational_c": (
+            "Rational run-off coefficients",
             "Land Cover Tools",
             "land_cover_tools",
         ),

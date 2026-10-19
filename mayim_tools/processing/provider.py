@@ -56,6 +56,9 @@ from mayim_tools.land_cover.curve_numbers.curve_numbers_algorithm import (
 from mayim_tools.land_cover.land_cover_extract.land_cover_extract_algorithm import (  # noqa: E501
     LandCoverExtractAlgorithm,
 )
+from mayim_tools.land_cover.rational_c.rational_c_algorithm import (
+    RationalCAlgorithm,
+)
 from mayim_tools.rainfall.chirps.chirps_extract_algorithm import ChirpsExtractAlgorithm
 from mayim_tools.rainfall.cmorph_extract.cmorph_extract_algorithm import (
     CmorphExtractAlgorithm,
@@ -149,6 +152,7 @@ class MayimToolsProvider(QgsProcessingProvider):
         self.addAlgorithm(HydrologicSoilGroupsAlgorithm())
         self.addAlgorithm(LandCoverExtractAlgorithm())
         self.addAlgorithm(CurveNumbersAlgorithm())
+        self.addAlgorithm(RationalCAlgorithm())
         self.addAlgorithm(dem_hydro_processing_algo.DemHydroProcessingAlgorithm())
         self.addAlgorithm(sanral_peak_flows_algo.SanralPeakFlowsAlgorithm())
         self.addAlgorithm(inundation_boundary_algo.InundationBoundaryAlgorithm())
