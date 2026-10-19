@@ -357,6 +357,49 @@ def osm_layer():
     return layer if layer.isValid() else None
 
 
+def split_bank_geometries(split: dict, geotransform) -> dict | None:
+    """Cuts a stream sub-catchment's outline (``split['whole']``, map rings)
+    along its extended centreline (``split['line']``) and returns {'a': geom,
+    'b': geom}: every piece of the cut goes to the bank its cells were given
+    in the core (``split['side_map']``, after the split tolerance), so the
+    polygons match the cells the parameters come from. None if the cut fails
+    (the caller then keeps the cell outlines)."""
+    from .core import rings_to_multipolygon_wkt
+
+    whole = QgsGeometry.fromWkt(rings_to_multipolygon_wkt(split["whole"])).makeValid()
+    line_pts = [QgsPointXY(x, y) for x, y in split["line"]]
+    line = QgsGeometry.fromPolylineXY(line_pts)
+    result, pieces, _ = whole.splitGeometry(line_pts, False)
+    if int(result) != 0 or not pieces:
+        return None
+    side_map = split["side_map"]
+    r0, c0 = split["window"]
+    gt = geotransform
+    banks: dict[str, list] = {"a": [], "b": []}
+    for piece in [whole] + list(pieces):
+        if piece.isEmpty():
+            continue
+        point, _dist = piece.poleOfInaccessibility(0.05 * abs(gt[1]))
+        pt = point.asPoint()
+        r = int((pt.y() - gt[3]) // gt[5]) - r0
+        c = int((pt.x() - gt[0]) // gt[1]) - c0
+        code = 0
+        if 0 <= r < side_map.shape[0] and 0 <= c < side_map.shape[1]:
+            code = int(side_map[r, c])
+        if code not in (1, 2):  # on the line: by the side of the line
+            left_of = line.closestSegmentWithContext(QgsPointXY(pt))[3]
+            code = 1 if left_of < 0 else 2
+        banks["a" if code == 1 else "b"].append(piece)
+    out = {}
+    for letter, geoms in banks.items():
+        if not geoms:
+            return None
+        g = QgsGeometry.unaryUnion(geoms).makeValid()
+        g.convertToMultiType()
+        out[letter] = g
+    return out
+
+
 def label_layer(layer, field: str, size_pt: float = 8.0) -> None:
     """Labels ``layer`` with ``field`` in Arial, with a white buffer."""
     from qgis.PyQt.QtGui import QFont

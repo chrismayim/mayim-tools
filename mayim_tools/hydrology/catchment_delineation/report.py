@@ -951,10 +951,16 @@ def write_report_docx(
             "the node at its lower end, and the area above each channel head "
             "forms a channel head sub-catchment."
             + (
-                " Each stream sub-catchment was then split along the stream "
-                "centreline: every cell takes the bank (left a, right b, looking "
-                "downstream) on which its flow path joins the stream, and the "
-                "stream cells go with the left bank."
+                " Each stream sub-catchment was then cut along its stream "
+                "centreline (through the stream cell centres, extended at both "
+                "ends to the boundary) into its left bank a and right bank b, "
+                "looking downstream; cells on the line went with the left bank. "
+                "Pieces smaller than "
+                f"{ctx.get('split_min_cells', 10)} cells, or narrower on average "
+                f"than {ctx.get('split_min_width', 2.0):g} cells (area / length "
+                "along the stream), joined the neighbouring piece they share the "
+                "longest boundary with, and a stream whose whole bank was below "
+                "this tolerance was not split."
                 if ctx.get("split_banks")
                 else ""
             )
@@ -1015,7 +1021,15 @@ def write_report_docx(
                     ],
                     [
                         "Split along the stream centreline",
-                        "yes" if ctx.get("split_banks") else "no",
+                        (
+                            (
+                                f"yes (tolerance {ctx.get('split_min_cells', 10)} "
+                                f"cells, mean width {ctx.get('split_min_width', 2.0):g} "
+                                "cells)"
+                            )
+                            if ctx.get("split_banks")
+                            else "no"
+                        ),
                     ],
                 ]
                 if mode != "total"

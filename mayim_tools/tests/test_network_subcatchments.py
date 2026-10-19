@@ -10,10 +10,9 @@ import pytest
 from mayim_tools.hydrology.catchment_delineation.subcatchments import (
     SUB_HEAD,
     SUB_STREAM,
-    bank_side,
-    bank_sides,
     delineate_network_subcatchments,
     natural_key,
+    split_along_centreline,
 )
 from mayim_tools.hydrology.stream_network.core import (
     extract_stream_network,
@@ -81,18 +80,62 @@ def test_natural_order():
     ]  # fmt: skip
 
 
-def test_bank_side_left_and_right_looking_downstream():
-    cols = 10
-    # stream flowing south along column 5: up (row 4), s (row 5), dn (row 6)
-    up, s, dn = 4 * cols + 5, 5 * cols + 5, 6 * cols + 5
-    east, west = 5 * cols + 6, 5 * cols + 4
-    # looking south, east is on the left
-    assert bank_side(east, s, up, dn, cols, 1.0, 1.0) == 1
-    assert bank_side(west, s, up, dn, cols, 1.0, 1.0) == 2
-    assert list(bank_sides([east, west], [s, s], [up, up], [dn, dn], cols, 1, 1)) == [
-        1,
-        2,
-    ]
+def box_grid(rows=20, cols=21):
+    from types import SimpleNamespace
+
+    gt = (0.0, 10.0, 0.0, rows * 10.0, 0.0, -10.0)
+    return SimpleNamespace(geotransform=gt, rows=rows, cols=cols, sx=10.0, sy=10.0)
+
+
+def test_split_along_a_straight_centreline():
+    g = box_grid()
+    cells = np.arange(g.rows * g.cols)
+    line = np.arange(g.rows) * g.cols + 10  # column 10, flowing south
+    out = split_along_centreline(g, cells, line, np.ones(cells.size, bool))
+    banks = dict(out["banks"])
+    cols_a = set((banks["a"] % g.cols).tolist())
+    cols_b = set((banks["b"] % g.cols).tolist())
+    # looking south, east is the left bank; the line cells go with it
+    assert cols_a == set(range(10, 21)) and cols_b == set(range(0, 10))
+    assert banks["a"].size + banks["b"].size == cells.size
+    xs = [p[0] for p in out["line_xy"]]
+    ys = [p[1] for p in out["line_xy"]]
+    assert set(xs) == {105.0}  # the cut runs through the cell centres
+    assert max(ys) > 200.0 and min(ys) < 0.0  # extended past both ends
+    assert out["n_pieces"] == 2 and out["n_merged"] == 0
+
+
+def test_split_tolerance_area_and_width():
+    g = box_grid()
+    cells = np.arange(g.rows * g.cols)
+    any_sub = np.ones(cells.size, bool)
+    # a one-cell-wide strip west of the line (20 cells, width 1): not split
+    line = np.arange(g.rows) * g.cols + 1
+    assert split_along_centreline(g, cells, line, any_sub) is None
+    # two cells wide passes the 2-cell width at the default tolerance ...
+    line = np.arange(g.rows) * g.cols + 2
+    assert split_along_centreline(g, cells, line, any_sub) is not None
+    # ... but not with a stricter width or area tolerance
+    assert split_along_centreline(g, cells, line, any_sub, min_width_cells=3) is None
+    assert split_along_centreline(g, cells, line, any_sub, min_cells=41) is None
+
+
+def test_small_pieces_join_their_neighbour():
+    g = box_grid()
+    rows, cols = g.rows, g.cols
+    # a notch from the west boundary at row 16 cuts the west bank (left of a
+    # line at column 2) into a large piece (rows 0-15) and a small one
+    # (rows 17-19, 6 cells), which joins the east bank across the line
+    keep = np.ones((rows, cols), bool)
+    keep[16, :2] = False
+    cells = np.flatnonzero(keep)
+    line = np.arange(rows) * cols + 2
+    out = split_along_centreline(g, cells, line, np.ones(rows * cols, bool))
+    assert out is not None and out["n_pieces"] == 3 and out["n_merged"] == 1
+    banks = dict(out["banks"])
+    west_rows = set((banks["b"] // cols).tolist())
+    assert west_rows == set(range(16))
+    assert banks["a"].size + banks["b"].size == cells.size
 
 
 def test_remainder_percentage():
@@ -186,18 +229,24 @@ def test_head_catchments_are_about_the_threshold_area(setup):
 def test_banks_split_each_stream_subcatchment(setup):
     _net, plain, banks, _root = setup
     whole = {c.outlet_id: c.attributes["area_km2"] for c in plain.catchments}
-    halves: dict[str, float] = {}
+    parts: dict[str, float] = {}
+    cell_km2 = CELL * CELL / 1e6
+    n_split = 0
     for c in banks.catchments:
         a = c.attributes
-        if a["sub_type"] == SUB_STREAM:
+        if a["sub_type"] == SUB_STREAM and a["bank"]:
             assert a["bank"] in ("a", "b")
             assert c.outlet_id == a["stream"] + a["bank"]
-            halves[a["stream"]] = halves.get(a["stream"], 0.0) + a["area_km2"]
+            assert a["area_km2"] >= 10 * cell_km2 - 1e-12  # the area tolerance
+            assert c.detail["split"]["line"] and c.detail["split"]["whole"]
+            n_split += a["bank"] == "b"
+            key = a["stream"]
         else:
             assert a["bank"] is None and c.outlet_id in whole
-    for name, area in halves.items():
-        assert area == pytest.approx(whole[name], rel=1e-6)
-    assert sum(1 for c in banks.catchments if c.attributes["bank"] == "b") > 0
+            key = c.outlet_id
+        parts[key] = parts.get(key, 0.0) + a["area_km2"]
+    assert parts == pytest.approx(whole, rel=1e-6)
+    assert n_split > 0
     # a bank's flow path runs down the stream to the same node
     for c in banks.catchments:
         if c.attributes["bank"] == "b":

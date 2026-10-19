@@ -84,11 +84,12 @@ from .qgis_outputs import (
     load_on_completion,
     make_plan_map,
     save_shapefile,
+    split_bank_geometries,
 )
 from .report import write_report_docx
 from .subcatchments import delineate_network_subcatchments
 
-TOOL_VERSION = "0.8.0"
+TOOL_VERSION = "0.8.1"
 
 MODE_OPTIONS = [
     "Total (full catchment per outlet; nested catchments overlap)",
@@ -276,6 +277,8 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
     MIN_FINAL_REACH = "MIN_FINAL_REACH"
     SPLIT_BANKS = "SPLIT_BANKS"
     REPORT_DETAIL = "REPORT_DETAIL"
+    SPLIT_MIN_CELLS = "SPLIT_MIN_CELLS"
+    SPLIT_MIN_WIDTH = "SPLIT_MIN_WIDTH"
     REPORT_BASEMAP = "REPORT_BASEMAP"
     STUDY_AREA = "STUDY_AREA"
     SHOW_CONTOURS = "SHOW_CONTOURS"
@@ -346,8 +349,15 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
             "channel head. Each has its own centroid and longest flow path. "
             "Optionally, each stream sub-catchment is split along the stream "
             "centreline into its left bank (a) and right bank (b), looking "
-            "downstream; the stream cells go with the left bank. The "
-            "catchment DEM covers all catchments together.\n"
+            "downstream: the whole sub-catchment is cut along the stream "
+            "centreline, extended at both ends to its boundary, and cells on "
+            "the line go with the left bank. Split tolerance: a piece smaller "
+            "than the minimum area or narrower than the minimum mean width "
+            "(area / length along the stream), both in cells, joins the "
+            "neighbouring piece it shares the longest boundary with; pieces on "
+            "the same side stay one multi-part sub-catchment, and a stream "
+            "whose whole bank fails is not split. The catchment DEM covers all "
+            "catchments together.\n"
             "\n"
             "NAMES (incremental):\tThe main stem is A (further outlets B, C ... "
             "by area). Streams are numbered upstream from the outlet: A1, A2 "
@@ -536,6 +546,24 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
+            QgsProcessingParameterNumber(
+                self.SPLIT_MIN_CELLS,
+                "Centreline split tolerance: minimum piece area (cells)",
+                type=QgsProcessingParameterNumber.Type.Integer,
+                minValue=1,
+                defaultValue=10,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterNumber(
+                self.SPLIT_MIN_WIDTH,
+                "Centreline split tolerance: minimum mean piece width (cells)",
+                type=QgsProcessingParameterNumber.Type.Double,
+                minValue=0.0,
+                defaultValue=2.0,
+            )
+        )
+        self.addParameter(
             QgsProcessingParameterFeatureSource(
                 self.STUDY_AREA,
                 "Study area boundary for the report layout map (optional)",
@@ -692,6 +720,10 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
             parameters, self.MIN_FINAL_REACH, context
         )
         split_banks = self.parameterAsBoolean(parameters, self.SPLIT_BANKS, context)
+        split_min_cells = self.parameterAsInt(parameters, self.SPLIT_MIN_CELLS, context)
+        split_min_width = self.parameterAsDouble(
+            parameters, self.SPLIT_MIN_WIDTH, context
+        )
         project_name = self.parameterAsString(
             parameters, self.PROJECT_NAME, context
         ).strip()
@@ -742,6 +774,7 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
             pointer, p_gt, _, p_nodata = read_raster(pointer_layer.source())
             dem, d_gt, projection, d_nodata = read_raster(dem_layer.source())
             check_same_grid(pointer.shape, p_gt, dem.shape, d_gt)
+            self._geotransform = d_gt
 
             def progress(fraction, message):
                 feedback.setProgress(int(100 * fraction))
@@ -795,6 +828,8 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
                     esri_style=esri_style,
                     stream_threshold_km2=threshold,
                     split_banks=split_banks,
+                    min_split_cells=split_min_cells,
+                    min_split_width_cells=split_min_width,
                     progress=progress,
                     is_canceled=feedback.isCanceled,
                 )
@@ -1029,6 +1064,8 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
                 "max_stream_length_m": max_stream_m,
                 "min_final_reach_pct": min_final_pct,
                 "split_banks": split_banks,
+                "split_min_cells": split_min_cells,
+                "split_min_width": split_min_width,
                 "detail_sections": self.parameterAsBoolean(
                     parameters, self.REPORT_DETAIL, context
                 ),
@@ -1100,8 +1137,29 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
         )
         if sink is None:
             raise QgsProcessingException("Could not create the catchments output.")
+        cut_cache: dict = {}
+        cut_failed = []
         for c in result.catchments:
-            geom = QgsGeometry.fromWkt(rings_to_multipolygon_wkt(c.polygons))
+            geom = None
+            split = c.detail.get("split")
+            if split is not None:  # a bank: cut the outline along the stream
+                stream = c.attributes.get("stream")
+                if stream not in cut_cache:
+                    try:
+                        cut_cache[stream] = split_bank_geometries(
+                            split, self._geotransform
+                        )
+                    except Exception:
+                        cut_cache[stream] = None
+                    if cut_cache[stream] is None:
+                        cut_failed.append(stream)
+                cut = cut_cache[stream]
+                if cut is not None:
+                    geom = QgsGeometry(cut[c.attributes["bank"]])
+                    c.attributes["poly_km2"] = round(geom.area() / 1e6, 6)
+                    c.attributes["n_parts"] = geom.constGet().numGeometries()
+            if geom is None:
+                geom = QgsGeometry.fromWkt(rings_to_multipolygon_wkt(c.polygons))
             geom = geom.makeValid()
             if QgsWkbTypes.flatType(geom.wkbType()) not in (
                 Qgis.WkbType.Polygon,
@@ -1119,6 +1177,12 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
             for name, _, _ in CATCHMENT_FIELDS:
                 feat[name] = c.attributes.get(name)
             sink.addFeature(feat, QgsFeatureSink.Flag.FastInsert)
+        if cut_failed:
+            feedback.pushWarning(
+                "The outline of stream sub-catchment(s) "
+                f"{', '.join(cut_failed)} could not be cut along the centreline; "
+                "their banks follow the cell edges instead."
+            )
         return dest_id
 
     def _write_flow_paths(self, memory, result, crs):
