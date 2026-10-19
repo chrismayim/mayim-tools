@@ -86,12 +86,14 @@ from .qgis_outputs import (
     save_shapefile,
 )
 from .report import write_report_docx
+from .subcatchments import delineate_network_subcatchments
 
-TOOL_VERSION = "0.7.0"
+TOOL_VERSION = "0.8.0"
 
 MODE_OPTIONS = [
     "Total (full catchment per outlet; nested catchments overlap)",
-    "Incremental (non-overlapping sub-catchments)",
+    "Incremental (sub-catchments along the stream network; the pour point / "
+    "line is the final outlet)",
 ]
 MODE_KEYS = ["total", "incremental"]
 
@@ -105,7 +107,13 @@ CATCHMENT_FIELDS = [
     ("src_fid", _I, "source feature id"),
     ("out_type", _S, "point or line"),
     ("mode", _S, "total or incremental"),
-    ("ds_ids", _S, "outlet(s) this catchment drains into"),
+    ("ds_ids", _S, "outlet(s) or stream this catchment drains into"),
+    ("sub_type", _S, "incremental: stream or channel head sub-catchment"),
+    ("system", _S, "incremental: system (stem letter of the final outlet)"),
+    ("stream", _S, "incremental: stream the sub-catchment drains through"),
+    ("bank", _S, "incremental: a = left bank, b = right bank (looking downstream)"),
+    ("node", _S, "incremental: stream node the sub-catchment drains to"),
+    ("ds_stream", _S, "incremental: stream that node discharges into"),
     ("x_in", _D, "input point X (points only)"),
     ("y_in", _D, "input point Y (points only)"),
     ("x_out", _D, "outlet cell centre X (snapped)"),
@@ -265,6 +273,9 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
     MODE = "MODE"
     STREAM_THRESHOLD = "STREAM_THRESHOLD"
     MAX_STREAM_LENGTH = "MAX_STREAM_LENGTH"
+    MIN_FINAL_REACH = "MIN_FINAL_REACH"
+    SPLIT_BANKS = "SPLIT_BANKS"
+    REPORT_DETAIL = "REPORT_DETAIL"
     REPORT_BASEMAP = "REPORT_BASEMAP"
     STUDY_AREA = "STUDY_AREA"
     SHOW_CONTOURS = "SHOW_CONTOURS"
@@ -327,10 +338,31 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
             "any point on the line.\n"
             "\n"
             "MODES:\tTotal gives each outlet its full catchment, so "
-            "nested catchments overlap. Incremental splits the area at "
-            "every outlet into non-overlapping sub-catchments (useful "
-            "for HEC-HMS); ds_ids names the outlet each one drains into. "
-            "The catchment DEM covers all catchments together.\n"
+            "nested catchments overlap. Incremental divides the catchment of "
+            "the final outlet (the pour point or pour line) into "
+            "sub-catchments along the stream network (useful for HEC-HMS): "
+            "one per stream (the reach between two nodes, after any stream "
+            "breakpoints), draining to the node at its lower end, and one per "
+            "channel head. Each has its own centroid and longest flow path. "
+            "Optionally, each stream sub-catchment is split along the stream "
+            "centreline into its left bank (a) and right bank (b), looking "
+            "downstream; the stream cells go with the left bank. The "
+            "catchment DEM covers all catchments together.\n"
+            "\n"
+            "NAMES (incremental):\tThe main stem is A (further outlets B, C ... "
+            "by area). Streams are numbered upstream from the outlet: A1, A2 "
+            "... At each confluence the stem follows the larger upstream area; "
+            "a branch is named after the stream it flows into plus a letter "
+            "(a branch joining at the top of A3 is A3A, its streams A3A1, A3A2 "
+            "...; a second one A3B). Each sub-catchment is named after its "
+            "stream (A1, or A1a and A1b when split); a channel head "
+            "sub-catchment is named after the channel head node, the next "
+            "number up the stem (A6 above A5). Nodes are named after the "
+            "stream draining to them: the outlet is A1 and the node at the top "
+            "of A3 is A4. node names the node a sub-catchment drains to and "
+            "ds_stream the stream that node discharges into (empty at the "
+            "outlet), so the sub-catchments link into a model as sub-basin -> "
+            "junction (node) -> reach (ds_stream).\n"
             "\n"
             "GEOMETRY:\tPolygons follow cell edges. Interior holes (cells "
             "inside the outline that do not drain to the outlet) are "
@@ -370,9 +402,10 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
             "between two nodes) is measured upstream from its lower end; at "
             "every maximum length a 'stream breakpoint' node is added and the "
             "reach is split there, but only where the rest of the reach is "
-            "longer than 10 % of the maximum. E.g. a maximum of 500 m on a "
-            "1320 m reach gives breakpoints at 500 and 1000 m; a 540 m reach "
-            "is not split. Split reaches keep their id on the lowest piece "
+            "longer than the minimum final reach length (default 10 % of the "
+            "maximum). E.g. a maximum of 500 m on a 1320 m reach gives "
+            "breakpoints at 500 and 1000 m; with 10 %, a 540 m reach is not "
+            "split. Split reaches keep their id on the lowest piece "
             "and record split_from and piece. Network statistics (Horton, "
             "Hack, main stems) are not affected.\n"
             "\n"
@@ -484,6 +517,25 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
+            QgsProcessingParameterNumber(
+                self.MIN_FINAL_REACH,
+                "Minimum final reach length (% of the maximum stream length; a "
+                "breakpoint is only placed if the rest of the stream is longer)",
+                type=QgsProcessingParameterNumber.Type.Double,
+                minValue=0.0,
+                maxValue=99.0,
+                defaultValue=10.0,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterBoolean(
+                self.SPLIT_BANKS,
+                "Incremental mode: split the stream sub-catchments along the "
+                "stream centreline (a = left bank, b = right bank)",
+                defaultValue=False,
+            )
+        )
+        self.addParameter(
             QgsProcessingParameterFeatureSource(
                 self.STUDY_AREA,
                 "Study area boundary for the report layout map (optional)",
@@ -509,6 +561,16 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
             )
         )
         add_network_parameters(self, include_min_network=False)
+        detail_param = QgsProcessingParameterBoolean(
+            self.REPORT_DETAIL,
+            "Word report, incremental mode: a full section for every "
+            "sub-catchment (long; otherwise parameter tables)",
+            defaultValue=False,
+        )
+        detail_param.setFlags(
+            detail_param.flags() | Qgis.ProcessingParameterFlag.Advanced
+        )
+        self.addParameter(detail_param)
         basemap_param = QgsProcessingParameterBoolean(
             self.REPORT_BASEMAP,
             "Word report: OpenStreetMap background on the layout map "
@@ -626,6 +688,10 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
             if parameters.get(self.MAX_STREAM_LENGTH) is not None
             else 0.0
         )
+        min_final_pct = self.parameterAsDouble(
+            parameters, self.MIN_FINAL_REACH, context
+        )
+        split_banks = self.parameterAsBoolean(parameters, self.SPLIT_BANKS, context)
         project_name = self.parameterAsString(
             parameters, self.PROJECT_NAME, context
         ).strip()
@@ -652,7 +718,12 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
         paths = {spec.key: spec.path(folders, project_number) for spec in selected}
         want = set(paths)
         want_streams = bool(want & set(STREAM_OUTPUT_KEYS))
-        if max_stream_m > 0 and not want_streams:
+        if split_banks and mode != "incremental":
+            feedback.pushWarning(
+                "Splitting along the stream centreline only applies in "
+                "incremental mode."
+            )
+        if max_stream_m > 0 and not want_streams and mode != "incremental":
             feedback.pushWarning(
                 "The maximum stream length only affects the stream network "
                 "outputs (stream network, nodes, main stems, stream CSV and "
@@ -664,6 +735,8 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
             raise QgsProcessingException("The pour point/line layer has no features.")
         feedback.pushInfo(f"{len(outlets)} outlet(s), mode: {mode}")
 
+        network = None
+        network_stage = False
         try:
             feedback.setProgressText("Reading rasters")
             pointer, p_gt, _, p_nodata = read_raster(pointer_layer.source())
@@ -683,12 +756,61 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
                 outlets,
                 esri_style=esri_style,
                 snap_radius_cells=snap_radius,
-                mode=mode,
+                mode="total" if mode == "incremental" else mode,
                 stream_threshold_km2=threshold,
                 progress=progress,
                 is_canceled=feedback.isCanceled,
             )
-        except CatchmentError as e:
+            if mode == "incremental" and result.catchments:
+                network_stage = True
+                # the outlets are the final outlets: divide their catchments
+                # along the stream network
+                feedback.setProgressText("Extracting the stream network")
+                network = extract_stream_network(
+                    pointer,
+                    p_nodata,
+                    dem,
+                    d_nodata,
+                    d_gt,
+                    esri_style=esri_style,
+                    threshold_km2=threshold,
+                    drop_test_range=drop_range if want_streams else None,
+                    routing=routing,
+                    is_canceled=feedback.isCanceled,
+                    outlet_cells=result.outlet_cells,
+                    max_reach_length_m=max_stream_m or None,
+                    min_remainder=min_final_pct / 100.0,
+                )
+                warnings_total = [
+                    w for w in result.warnings if not w.startswith("Catchment '")
+                ]
+                result = delineate_network_subcatchments(
+                    pointer,
+                    p_nodata,
+                    dem,
+                    d_nodata,
+                    d_gt,
+                    network,
+                    result.outlet_cells,
+                    esri_style=esri_style,
+                    stream_threshold_km2=threshold,
+                    split_banks=split_banks,
+                    progress=progress,
+                    is_canceled=feedback.isCanceled,
+                )
+                result.warnings[:0] = warnings_total
+                network_stage = False
+                feedback.pushInfo(
+                    f"{len(result.catchments)} sub-catchment(s) on "
+                    f"{len(network.reaches)} stream(s)"
+                    + (" (split along the stream centreline)" if split_banks else "")
+                )
+        except CatchmentError as e:  # (the same class as StreamNetworkError)
+            if network_stage:
+                raise QgsProcessingException(
+                    "Incremental mode divides the catchment along the stream "
+                    f"network upstream of the outlet, which failed: {e}"
+                ) from e
             raise QgsProcessingException(str(e)) from e
         except Exception as e:
             raise QgsProcessingException(f"Catchment delineation failed: {e}") from e
@@ -710,8 +832,7 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
         self._write_outlets(memory, result, crs)
         self._write_centroids(memory, result, crs)
 
-        network = None
-        if want_streams:
+        if want_streams and network is None:
             feedback.setProgressText("Extracting the stream network")
             try:
                 network = extract_stream_network(
@@ -727,32 +848,33 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
                     is_canceled=feedback.isCanceled,
                     outlet_cells=result.outlet_cells,
                     max_reach_length_m=max_stream_m or None,
+                    min_remainder=min_final_pct / 100.0,
                 )
             except StreamNetworkError as e:
                 feedback.pushWarning(f"Stream network not written: {e}")
-            if network is not None:
-                if max_stream_m > 0:
-                    feedback.pushInfo(
-                        f"Stream breakpoints: {network.settings['n_breakpoints']} "
-                        f"(maximum stream length {max_stream_m:g} m)."
-                    )
-                for message in network.warnings:
-                    feedback.pushWarning(f"Stream network: {message}")
-                write_reaches(
-                    memory,
-                    parameters,
-                    self.OUTPUT_STREAMS,
-                    context,
-                    network,
-                    crs,
-                    [],
+        if network is not None:  # (incremental mode always has one)
+            if max_stream_m > 0:
+                feedback.pushInfo(
+                    f"Stream breakpoints: {network.settings['n_breakpoints']} "
+                    f"(maximum stream length {max_stream_m:g} m)."
                 )
-                write_nodes(
-                    memory, parameters, self.OUTPUT_STREAM_NODES, context, network, crs
-                )
-                write_main_stems(
-                    memory, parameters, self.OUTPUT_MAIN_STEMS, context, network, crs
-                )
+            for message in network.warnings:
+                feedback.pushWarning(f"Stream network: {message}")
+            write_reaches(
+                memory,
+                parameters,
+                self.OUTPUT_STREAMS,
+                context,
+                network,
+                crs,
+                [],
+            )
+            write_nodes(
+                memory, parameters, self.OUTPUT_STREAM_NODES, context, network, crs
+            )
+            write_main_stems(
+                memory, parameters, self.OUTPUT_MAIN_STEMS, context, network, crs
+            )
 
         outputs = {name: folders[kind] for kind, (name, _) in FOLDER_PARAMS.items()
                    if kind in folders}  # fmt: skip
@@ -810,7 +932,7 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
             write_hypsometric_csv(paths[self.OUTPUT_HYPSO], result.catchments)
             done(self.OUTPUT_HYPSO, paths[self.OUTPUT_HYPSO])
 
-        if network is not None:
+        if network is not None and want_streams:
             net_context = {
                 "tool": f"{self.displayName()} - stream network",
                 "version": TOOL_VERSION,
@@ -823,6 +945,7 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
                 "project_number": project_number,
                 "project_name": project_name,
                 "max_stream_length_m": max_stream_m,
+                "min_final_reach_pct": min_final_pct,
             }
             if self.OUTPUT_STREAM_CSV in want:
                 write_sectioned_csv(paths[self.OUTPUT_STREAM_CSV], network, net_context)
@@ -879,7 +1002,12 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
                     "centroids": self.OUTPUT_CENTROIDS,
                     **(
                         {"nodes": self.OUTPUT_STREAM_NODES}
-                        if self.OUTPUT_STREAM_NODES in want
+                        if self.OUTPUT_STREAM_NODES in want or mode == "incremental"
+                        else {}
+                    ),
+                    **(
+                        {"streams": self.OUTPUT_STREAMS}
+                        if mode == "incremental" and network is not None
                         else {}
                     ),
                 },
@@ -888,6 +1016,7 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
                 contour_interval=contour_interval,
                 use_osm=use_basemap,
                 messages=map_messages,
+                label_catchments=mode == "incremental",
             )
             context_info = {
                 "tool": self.displayName(),
@@ -898,6 +1027,12 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
                 "study_area": source_name(study_source),
                 "contour_interval": contour_interval,
                 "max_stream_length_m": max_stream_m,
+                "min_final_reach_pct": min_final_pct,
+                "split_banks": split_banks,
+                "detail_sections": self.parameterAsBoolean(
+                    parameters, self.REPORT_DETAIL, context
+                ),
+                "n_streams": len(network.reaches) if network else None,
                 "n_breakpoints": (
                     network.settings.get("n_breakpoints") if network else None
                 ),

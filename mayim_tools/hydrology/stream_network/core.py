@@ -603,10 +603,81 @@ def _apply_breakpoints(
     for r in out:
         if not r.pop("_internal", False) and r["ds_link"] in redirect:
             r["ds_link"] = redirect[r["ds_link"]]
+    for nd in nodes:  # a split reach now starts at its top piece
+        if nd["node_type"] != "outlet" and nd["link_id"] in redirect:
+            nd["link_id"] = redirect[nd["link_id"]]
     nodes = nodes + new_nodes
     for i, nd in enumerate(nodes, start=1):
         nd["node_id"] = i
     return out, nodes, len(new_nodes)
+
+
+# ---------------------------------------------------------------------------
+# Stream names (A, A1, A2, ..., branches A3A1, ...)
+# ---------------------------------------------------------------------------
+
+
+def stem_letters(i: int) -> str:
+    """0 -> A, 25 -> Z, 26 -> AA, ... (spreadsheet-style letters)."""
+    out = ""
+    i += 1
+    while i:
+        i, r = divmod(i - 1, 26)
+        out = chr(65 + r) + out
+    return out
+
+
+def name_network(reaches: list[dict], nodes: list[dict]) -> dict[int, str]:
+    """Names every reach, node and channel head.
+
+    Each system (network with its own outlet) is a stem lettered A, B, C ...
+    by upstream area, largest first. A stem's reaches are numbered upstream
+    from its outlet: A1, A2, ... At every node the stem continues up the
+    inflowing reach with the larger upstream area (then the longer one); the
+    other inflows start branch stems named after the reach they flow into,
+    plus a letter (A3A, A3B ... by upstream area), numbered the same way
+    (A3A1, A3A2 ...). Nodes take the name of the reach that drains to them:
+    the outlet of stem A is A1, and the node at the top of reach A3 is A4 -
+    the reach above it on the stem, or the channel head (and its catchment)
+    where A3 is the top reach. Sets reach 'name', 'stem', 'seg', 'ds_name'
+    and 'head_name' (top reaches only), and node 'name'. Returns
+    {link_id: head name} for the reaches that start at a channel head."""
+    by_id = {r["link_id"]: r for r in reaches}
+    kids: dict[int, list[dict]] = {r["link_id"]: [] for r in reaches}
+    for r in reaches:
+        if r["ds_link"] is not None and r["ds_link"] in kids:
+            kids[r["ds_link"]].append(r)
+
+    def rank(r):
+        return (-(r.get("us_km2") or 0.0), -(r.get("up_len_m") or 0.0), r["link_id"])
+
+    roots = sorted((r for r in reaches if r["ds_link"] is None), key=rank)
+    stack = [(stem_letters(i), r) for i, r in enumerate(roots)][::-1]
+    heads: dict[int, str] = {}
+    while stack:
+        stem, r = stack.pop()
+        k = 1
+        while True:
+            r["name"], r["stem"], r["seg"] = f"{stem}{k}", stem, k
+            ups = sorted(kids[r["link_id"]], key=rank)
+            if not ups:
+                heads[r["link_id"]] = r["head_name"] = f"{stem}{k + 1}"
+                break
+            for j, b in enumerate(ups[1:]):
+                stack.append((f"{r['name']}{stem_letters(j)}", b))
+            r, k = ups[0], k + 1
+    for r in reaches:
+        ds = by_id.get(r["ds_link"]) if r["ds_link"] is not None else None
+        r["ds_name"] = ds["name"] if ds is not None else None
+    for nd in nodes:
+        r = by_id.get(nd.get("link_id"))
+        if r is None or "name" not in r:
+            nd["name"] = None
+        elif nd["node_type"] == "outlet":
+            nd["name"] = r["name"]
+        else:  # the reach above this node on the stem (or the channel head)
+            nd["name"] = f"{r['stem']}{r['seg'] + 1}"
+    return heads
 
 
 # ---------------------------------------------------------------------------
@@ -639,6 +710,7 @@ def extract_stream_network(
     is_canceled: Callable[[], bool] | None = None,
     outlet_cells: Sequence[tuple[str, Sequence[int]]] | None = None,
     max_reach_length_m: float | None = None,
+    min_remainder: float = BREAK_MIN_REMAINDER,
 ) -> NetworkResult:
     """Extracts, orders and characterises the stream network.
 
@@ -650,12 +722,19 @@ def extract_stream_network(
 
     ``max_reach_length_m`` (optional) splits longer reaches at stream
     breakpoints, measured from each reach's downstream end, wherever the rest
-    of the reach is longer than 10 % of the maximum (see split_positions)."""
+    of the reach is longer than ``min_remainder`` (default 10 %) of the
+    maximum (see split_positions). Reaches and nodes are then named (see
+    name_network)."""
     routing = routing or RoutingSettings()
     if routing.method not in VELOCITY_METHODS:
         raise StreamNetworkError(f"Unknown velocity method {routing.method!r}")
     if threshold_km2 <= 0:
         raise StreamNetworkError("The stream threshold must be greater than 0.")
+    if not 0.0 <= min_remainder < 1.0:
+        raise StreamNetworkError(
+            "The minimum final reach length must be at least 0 % and below 100 % "
+            "of the maximum stream length."
+        )
     sx, sy = check_geotransform(geotransform)
     pointer = np.asarray(pointer)
     dem = np.asarray(dem, dtype=np.float64)
@@ -1022,8 +1101,16 @@ def extract_stream_network(
     n_breaks = 0
     if max_reach_length_m:
         reaches, res.nodes, n_breaks = _apply_breakpoints(
-            reaches, res.nodes, max_reach_length_m, steps, z, acc_km2, routing
+            reaches,
+            res.nodes,
+            max_reach_length_m,
+            steps,
+            z,
+            acc_km2,
+            routing,
+            min_remainder,
         )
+    name_network(reaches, res.nodes)
 
     # tidy reach output
     for r in reaches:
@@ -1048,6 +1135,7 @@ def extract_stream_network(
         "n_pour_points": len(res.pour_points),
         "min_network_km2": min_network_km2,
         "max_reach_length_m": max_reach_length_m or None,
+        "min_remainder": min_remainder,
         "n_breakpoints": n_breaks,
     }
     report(1.0, "Done")

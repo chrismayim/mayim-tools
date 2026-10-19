@@ -430,6 +430,420 @@ def _report_detail(
 
 
 # ---------------------------------------------------------------------------
+# One catchment from its cells
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _Grid:
+    """The flow grid shared by every catchment of a run."""
+
+    geotransform: tuple
+    rows: int
+    cols: int
+    sx: float
+    sy: float
+    nxt: np.ndarray  # flat downstream index (terminals point to themselves)
+    steps: np.ndarray  # D8 step length per cell (0 at terminals)
+    acc: np.ndarray  # flow accumulation, cells
+    dem_flat: np.ndarray  # DEM with NoData as NaN, flat
+    stream_threshold_km2: float
+    warn: Callable[[str], None]
+
+    @property
+    def cell_area(self) -> float:
+        return self.sx * self.sy
+
+
+def catchment_from_cells(
+    grid: _Grid,
+    catchment_id: str,
+    kind: str,
+    src_fid: int,
+    flat_cells: np.ndarray,
+    seed_cells: np.ndarray,
+    mode: str = "total",
+    keep_out: np.ndarray | None = None,
+    route_cells: np.ndarray | None = None,
+    info: dict | None = None,
+    extra: dict | None = None,
+) -> tuple[CatchmentResult, tuple[int, int, np.ndarray]]:
+    """Polygon, longest flow path and parameters of the catchment made of
+    ``flat_cells``, draining to ``seed_cells`` (its outlet cell(s)).
+
+    ``keep_out`` (flat bool over the whole grid) marks cells of other
+    catchments, which stay holes rather than being filled. ``route_cells``
+    (a superset of ``flat_cells``) are the cells flow may pass through on the
+    way to the outlet - e.g. the whole stream catchment for one bank of it -
+    so the flow path of a bank continues down the stream to the node.
+    ``info`` holds the outlet placement (x_in, y_in, x_out, y_out, snap_m,
+    ds_ids); ``extra`` attributes are added at the front of the attribute
+    table. Returns (result, (row0, col0, filled window))."""
+    g = grid
+    geotransform, rows, cols = g.geotransform, g.rows, g.cols
+    sx, sy, cell_area = g.sx, g.sy, g.cell_area
+    nxt, steps, acc, dem_flat, warn = g.nxt, g.steps, g.acc, g.dem_flat, g.warn
+    stream_threshold_km2 = g.stream_threshold_km2
+    thr_cells = stream_threshold_km2 * 1e6 / cell_area
+    info = info or {}
+    route = flat_cells if route_cells is None else np.union1d(route_cells, flat_cells)
+
+    rr_all, cc_all = route // cols, route % cols
+    r0, r1 = int(rr_all.min()), int(rr_all.max()) + 1
+    c0, c1 = int(cc_all.min()), int(cc_all.max()) + 1
+    h, w = r1 - r0, c1 - c0
+    mask = np.zeros((h, w), dtype=bool)
+    mask[flat_cells // cols - r0, flat_cells % cols - c0] = True
+    rmask = np.zeros((h, w), dtype=bool)
+    rmask[rr_all - r0, cc_all - c0] = True
+
+    gflat = (np.arange(h)[:, None] + r0) * cols + (np.arange(w)[None, :] + c0)
+    gflat = gflat.ravel()
+
+    keep = None
+    if keep_out is not None:
+        # cells of other catchments stay out (real holes)
+        keep = keep_out[gflat].reshape(h, w) & ~mask
+    filled, rings_idx = fill_holes(mask, keep)
+    n_cells = int(mask.sum())
+    n_filled = int(filled.sum())
+
+    # local downstream network over the routing cells
+    loc = np.arange(h * w, dtype=np.int64)
+    local_next = loc.copy()
+    in_mask = mask.ravel()
+    in_route = rmask.ravel()
+    g_down = nxt[gflat]
+    dr_, dc_ = g_down // cols - r0, g_down % cols - c0
+    inside = in_route & (dr_ >= 0) & (dr_ < h) & (dc_ >= 0) & (dc_ < w)
+    down_local = np.where(inside, dr_ * w + dc_, loc)
+    inside &= in_route[np.clip(down_local, 0, h * w - 1)]
+    is_seed = np.isin(gflat, seed_cells)
+    moves = inside & ~is_seed & (g_down != gflat)
+    local_next[moves] = down_local[moves]
+    weights = np.where(moves, steps[gflat], 0.0)
+    _, dist, _ = resolve_terminals(local_next, weights)
+
+    z_local = dem_flat[gflat]
+    dist_masked = np.where(in_mask, dist, -1.0)
+    start = int(np.argmax(dist_masked))
+    path = [start]
+    while local_next[path[-1]] != path[-1]:
+        path.append(int(local_next[path[-1]]))
+    path_arr = np.array(path[::-1])  # outlet first
+    x_prof = dist[path_arr]
+    z_prof = z_local[path_arr]
+    outlet_local = path[-1]
+    lfp_m = float(dist[start])
+
+    pr, pc = path_arr // w + r0, path_arr % w + c0
+    px, py = cell_center(pr, pc, geotransform)
+    flow_path = list(zip(px[::-1].tolist(), py[::-1].tolist(), strict=True))
+
+    # polygon
+    polygons = [
+        [ring_to_map(simplify_ring(r), geotransform, r0, c0) for r in poly]
+        for poly in group_polygons(rings_idx)
+    ]
+    perimeter_m = sum(ring_length(r) for poly in polygons for r in poly)
+    area_km2 = n_cells * cell_area / 1e6
+    poly_km2 = n_filled * cell_area / 1e6
+    hole_ha = (n_filled - n_cells) * cell_area / 1e4
+
+    # centroid and Lca
+    fr, fc = np.nonzero(filled)
+    cx, cy = cell_center(fr.mean() + r0, fc.mean() + c0, geotransform)
+    cx, cy = float(cx), float(cy)
+    d2 = (px - cx) ** 2 + (py - cy) ** 2
+    lca_m = float(x_prof[int(np.argmin(d2))])
+
+    # elevations
+    zm = z_local[in_mask]
+    zv = zm[~np.isnan(zm)]
+    if zv.size < zm.size:
+        warn(
+            f"Catchment '{catchment_id}': {zm.size - zv.size} cell(s) "
+            "have no DEM value; elevation statistics ignore them."
+        )
+    z_min = float(zv.min()) if zv.size else None
+    z_max = float(zv.max()) if zv.size else None
+    z_mean = float(zv.mean()) if zv.size else None
+    z_outlet = z_local[outlet_local]
+    if kind == "line":
+        # a pour line has many outlet cells: its outlet is the lowest
+        z_seeds = dem_flat[seed_cells]
+        z_seeds = z_seeds[~np.isnan(z_seeds)]
+        if z_seeds.size:
+            z_outlet = z_seeds.min()
+    z_outlet = None if np.isnan(z_outlet) else float(z_outlet)
+    if z_outlet is not None and zv.size:
+        below = zv < z_outlet - BELOW_OUTLET_TOL_M
+        if below.any():
+            n_below = int(below.sum())
+            warn(
+                f"Catchment '{catchment_id}': {n_below} cell(s) "
+                f"({n_below * cell_area / 1e4:.2f} ha, "
+                f"{100.0 * n_below / zv.size:.1f} % of the catchment) lie "
+                f"below the outlet elevation of {z_outlet:.2f} m, down to "
+                f"{float(zv.min()):.2f} m. Every cell drains to the outlet, "
+                "so on a hydrologically conditioned DEM none can be lower. "
+                "The DEM is probably not the conditioned DEM the pointer was "
+                "built from (or contains pits). Relief (z_max - z_min) then "
+                "exceeds the elevation gain (z_max - z_outlet)."
+            )
+
+    # grid slope (Horn) on a padded window
+    pr0, pr1 = max(r0 - 1, 0), min(r1 + 1, rows)
+    pc0, pc1 = max(c0 - 1, 0), min(c1 + 1, cols)
+    zwin = dem_flat.reshape(rows, cols)[pr0:pr1, pc0:pc1]
+    zpad = np.full((h + 2, w + 2), np.nan)
+    zr0, zc0 = 1 + pr0 - r0, 1 + pc0 - c0
+    zpad[zr0 : zr0 + zwin.shape[0], zc0 : zc0 + zwin.shape[1]] = zwin
+    dzdx, dzdy = horn_gradient(zpad, sx, sy)
+    slope_grid = np.hypot(dzdx, dzdy)
+    aspect_grid = horn_aspect_deg(dzdx, dzdy)
+    s_cells = slope_grid[mask & ~np.isnan(slope_grid)]
+    s_mean_pc = float(s_cells.mean() * 100.0) if s_cells.size else None
+
+    # profile slopes
+    s_avg = average_slope(x_prof, z_prof)
+    s_1085 = slope_10_85(x_prof, z_prof)
+    s_ea = equal_area_slope(x_prof, z_prof)
+
+    # streams and drainage density (within the catchment's own cells)
+    acc_local = acc[gflat]
+    stream = in_mask & (acc_local >= thr_cells)
+    strm_m = float(np.sum(np.where(stream & moves, steps[gflat], 0.0)))
+    step_local = np.where(moves, steps[gflat], 0.0)
+    order = strahler_order(local_next, stream)
+    max_in = segment_starts(local_next, order)
+    orders = stream_order_summary(order, max_in, local_next, step_local)
+    n_streams = sum(o["n_segments"] for o in orders)
+    bif = bifurcation_ratio(orders)
+    link_features = []
+    for link in stream_links(local_next, stream, order, step_local):
+        cells = np.array(link["cells"])
+        lx, ly = cell_center(cells // w + r0, cells % w + c0, geotransform)
+        z0 = z_local[cells[0]]
+        z1 = (
+            z_local[link["last_own"]] if link["ds_link"] is None else z_local[cells[-1]]
+        )
+        link_features.append(
+            {
+                "coords": list(zip(lx.tolist(), ly.tolist(), strict=True)),
+                "link_id": link["link_id"],
+                "ds_link": link["ds_link"],
+                "strahler": link["order"],
+                "length_m": round(link["length_m"], 2),
+                "us_km2": round(
+                    float(acc_local[link["last_own"]]) * cell_area / 1e6, 6
+                ),
+                "z_start": _none_round(None if np.isnan(z0) else z0, 3),
+                "z_end": _none_round(None if np.isnan(z1) else z1, 3),
+                "slope": _none_round(
+                    (
+                        (z0 - z1) / link["length_m"]
+                        if link["length_m"] > 0 and not np.isnan(z0 - z1)
+                        else None
+                    ),
+                    6,
+                ),
+            }
+        )
+
+    # extra geomorphometry
+    h_rel = (z_max - z_outlet) if (zv.size and z_outlet is not None) else None
+    ox, oy = float(px[0]), float(py[0])
+    fx, fy = cell_center(fr + r0, fc + c0, geotransform)
+    lb_m = float(np.sqrt(np.max((fx - ox) ** 2 + (fy - oy) ** 2)))
+    straight_m = math.hypot(float(px[-1]) - ox, float(py[-1]) - oy)
+    dd = strm_m / 1000.0 / area_km2 if area_km2 > 0 else 0.0
+
+    lfp_km = lfp_m / 1000.0
+    perim_km = perimeter_m / 1000.0
+    shape_ok = lfp_km > 0
+    attrs = dict(extra or {})
+    attrs.update(
+        {
+            "outlet_id": catchment_id,
+            "src_fid": src_fid,
+            "out_type": kind,
+            "mode": mode,
+            "ds_ids": info.get("ds_ids", ""),
+            "x_in": info.get("x_in"),
+            "y_in": info.get("y_in"),
+            "x_out": float(px[0]) if info.get("x_out") is None else info["x_out"],
+            "y_out": float(py[0]) if info.get("y_out") is None else info["y_out"],
+            "snap_m": _none_round(info.get("snap_m"), 2),
+            "n_outcells": int(np.asarray(seed_cells).size),
+            "area_km2": round(area_km2, 6),
+            "area_ha": round(area_km2 * 100.0, 4),
+            "hole_ha": round(hole_ha, 4),
+            "poly_km2": round(poly_km2, 6),
+            "perim_km": round(perim_km, 4),
+            "n_parts": len(polygons),
+            "z_outlet": _none_round(z_outlet, 3),
+            "z_min": _none_round(z_min, 3),
+            "z_max": _none_round(z_max, 3),
+            "z_mean": _none_round(z_mean, 3),
+            "relief_m": _none_round((z_max - z_min) if zv.size else None, 3),
+            "elev_gain": _none_round(h_rel, 3),
+            "cx": round(cx, 3),
+            "cy": round(cy, 3),
+            "lfp_km": round(lfp_km, 4),
+            "lca_km": round(lca_m / 1000.0, 4),
+            "s_avg": _none_round(s_avg, 6),
+            "s_1085": _none_round(s_1085, 6),
+            "s_ea": _none_round(s_ea, 6),
+            "s_mean_pc": _none_round(s_mean_pc, 3),
+            "form_f": _none_round(poly_km2 / lfp_km**2 if shape_ok else None, 4),
+            "circ_r": _none_round(
+                4 * math.pi * poly_km2 / perim_km**2 if perim_km > 0 else None, 4
+            ),
+            "elong_r": _none_round(
+                2 * math.sqrt(poly_km2 / math.pi) / lfp_km if shape_ok else None, 4
+            ),
+            "gravel_kc": _none_round(
+                (
+                    perim_km / (2 * math.sqrt(math.pi * poly_km2))
+                    if poly_km2 > 0
+                    else None
+                ),
+                4,
+            ),
+            "hyps_int": _none_round(
+                (
+                    (z_mean - z_min) / (z_max - z_min)
+                    if zv.size and z_max > z_min
+                    else None
+                ),
+                4,
+            ),
+            "strm_km": round(strm_m / 1000.0, 4),
+            "dd_kmkm2": _none_round(
+                strm_m / 1000.0 / area_km2 if area_km2 > 0 else None, 4
+            ),
+            "lb_km": round(lb_m / 1000.0, 4),
+            "relief_r": _none_round(
+                h_rel / lb_m if h_rel is not None and lb_m > 0 else None, 5
+            ),
+            "melton_r": _none_round(
+                h_rel / 1000.0 / math.sqrt(area_km2) if h_rel is not None else None,
+                4,
+            ),
+            "rugged_n": _none_round(
+                h_rel / 1000.0 * dd if h_rel is not None and dd > 0 else None, 4
+            ),
+            "sinuosity": _none_round(lfp_m / straight_m if straight_m > 0 else None, 4),
+            "strm_ord": int(order.max()) if order.size else 0,
+            "n_strm": int(n_streams),
+            "bif_r": _none_round(bif, 3),
+            "strm_freq": _none_round(n_streams / area_km2 if area_km2 > 0 else None, 4),
+            "lo_km": _none_round(1.0 / (2.0 * dd) if dd > 0 else None, 4),
+            "c_maint": _none_round(1.0 / dd if dd > 0 else None, 4),
+            "tc_kirp_mn": _none_round(tc_kirpich_minutes(lfp_m, s_avg), 2),
+            "tc_usbr_mn": _none_round(tc_usbr_minutes(lfp_km, s_1085), 2),
+            "tc_bw_mn": _none_round(
+                tc_bransby_williams_minutes(lfp_km, area_km2, s_ea), 2
+            ),
+        }
+    )
+    if hole_ha > 0:
+        pct = 100.0 * (n_filled - n_cells) / n_filled
+        warn(
+            f"Catchment '{catchment_id}': filled {hole_ha:.2f} ha of "
+            f"interior holes ({pct:.1f} % of the outline) - cells inside the "
+            "outline that do not drain to the outlet."
+            + (
+                " That is a large share; the DEM probably needs "
+                "hydrological conditioning."
+                if pct >= 1.0
+                else ""
+            )
+        )
+    if lfp_m > 0 and (s_avg is None or s_avg <= 0):
+        warn(
+            f"Catchment '{catchment_id}': the longest flow path does not "
+            "fall towards the outlet, so slopes and Tc were not computed."
+        )
+
+    catchment = CatchmentResult(
+        outlet_id=catchment_id,
+        kind=kind,
+        src_fid=src_fid,
+        attributes=attrs,
+        polygons=polygons,
+        flow_path=flow_path,
+        outlet_xy=(float(px[0]), float(py[0])),
+        hypsometric_curve=hypsometric_curve(zm, cell_area),
+        detail=_report_detail(
+            geotransform,
+            r0,
+            c0,
+            w,
+            x_prof,
+            z_prof,
+            zv,
+            slope_grid[mask] * 100.0,
+            aspect_grid[mask],
+            slope_grid[mask],
+            order,
+            local_next,
+            orders,
+            (cx, cy),
+            (float(px[int(np.argmin(d2))]), float(py[int(np.argmin(d2))])),
+            stream_threshold_km2,
+        ),
+    )
+    crow, ccol = world_to_cell(cx, cy, geotransform)
+    lr, lc = crow - r0, ccol - c0
+    inside_c = bool(0 <= lr < h and 0 <= lc < w and filled[lr, lc])
+    cz = (
+        dem_flat[crow * cols + ccol]
+        if 0 <= crow < rows and 0 <= ccol < cols
+        else np.nan
+    )
+    catchment.detail.update(
+        {
+            "stream_links": link_features,
+            "centroid_inside": inside_c,
+            "centroid_z": None if np.isnan(cz) else float(cz),
+        }
+    )
+    return catchment, (r0, c0, filled)
+
+
+def catchment_dem(result, windows, dem_flat, shape, dem_nodata, geotransform):
+    """Sets result.dem_array / dem_geotransform / dem_nodata: the DEM clipped
+    to the union of the catchments' filled outlines ``windows`` [(row0,
+    col0, filled)]."""
+    if not windows:
+        return
+    rows, cols = shape
+    ur0 = min(w_[0] for w_ in windows)
+    uc0 = min(w_[1] for w_ in windows)
+    ur1 = max(w_[0] + w_[2].shape[0] for w_ in windows)
+    uc1 = max(w_[1] + w_[2].shape[1] for w_ in windows)
+    union = np.zeros((ur1 - ur0, uc1 - uc0), dtype=bool)
+    for r0, c0, filled in windows:
+        fh, fw = filled.shape
+        union[r0 - ur0 : r0 - ur0 + fh, c0 - uc0 : c0 - uc0 + fw] |= filled
+    out_nodata = (
+        float(dem_nodata)
+        if dem_nodata is not None and not np.isnan(dem_nodata)
+        else DEFAULT_DEM_NODATA
+    )
+    zcrop = dem_flat.reshape(rows, cols)[ur0:ur1, uc0:uc1]
+    dem_out = np.where(union & ~np.isnan(zcrop), zcrop, out_nodata)
+    result.dem_array = dem_out.astype(np.float32)
+    result.dem_nodata = out_nodata
+    gt = list(geotransform)
+    gt[0] = geotransform[0] + uc0 * geotransform[1]
+    gt[3] = geotransform[3] + ur0 * geotransform[5]
+    result.dem_geotransform = tuple(gt)
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -605,7 +1019,19 @@ def delineate_catchments(
     bounds = np.searchsorted(label[order], np.arange(1, n_out + 2))
     cells_of = [order[bounds[k] : bounds[k + 1]] for k in range(n_out)]
 
-    thr_cells = stream_threshold_km2 * 1e6 / cell_area
+    grid = _Grid(
+        geotransform=geotransform,
+        rows=rows,
+        cols=cols,
+        sx=sx,
+        sy=sy,
+        nxt=nxt,
+        steps=steps,
+        acc=acc,
+        dem_flat=dem_flat,
+        stream_threshold_km2=stream_threshold_km2,
+        warn=warn,
+    )
     windows: list[tuple[int, int, np.ndarray]] = []
 
     # --- per-catchment processing -----------------------------------------
@@ -624,346 +1050,25 @@ def delineate_catchments(
                 "outlet) and was skipped."
             )
             continue
-
-        rr_all, cc_all = flat_cells // cols, flat_cells % cols
-        r0, r1 = int(rr_all.min()), int(rr_all.max()) + 1
-        c0, c1 = int(cc_all.min()), int(cc_all.max()) + 1
-        h, w = r1 - r0, c1 - c0
-        mask = np.zeros((h, w), dtype=bool)
-        mask[rr_all - r0, cc_all - c0] = True
-
-        gflat = (np.arange(h)[:, None] + r0) * cols + (np.arange(w)[None, :] + c0)
-        gflat = gflat.ravel()
-
-        keep_out = None
-        if mode == "incremental":
-            # cells of other outlets' sub-catchments stay out (real holes)
-            keep_out = (label[gflat] != 0).reshape(h, w) & ~mask
-        filled, rings_idx = fill_holes(mask, keep_out)
-        n_cells = int(mask.sum())
-        n_filled = int(filled.sum())
-
-        # local downstream network restricted to the catchment
-        loc = np.arange(h * w, dtype=np.int64)
-        local_next = loc.copy()
-        in_mask = mask.ravel()
-        g_down = nxt[gflat]
-        dr_, dc_ = g_down // cols - r0, g_down % cols - c0
-        inside = in_mask & (dr_ >= 0) & (dr_ < h) & (dc_ >= 0) & (dc_ < w)
-        down_local = np.where(inside, dr_ * w + dc_, loc)
-        inside &= in_mask[np.clip(down_local, 0, h * w - 1)]
-        is_seed = np.isin(gflat, seeds_all[k])
-        moves = inside & ~is_seed & (g_down != gflat)
-        local_next[moves] = down_local[moves]
-        weights = np.where(moves, steps[gflat], 0.0)
-        _, dist, _ = resolve_terminals(local_next, weights)
-
-        z_local = dem_flat[gflat]
-        dist_masked = np.where(in_mask, dist, -1.0)
-        start = int(np.argmax(dist_masked))
-        path = [start]
-        while local_next[path[-1]] != path[-1]:
-            path.append(int(local_next[path[-1]]))
-        path_arr = np.array(path[::-1])  # outlet first
-        x_prof = dist[path_arr]
-        z_prof = z_local[path_arr]
-        outlet_local = path[-1]
-        lfp_m = float(dist[start])
-
-        pr, pc = path_arr // w + r0, path_arr % w + c0
-        px, py = cell_center(pr, pc, geotransform)
-        flow_path = list(zip(px[::-1].tolist(), py[::-1].tolist(), strict=True))
-
-        # polygon
-        polygons = [
-            [ring_to_map(simplify_ring(r), geotransform, r0, c0) for r in poly]
-            for poly in group_polygons(rings_idx)
-        ]
-        perimeter_m = sum(ring_length(r) for poly in polygons for r in poly)
-        area_km2 = n_cells * cell_area / 1e6
-        poly_km2 = n_filled * cell_area / 1e6
-        hole_ha = (n_filled - n_cells) * cell_area / 1e4
-
-        # centroid and Lca
-        fr, fc = np.nonzero(filled)
-        cx, cy = cell_center(fr.mean() + r0, fc.mean() + c0, geotransform)
-        cx, cy = float(cx), float(cy)
-        d2 = (px - cx) ** 2 + (py - cy) ** 2
-        lca_m = float(x_prof[int(np.argmin(d2))])
-
-        # elevations
-        zm = z_local[in_mask]
-        zv = zm[~np.isnan(zm)]
-        if zv.size < zm.size:
-            warn(
-                f"Catchment '{outlet.outlet_id}': {zm.size - zv.size} cell(s) "
-                "have no DEM value; elevation statistics ignore them."
-            )
-        z_min = float(zv.min()) if zv.size else None
-        z_max = float(zv.max()) if zv.size else None
-        z_mean = float(zv.mean()) if zv.size else None
-        z_outlet = z_local[outlet_local]
-        if outlet.kind == "line":
-            # a pour line has many outlet cells: its outlet is the lowest
-            z_seeds = dem_flat[seeds_all[k]]
-            z_seeds = z_seeds[~np.isnan(z_seeds)]
-            if z_seeds.size:
-                z_outlet = z_seeds.min()
-        z_outlet = None if np.isnan(z_outlet) else float(z_outlet)
-        if z_outlet is not None and zv.size:
-            below = zv < z_outlet - BELOW_OUTLET_TOL_M
-            if below.any():
-                n_below = int(below.sum())
-                warn(
-                    f"Catchment '{outlet.outlet_id}': {n_below} cell(s) "
-                    f"({n_below * cell_area / 1e4:.2f} ha, "
-                    f"{100.0 * n_below / zv.size:.1f} % of the catchment) lie "
-                    f"below the outlet elevation of {z_outlet:.2f} m, down to "
-                    f"{float(zv.min()):.2f} m. Every cell drains to the outlet, "
-                    "so on a hydrologically conditioned DEM none can be lower. "
-                    "The DEM is probably not the conditioned DEM the pointer was "
-                    "built from (or contains pits). Relief (z_max - z_min) then "
-                    "exceeds the elevation gain (z_max - z_outlet)."
-                )
-
-        # grid slope (Horn) on a padded window
-        pr0, pr1 = max(r0 - 1, 0), min(r1 + 1, rows)
-        pc0, pc1 = max(c0 - 1, 0), min(c1 + 1, cols)
-        zwin = dem_flat.reshape(rows, cols)[pr0:pr1, pc0:pc1]
-        zpad = np.full((h + 2, w + 2), np.nan)
-        zr0, zc0 = 1 + pr0 - r0, 1 + pc0 - c0
-        zpad[zr0 : zr0 + zwin.shape[0], zc0 : zc0 + zwin.shape[1]] = zwin
-        dzdx, dzdy = horn_gradient(zpad, sx, sy)
-        slope_grid = np.hypot(dzdx, dzdy)
-        aspect_grid = horn_aspect_deg(dzdx, dzdy)
-        s_cells = slope_grid[mask & ~np.isnan(slope_grid)]
-        s_mean_pc = float(s_cells.mean() * 100.0) if s_cells.size else None
-
-        # profile slopes
-        s_avg = average_slope(x_prof, z_prof)
-        s_1085 = slope_10_85(x_prof, z_prof)
-        s_ea = equal_area_slope(x_prof, z_prof)
-
-        # streams and drainage density
-        acc_local = acc[gflat]
-        stream = in_mask & (acc_local >= thr_cells)
-        strm_m = float(np.sum(np.where(stream & moves, steps[gflat], 0.0)))
-        step_local = np.where(moves, steps[gflat], 0.0)
-        order = strahler_order(local_next, stream)
-        max_in = segment_starts(local_next, order)
-        orders = stream_order_summary(order, max_in, local_next, step_local)
-        n_streams = sum(o["n_segments"] for o in orders)
-        bif = bifurcation_ratio(orders)
-        link_features = []
-        for link in stream_links(local_next, stream, order, step_local):
-            cells = np.array(link["cells"])
-            lx, ly = cell_center(cells // w + r0, cells % w + c0, geotransform)
-            z0 = z_local[cells[0]]
-            z1 = (
-                z_local[link["last_own"]]
-                if link["ds_link"] is None
-                else (z_local[cells[-1]])
-            )
-            link_features.append(
-                {
-                    "coords": list(zip(lx.tolist(), ly.tolist(), strict=True)),
-                    "link_id": link["link_id"],
-                    "ds_link": link["ds_link"],
-                    "strahler": link["order"],
-                    "length_m": round(link["length_m"], 2),
-                    "us_km2": round(
-                        float(acc_local[link["last_own"]]) * cell_area / 1e6, 6
-                    ),
-                    "z_start": _none_round(None if np.isnan(z0) else z0, 3),
-                    "z_end": _none_round(None if np.isnan(z1) else z1, 3),
-                    "slope": _none_round(
-                        (
-                            (z0 - z1) / link["length_m"]
-                            if link["length_m"] > 0 and not np.isnan(z0 - z1)
-                            else None
-                        ),
-                        6,
-                    ),
-                }
-            )
-
-        # extra geomorphometry
-        h_rel = (z_max - z_outlet) if (zv.size and z_outlet is not None) else None
-        ox, oy = float(px[0]), float(py[0])
-        fx, fy = cell_center(fr + r0, fc + c0, geotransform)
-        lb_m = float(np.sqrt(np.max((fx - ox) ** 2 + (fy - oy) ** 2)))
-        straight_m = math.hypot(float(px[-1]) - ox, float(py[-1]) - oy)
-        dd = strm_m / 1000.0 / area_km2 if area_km2 > 0 else 0.0
-
-        lfp_km = lfp_m / 1000.0
-        perim_km = perimeter_m / 1000.0
-        shape_ok = lfp_km > 0
-        attrs = {
-            "outlet_id": outlet.outlet_id,
-            "src_fid": outlet.src_fid,
-            "out_type": outlet.kind,
-            "mode": mode,
-            "ds_ids": ",".join(outlets[p].outlet_id for p in sorted(parents[k])),
-            "x_in": meta[k]["x_in"],
-            "y_in": meta[k]["y_in"],
-            "x_out": float(px[0]) if outlet.kind == "line" else meta[k]["x_out"],
-            "y_out": float(py[0]) if outlet.kind == "line" else meta[k]["y_out"],
-            "snap_m": _none_round(meta[k]["snap_m"], 2),
-            "n_outcells": int(seeds_all[k].size),
-            "area_km2": round(area_km2, 6),
-            "area_ha": round(area_km2 * 100.0, 4),
-            "hole_ha": round(hole_ha, 4),
-            "poly_km2": round(poly_km2, 6),
-            "perim_km": round(perim_km, 4),
-            "n_parts": len(polygons),
-            "z_outlet": _none_round(z_outlet, 3),
-            "z_min": _none_round(z_min, 3),
-            "z_max": _none_round(z_max, 3),
-            "z_mean": _none_round(z_mean, 3),
-            "relief_m": _none_round((z_max - z_min) if zv.size else None, 3),
-            "elev_gain": _none_round(h_rel, 3),
-            "cx": round(cx, 3),
-            "cy": round(cy, 3),
-            "lfp_km": round(lfp_km, 4),
-            "lca_km": round(lca_m / 1000.0, 4),
-            "s_avg": _none_round(s_avg, 6),
-            "s_1085": _none_round(s_1085, 6),
-            "s_ea": _none_round(s_ea, 6),
-            "s_mean_pc": _none_round(s_mean_pc, 3),
-            "form_f": _none_round(poly_km2 / lfp_km**2 if shape_ok else None, 4),
-            "circ_r": _none_round(
-                4 * math.pi * poly_km2 / perim_km**2 if perim_km > 0 else None, 4
-            ),
-            "elong_r": _none_round(
-                2 * math.sqrt(poly_km2 / math.pi) / lfp_km if shape_ok else None, 4
-            ),
-            "gravel_kc": _none_round(perim_km / (2 * math.sqrt(math.pi * poly_km2)), 4),
-            "hyps_int": _none_round(
-                (
-                    (z_mean - z_min) / (z_max - z_min)
-                    if zv.size and z_max > z_min
-                    else None
-                ),
-                4,
-            ),
-            "strm_km": round(strm_m / 1000.0, 4),
-            "dd_kmkm2": _none_round(
-                strm_m / 1000.0 / area_km2 if area_km2 > 0 else None, 4
-            ),
-            "lb_km": round(lb_m / 1000.0, 4),
-            "relief_r": _none_round(
-                h_rel / lb_m if h_rel is not None and lb_m > 0 else None, 5
-            ),
-            "melton_r": _none_round(
-                h_rel / 1000.0 / math.sqrt(area_km2) if h_rel is not None else None,
-                4,
-            ),
-            "rugged_n": _none_round(
-                h_rel / 1000.0 * dd if h_rel is not None and dd > 0 else None, 4
-            ),
-            "sinuosity": _none_round(lfp_m / straight_m if straight_m > 0 else None, 4),
-            "strm_ord": int(order.max()) if order.size else 0,
-            "n_strm": int(n_streams),
-            "bif_r": _none_round(bif, 3),
-            "strm_freq": _none_round(n_streams / area_km2 if area_km2 > 0 else None, 4),
-            "lo_km": _none_round(1.0 / (2.0 * dd) if dd > 0 else None, 4),
-            "c_maint": _none_round(1.0 / dd if dd > 0 else None, 4),
-            "tc_kirp_mn": _none_round(tc_kirpich_minutes(lfp_m, s_avg), 2),
-            "tc_usbr_mn": _none_round(tc_usbr_minutes(lfp_km, s_1085), 2),
-            "tc_bw_mn": _none_round(
-                tc_bransby_williams_minutes(lfp_km, area_km2, s_ea), 2
-            ),
-        }
-        if hole_ha > 0:
-            pct = 100.0 * (n_filled - n_cells) / n_filled
-            warn(
-                f"Catchment '{outlet.outlet_id}': filled {hole_ha:.2f} ha of "
-                f"interior holes ({pct:.1f} % of the outline) - cells inside the "
-                "outline that do not drain to the outlet."
-                + (
-                    " That is a large share; the DEM probably needs "
-                    "hydrological conditioning."
-                    if pct >= 1.0
-                    else ""
-                )
-            )
-        if lfp_m > 0 and (s_avg is None or s_avg <= 0):
-            warn(
-                f"Catchment '{outlet.outlet_id}': the longest flow path does not "
-                "fall towards the outlet, so slopes and Tc were not computed."
-            )
-
-        result.catchments.append(
-            CatchmentResult(
-                outlet_id=outlet.outlet_id,
-                kind=outlet.kind,
-                src_fid=outlet.src_fid,
-                attributes=attrs,
-                polygons=polygons,
-                flow_path=flow_path,
-                outlet_xy=(float(px[0]), float(py[0])),
-                hypsometric_curve=hypsometric_curve(zm, cell_area),
-                detail=_report_detail(
-                    geotransform,
-                    r0,
-                    c0,
-                    w,
-                    x_prof,
-                    z_prof,
-                    zv,
-                    slope_grid[mask] * 100.0,
-                    aspect_grid[mask],
-                    slope_grid[mask],
-                    order,
-                    local_next,
-                    orders,
-                    (cx, cy),
-                    (float(px[int(np.argmin(d2))]), float(py[int(np.argmin(d2))])),
-                    stream_threshold_km2,
-                ),
-            )
+        info = dict(meta[k])
+        info["ds_ids"] = ",".join(outlets[p].outlet_id for p in sorted(parents[k]))
+        catchment, window = catchment_from_cells(
+            grid,
+            outlet.outlet_id,
+            outlet.kind,
+            outlet.src_fid,
+            flat_cells,
+            seeds_all[k],
+            mode=mode,
+            keep_out=(label != 0) if mode == "incremental" else None,
+            info=info,
         )
-        crow, ccol = world_to_cell(cx, cy, geotransform)
-        lr, lc = crow - r0, ccol - c0
-        inside_c = bool(0 <= lr < h and 0 <= lc < w and filled[lr, lc])
-        cz = (
-            dem_flat[crow * cols + ccol]
-            if 0 <= crow < rows and 0 <= ccol < cols
-            else np.nan
-        )
-        result.catchments[-1].detail.update(
-            {
-                "stream_links": link_features,
-                "centroid_inside": inside_c,
-                "centroid_z": None if np.isnan(cz) else float(cz),
-            }
-        )
-        windows.append((r0, c0, filled))
+        result.catchments.append(catchment)
+        windows.append(window)
 
     # --- catchment DEM (union of all filled outlines) -----------------------
     report(0.96, "Building catchment DEM")
-    if windows:
-        ur0 = min(w_[0] for w_ in windows)
-        uc0 = min(w_[1] for w_ in windows)
-        ur1 = max(w_[0] + w_[2].shape[0] for w_ in windows)
-        uc1 = max(w_[1] + w_[2].shape[1] for w_ in windows)
-        union = np.zeros((ur1 - ur0, uc1 - uc0), dtype=bool)
-        for r0, c0, filled in windows:
-            fh, fw = filled.shape
-            union[r0 - ur0 : r0 - ur0 + fh, c0 - uc0 : c0 - uc0 + fw] |= filled
-        out_nodata = (
-            float(dem_nodata)
-            if dem_nodata is not None and not np.isnan(dem_nodata)
-            else DEFAULT_DEM_NODATA
-        )
-        zcrop = dem_flat.reshape(rows, cols)[ur0:ur1, uc0:uc1]
-        dem_out = np.where(union & ~np.isnan(zcrop), zcrop, out_nodata)
-        result.dem_array = dem_out.astype(np.float32)
-        result.dem_nodata = out_nodata
-        gt = list(geotransform)
-        gt[0] = geotransform[0] + uc0 * geotransform[1]
-        gt[3] = geotransform[3] + ur0 * geotransform[5]
-        result.dem_geotransform = tuple(gt)
+    catchment_dem(result, windows, dem_flat, (rows, cols), dem_nodata, geotransform)
     report(1.0, "Done")
     return result
 

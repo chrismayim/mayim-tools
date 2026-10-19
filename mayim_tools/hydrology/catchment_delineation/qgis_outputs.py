@@ -23,6 +23,7 @@ from qgis.core import (
     QgsMapRendererCustomPainterJob,
     QgsMapSettings,
     QgsMemoryProviderUtils,
+    QgsPalLayerSettings,
     QgsPointXY,
     QgsProcessingContext,
     QgsProcessingLayerPostProcessorInterface,
@@ -30,7 +31,10 @@ from qgis.core import (
     QgsRectangle,
     QgsRenderContext,
     QgsSingleSymbolRenderer,
+    QgsTextBufferSettings,
+    QgsTextFormat,
     QgsVectorFileWriter,
+    QgsVectorLayerSimpleLabeling,
 )
 from qgis.PyQt.QtCore import QBuffer, QIODevice, QMetaType, QSize
 from qgis.PyQt.QtGui import QColor, QImage, QPainter
@@ -353,6 +357,26 @@ def osm_layer():
     return layer if layer.isValid() else None
 
 
+def label_layer(layer, field: str, size_pt: float = 8.0) -> None:
+    """Labels ``layer`` with ``field`` in Arial, with a white buffer."""
+    from qgis.PyQt.QtGui import QFont
+
+    fmt = QgsTextFormat()
+    fmt.setFont(QFont("Arial"))
+    fmt.setSize(size_pt)
+    fmt.setColor(QColor(0, 0, 0))
+    buf = QgsTextBufferSettings()
+    buf.setEnabled(True)
+    buf.setSize(0.8)
+    buf.setColor(QColor(255, 255, 255))
+    fmt.setBuffer(buf)
+    settings = QgsPalLayerSettings()
+    settings.fieldName = field
+    settings.setFormat(fmt)
+    layer.setLabeling(QgsVectorLayerSimpleLabeling(settings))
+    layer.setLabelsEnabled(True)
+
+
 def make_plan_map(
     crs,
     transform_context,
@@ -363,12 +387,15 @@ def make_plan_map(
     contour_interval: float = 0.0,
     use_osm: bool = True,
     messages: list | None = None,
+    label_catchments: bool = False,
 ):
     """Returns the report's PlanMapFn. ``keys`` maps the roles 'catchments',
     'flowpaths', 'outlets', 'centroids', 'nodes' to MemoryLayers keys (a
     missing role is left off the map). ``contours_for(extent)`` returns
     (minor, major) contour lines [(level, coords)] for an extent, with
-    ``contour_interval`` the minor interval (major = 5 x minor)."""
+    ``contour_interval`` the minor interval (major = 5 x minor).
+    ``label_catchments`` names every catchment on the map (incremental
+    mode); the overview map of all sub-catchments always does."""
     messages = messages if messages is not None else []
     osm = osm_layer() if use_osm else None
     if use_osm and osm is None:
@@ -379,6 +406,7 @@ def make_plan_map(
         "outlets": STYLE_OUTLETS,
         "centroids": STYLE_CENTROIDS,
         "nodes": STYLE_NODES,
+        "streams": STYLE_STREAMS,
     }
     titles = {
         "catchments": "Catchment",
@@ -393,6 +421,8 @@ def make_plan_map(
             continue
         clone = layer.clone()
         apply_style(clone, styled[role])
+        if role != "catchments":
+            clone.setLabelsEnabled(False)  # names go on the catchments
         base[role] = clone
     if study_area is not None:
         study_area.setRenderer(
@@ -414,14 +444,26 @@ def make_plan_map(
         aspect = (extent[3] - extent[1]) / max(extent[2] - extent[0], 1e-9)
         height_px = max(int(round(width_px * aspect)), 1)
 
+        if "catchments" in base:
+            if c.detail.get("label_catchments") or label_catchments:
+                label_layer(base["catchments"], "outlet_id")
+            else:
+                base["catchments"].setLabelsEnabled(False)
+
         # draw order: first in the list is on top
         top_down, legend = [], []
+        overview = bool(c.detail.get("overview"))
         streams = c.detail.get("streams")
         stream_layer = None
-        if streams is not None and len(streams):
+        if overview and "streams" in base:
+            stream_layer = base["streams"]  # the named, ordered network
+        elif streams is not None and len(streams):
             stream_layer = stream_segments_layer(streams, crs)
             apply_style(stream_layer, STYLE_STREAMS)
-        for role in ("centroids", "outlets", "nodes", "flowpaths"):
+        point_roles = ("nodes",) if overview else (
+            "centroids", "outlets", "nodes", "flowpaths"
+        )  # fmt: skip
+        for role in point_roles:
             if role in base:
                 top_down.append(base[role])
         if stream_layer is not None:
@@ -462,10 +504,15 @@ def make_plan_map(
         for layer, label in reversed(contour_sets):  # minor, then major
             legend += legend_entries(layer, label)
         if stream_layer is not None:
-            orders = sorted({int(o) for o in streams[:, 4]})
+            if stream_layer is base.get("streams"):
+                orders = sorted(
+                    {int(f["strahler"]) for f in stream_layer.getFeatures()}
+                )
+            else:
+                orders = sorted({int(o) for o in streams[:, 4]})
             for label, img in legend_entries(stream_layer, "Streams", orders):
                 legend.append((f"Stream {label[0].lower()}{label[1:]}", img))
-        for role in ("flowpaths", "outlets", "centroids"):
+        for role in () if overview else ("flowpaths", "outlets", "centroids"):
             if role in base:
                 legend += legend_entries(base[role], titles[role])
         if "nodes" in base:

@@ -314,7 +314,7 @@ def figure_network_map(result: NetworkResult, style, network_id: str | None = No
             )
         for kind, marker, colour, label in (
             ("outlet", "o", "#FF0000", "Outlet"),
-            (BREAKPOINT_NODE, "D", "#0000FF", "Stream breakpoint"),
+            (BREAKPOINT_NODE, "o", "#DD23FF", "Stream breakpoint"),
         ):
             pts = [n for n in nodes if n["node_type"] == kind]
             if pts:
@@ -432,6 +432,7 @@ def parameter_rows(result: NetworkResult) -> list[list[str]]:
     routing = s["routing"]
     manning = routing.method != "constant"
     max_len = s.get("max_reach_length_m")
+    min_rem = s.get("min_remainder", 0.1)
     return [
         [
             "Stream threshold, A_t (km²)",
@@ -448,7 +449,8 @@ def parameter_rows(result: NetworkResult) -> list[list[str]]:
             "Maximum stream length, L_max (m)",
             fmt(max_len, 0) if max_len else "-",
             "Reaches are split at stream breakpoints every L_max upstream from "
-            "their lower end, where the rest is longer than 0.1 x L_max.",
+            "their lower end, where the rest is longer than "
+            f"{fmt(100 * min_rem, 0)} % of L_max.",
         ],
         [
             "Bifurcation ratio, R_b (-)",
@@ -618,7 +620,8 @@ def write_report_docx(path: str, result: NetworkResult, context: dict) -> list[s
             f"Reaches longer than the maximum stream length ({fmt(max_len, 0)} m) "
             "were split at stream breakpoints: measured upstream from each "
             "reach's lower end, a breakpoint node was placed at every maximum "
-            "length where the rest of the reach was longer than 10 % of the "
+            "length where the rest of the reach was longer than "
+            f"{fmt(100 * s.get('min_remainder', 0.1), 0)} % of the "
             "maximum. The network statistics above were computed before the "
             "split and are not affected."
         )

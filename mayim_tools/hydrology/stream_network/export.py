@@ -69,6 +69,14 @@ REACH_FIELDS = [
         "original reach id when the reach was split at stream breakpoints",
     ),
     ("piece", "i", "-", "piece number of a split reach, 1 = lowest"),
+    (
+        "name",
+        "s",
+        "-",
+        "stream name: stem letter + number upstream from the outlet (A1, A2 "
+        "...); branches add the reach they join plus a letter (A3A1 ...)",
+    ),
+    ("ds_name", "s", "-", "name of the stream this one flows into"),
 ]
 
 NODE_FIELDS = [
@@ -88,6 +96,12 @@ NODE_FIELDS = [
     ("n_inflow", "i", "-", "number of inflowing reaches"),
     ("strahler", "i", "-", "Strahler order of the reach"),
     ("shreve", "i", "-", "Shreve magnitude of the reach"),
+    (
+        "name",
+        "s",
+        "-",
+        "node name: the stream draining to it (outlet A1; top of A3 is A4)",
+    ),
 ]
 
 NETWORK_FIELDS = [

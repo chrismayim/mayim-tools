@@ -505,6 +505,11 @@ def _figure_plan_simple(c: CatchmentResult, style: ChartStyle) -> io.BytesIO:
                 label="Centroid",
                 zorder=6,
             )
+        for x, y, name in c.detail.get("labels") or []:
+            ax.text(
+                x, y, name, ha="center", va="center", fontsize=7, color=CHART_INK,
+                zorder=7,
+            )  # fmt: skip
         ax.set_xlim(extent[0], extent[2])
         ax.set_ylim(extent[1], extent[3])
         ax.set_aspect("equal", adjustable="box")
@@ -724,6 +729,50 @@ def contour_text(minor_interval) -> str:
     return f"{minor_interval:g} m minor, {5 * minor_interval:g} m major"
 
 
+def is_network_mode(catchments) -> bool:
+    return any(c.attributes.get("sub_type") for c in catchments)
+
+
+def network_overview(catchments) -> CatchmentResult:
+    """A stand-in catchment covering every sub-catchment, for the overview
+    layout map."""
+    polygons = [poly for c in catchments for poly in c.polygons]
+    streams = [
+        c.detail["streams"]
+        for c in catchments
+        if c.detail.get("streams") is not None and len(c.detail["streams"])
+    ]
+    root = next(
+        (c for c in catchments if not c.attributes.get("ds_stream")), catchments[0]
+    )
+    return CatchmentResult(
+        outlet_id="all sub-catchments",
+        kind="point",
+        src_fid=-1,
+        attributes={},
+        polygons=polygons,
+        flow_path=[],
+        outlet_xy=root.outlet_xy,
+        hypsometric_curve=[],
+        detail={
+            "streams": np.vstack(streams) if streams else None,
+            "labels": [
+                (c.attributes["cx"], c.attributes["cy"], c.outlet_id)
+                for c in catchments
+            ],
+            "label_catchments": True,
+            "overview": True,
+        },
+    )
+
+
+def link_text(a: dict) -> str:
+    """'drains to node A4 and on into stream A3' for a sub-catchment."""
+    node = a.get("node") or "-"
+    into = a.get("ds_stream")
+    return f"node {node}" + (f", then stream {into}" if into else " (the outlet)")
+
+
 def _tc_range(a):
     vals = [a.get(k) for k in ("tc_kirp_mn", "tc_usbr_mn", "tc_bw_mn")]
     vals = [v for v in vals if v is not None]
@@ -792,31 +841,84 @@ def write_report_docx(
         "geomorphological description and general considerations for "
         "hydrological assessment and modelling."
     )
-    d.caption("Table", "Summary of delineated catchments")
-    d.table(
-        [
-            "Catchment",
-            "Area (km²)",
-            "L (km)",
-            "S_1085 (%)",
-            "S_m (%)",
-            "Order",
-            "Tc range (min)",
-        ],
-        [
+    network_mode = is_network_mode(catchments)
+    if network_mode:
+        n_streams = sum(1 for c in catchments if c.attributes["sub_type"] == "stream")
+        n_heads = n - n_streams
+        total = sum(c.attributes["area_km2"] for c in catchments)
+        d.para(
+            f"In incremental mode the catchment of the final outlet "
+            f"({total:.3f} km²) was divided along the stream network into {n} "
+            f"sub-catchments: {n_streams} draining to a stream"
+            + (
+                " (split along the stream centreline into left bank a and right "
+                "bank b)"
+                if ctx.get("split_banks")
+                else ""
+            )
+            + f" and {n_heads} draining to a channel head. The main stem is A, "
+            "numbered upstream from the outlet (A1, A2 ...); branches are named "
+            "after the stream they flow into plus a letter (A3A1 ...). Each "
+            "sub-catchment is named after its stream, and drains to the node "
+            "and stream given in the table."
+        )
+        d.caption("Table", "Summary of the sub-catchments and their links")
+        d.table(
             [
-                c.outlet_id,
-                format_value(c.attributes["area_km2"], "{:.3f}", 1),
-                format_value(c.attributes["lfp_km"], "{:.3f}", 1),
-                format_value(c.attributes["s_1085"], "{:.2f}", 100),
-                format_value(c.attributes["s_mean_pc"], "{:.1f}", 1),
-                format_value(c.attributes["strm_ord"], "{:d}", None),
-                _tc_range(c.attributes),
-            ]
-            for c in catchments
-        ],
-        widths_cm=[2.8, 2.2, 2.0, 2.2, 2.0, 1.8, 3.5],
-    )
+                "Sub-catchment",
+                "Type",
+                "Drains to",
+                "Area (km²)",
+                "L (km)",
+                "S_1085 (%)",
+                "Tc range (min)",
+            ],
+            [
+                [
+                    c.outlet_id,
+                    c.attributes["sub_type"]
+                    + (
+                        f", {'left' if c.attributes['bank'] == 'a' else 'right'} bank"
+                        if c.attributes.get("bank")
+                        else ""
+                    ),
+                    link_text(c.attributes),
+                    format_value(c.attributes["area_km2"], "{:.3f}", 1),
+                    format_value(c.attributes["lfp_km"], "{:.3f}", 1),
+                    format_value(c.attributes["s_1085"], "{:.2f}", 100),
+                    _tc_range(c.attributes),
+                ]
+                for c in catchments
+            ],
+            widths_cm=[2.4, 2.8, 4.0, 1.9, 1.6, 1.9, 2.4],
+        )
+    else:
+        d.caption("Table", "Summary of delineated catchments")
+    if not network_mode:
+        d.table(
+            [
+                "Catchment",
+                "Area (km²)",
+                "L (km)",
+                "S_1085 (%)",
+                "S_m (%)",
+                "Order",
+                "Tc range (min)",
+            ],
+            [
+                [
+                    c.outlet_id,
+                    format_value(c.attributes["area_km2"], "{:.3f}", 1),
+                    format_value(c.attributes["lfp_km"], "{:.3f}", 1),
+                    format_value(c.attributes["s_1085"], "{:.2f}", 100),
+                    format_value(c.attributes["s_mean_pc"], "{:.1f}", 1),
+                    format_value(c.attributes["strm_ord"], "{:d}", None),
+                    _tc_range(c.attributes),
+                ]
+                for c in catchments
+            ],
+            widths_cm=[2.8, 2.2, 2.0, 2.2, 2.0, 1.8, 3.5],
+        )
 
     # 2. Tool and method -------------------------------------------------------
     d.heading("2. Tool and method", 2)
@@ -841,9 +943,21 @@ def write_report_docx(
             "In total mode each catchment includes everything upstream of its "
             "outlet, so nested catchments overlap."
             if mode == "total"
-            else "In incremental mode each cell belongs only to the first outlet "
-            "it meets, which gives non-overlapping sub-catchments linked to the "
-            "outlet they drain into."
+            else "In incremental mode the outlet is the final outlet of the "
+            "system. The stream network upstream of it was extracted (cells with "
+            "at least the stream threshold area upstream, split into streams at "
+            "every confluence and stream breakpoint), and every cell was assigned "
+            "to the first stream it meets: each stream's sub-catchment drains to "
+            "the node at its lower end, and the area above each channel head "
+            "forms a channel head sub-catchment."
+            + (
+                " Each stream sub-catchment was then split along the stream "
+                "centreline: every cell takes the bank (left a, right b, looking "
+                "downstream) on which its flow path joins the stream, and the "
+                "stream cells go with the left bank."
+                if ctx.get("split_banks")
+                else ""
+            )
         ),
         "The outline was traced along cell edges. Interior holes (cells inside "
         "the outline that do not drain to the outlet) were filled and their "
@@ -858,7 +972,8 @@ def write_report_docx(
             "Stream network reaches longer than the maximum stream length "
             f"({ctx['max_stream_length_m']:g} m) were split at stream "
             "breakpoints, measured upstream from each reach's lower end, where "
-            "the rest of the reach was longer than 10 % of the maximum."
+            "the rest of the reach was longer than "
+            f"{ctx.get('min_final_reach_pct', 10.0):g} % of the maximum."
         ]
         if ctx.get("max_stream_length_m")
         else []
@@ -891,6 +1006,21 @@ def write_report_docx(
             ["Outlet name field", ctx.get("outlets", {}).get("id_field") or "-"],
             ["Pour point snap radius", f"{ctx.get('snap_radius_cells', '-')} cells"],
             ["Catchment mode", "Total" if mode == "total" else "Incremental"],
+            *(
+                [
+                    [
+                        "Minimum final reach length",
+                        f"{ctx.get('min_final_reach_pct', 10.0):g} % of the maximum "
+                        "stream length",
+                    ],
+                    [
+                        "Split along the stream centreline",
+                        "yes" if ctx.get("split_banks") else "no",
+                    ],
+                ]
+                if mode != "total"
+                else []
+            ),
             [
                 "Stream threshold",
                 f"{ctx.get('stream_threshold_km2', '-')} km² upstream area",
@@ -938,10 +1068,101 @@ def write_report_docx(
 
     # 5. Results ---------------------------------------------------------------
     d.heading("5. Catchment results", 2)
-    for i, c in enumerate(catchments, start=1):
+    first = 1
+    if network_mode and include_figures:
+        d.heading("5.1 Overview of the sub-catchments", 3)
+        overview = network_overview(catchments)
+        plan, pm = figure_plan(overview, style, plan_map, messages)
+        on_osm = bool(pm is not None and pm.attribution)
+        osm_used = osm_used or on_osm
+        d.picture(
+            plan,
+            "Layout of the sub-catchments, stream network and nodes"
+            + (" (background: OpenStreetMap)" if on_osm else ""),
+        )
+        first = 2
+    word = "Sub-catchment" if network_mode else "Catchment"
+    detailed = catchments
+    if network_mode and not ctx.get("detail_sections"):
+        # compact: the key parameters of every sub-catchment in two tables
+        d.heading(f"5.{first} Sub-catchment parameters", 3)
+        d.para(
+            "The key parameters of each sub-catchment are listed below; every "
+            "parameter of every sub-catchment is in the catchment parameters "
+            "CSV and the catchment layer. Slopes are along the longest flow "
+            "path L, which for a stream sub-catchment ends at the node it "
+            "drains to."
+        )
+        d.caption("Table", "Sub-catchment geometry and slopes")
+        d.table(
+            [
+                "Sub-catchment",
+                "A (km²)",
+                "L (km)",
+                "L_ca (km)",
+                "z_out (m)",
+                "z_max (m)",
+                "S_avg (%)",
+                "S_1085 (%)",
+                "S_e (%)",
+                "S_m (%)",
+            ],
+            [
+                [
+                    c.outlet_id,
+                    format_value(c.attributes["area_km2"], "{:.4f}", 1),
+                    format_value(c.attributes["lfp_km"], "{:.3f}", 1),
+                    format_value(c.attributes["lca_km"], "{:.3f}", 1),
+                    format_value(c.attributes["z_outlet"], "{:.1f}", 1),
+                    format_value(c.attributes["z_max"], "{:.1f}", 1),
+                    format_value(c.attributes["s_avg"], "{:.2f}", 100),
+                    format_value(c.attributes["s_1085"], "{:.2f}", 100),
+                    format_value(c.attributes["s_ea"], "{:.2f}", 100),
+                    format_value(c.attributes["s_mean_pc"], "{:.1f}", 1),
+                ]
+                for c in catchments
+            ],
+            widths_cm=[2.3, 1.6, 1.4, 1.5, 1.6, 1.6, 1.6, 1.7, 1.5, 1.4],
+        )
+        d.caption("Table", "Sub-catchment times of concentration and centroids")
+        d.table(
+            [
+                "Sub-catchment",
+                "Tc Kirpich (min)",
+                "Tc USBR (min)",
+                "Tc Bransby-Williams (min)",
+                "Centroid X",
+                "Centroid Y",
+            ],
+            [
+                [
+                    c.outlet_id,
+                    format_value(c.attributes["tc_kirp_mn"], "{:.1f}", 1),
+                    format_value(c.attributes["tc_usbr_mn"], "{:.1f}", 1),
+                    format_value(c.attributes["tc_bw_mn"], "{:.1f}", 1),
+                    format_value(c.attributes["cx"], "{:.1f}", 1),
+                    format_value(c.attributes["cy"], "{:.1f}", 1),
+                ]
+                for c in catchments
+            ],
+            widths_cm=[2.5, 2.4, 2.4, 3.2, 3.0, 3.0],
+        )
+        detailed = []
+    for i, c in enumerate(detailed, start=first):
         a = c.attributes
         text = describe_catchment(a, c.detail)
-        d.heading(f"5.{i} Catchment {c.outlet_id}", 3)
+        d.heading(f"5.{i} {word} {c.outlet_id}", 3)
+        if network_mode:
+            d.para(
+                f"{word} {c.outlet_id} is a {a['sub_type']} sub-catchment"
+                + (
+                    f" ({'left' if a['bank'] == 'a' else 'right'} bank of stream "
+                    f"{a['stream']})"
+                    if a.get("bank")
+                    else ""
+                )
+                + f" and drains to {link_text(a)}."
+            )
         d.para(text["overview"])
         d.label("Geomorphological description")
         for paragraph in text["geomorphology"]:
@@ -983,33 +1204,38 @@ def write_report_docx(
             ["Parameter", "Value", "Definition"], relief_rows, widths_cm=TABLE_WIDTHS_CM
         )
 
-        slope_rows = [
-            [s["label"], f"{s['pct']:.1f}"] for s in c.detail.get("slope_classes", [])
-        ]
-        if slope_rows:
-            d.caption(
-                "Table",
-                f"Slope class distribution, catchment {c.outlet_id} "
-                "(FAO 2006 classes)",
-            )
-            d.table(["Slope class", "Area (%)"], slope_rows, widths_cm=[10.0, 6.0])
-        aspect_rows = [
-            [s["label"], f"{s['pct']:.1f}"] for s in c.detail.get("aspect", [])
-        ]
-        if aspect_rows:
-            d.caption("Table", f"Aspect distribution, catchment {c.outlet_id}")
-            d.table(["Aspect", "Area (%)"], aspect_rows, widths_cm=[10.0, 6.0])
-        order_rows = [
-            [str(o["order"]), str(o["n_segments"]), f"{o['length_km']:.3f}"]
-            for o in c.detail.get("stream_orders", [])
-        ]
-        if order_rows:
-            d.caption("Table", f"Stream network by Strahler order, {c.outlet_id}")
-            d.table(
-                ["Order u", "Segments N_u", "Length (km)"],
-                order_rows,
-                widths_cm=[5.0, 5.5, 5.5],
-            )
+        # incremental mode keeps each sub-catchment short: the slope, aspect
+        # and stream-order distributions, hypsometric curve and elevation
+        # histogram are left out (all values are in the CSV outputs)
+        if not network_mode:
+            slope_rows = [
+                [s["label"], f"{s['pct']:.1f}"]
+                for s in c.detail.get("slope_classes", [])
+            ]
+            if slope_rows:
+                d.caption(
+                    "Table",
+                    f"Slope class distribution, catchment {c.outlet_id} "
+                    "(FAO 2006 classes)",
+                )
+                d.table(["Slope class", "Area (%)"], slope_rows, widths_cm=[10.0, 6.0])
+            aspect_rows = [
+                [s["label"], f"{s['pct']:.1f}"] for s in c.detail.get("aspect", [])
+            ]
+            if aspect_rows:
+                d.caption("Table", f"Aspect distribution, catchment {c.outlet_id}")
+                d.table(["Aspect", "Area (%)"], aspect_rows, widths_cm=[10.0, 6.0])
+            order_rows = [
+                [str(o["order"]), str(o["n_segments"]), f"{o['length_km']:.3f}"]
+                for o in c.detail.get("stream_orders", [])
+            ]
+            if order_rows:
+                d.caption("Table", f"Stream network by Strahler order, {c.outlet_id}")
+                d.table(
+                    ["Order u", "Segments N_u", "Length (km)"],
+                    order_rows,
+                    widths_cm=[5.0, 5.5, 5.5],
+                )
 
         if include_figures:
             plan, pm = figure_plan(c, style, plan_map, messages)
@@ -1017,18 +1243,20 @@ def write_report_docx(
             osm_used = osm_used or on_osm
             d.picture(
                 plan,
-                f"Catchment {c.outlet_id}: layout of the catchment, stream "
+                f"{word} {c.outlet_id}: layout of the {word.lower()}, stream "
                 "network, longest flow path, outlet and centroid"
                 + (" (background: OpenStreetMap)" if on_osm else ""),
             )
-            for maker, cap in (
-                (figure_profile, "longitudinal profile of the longest flow path"),
-                (figure_hypsometric, "hypsometric curve"),
-                (figure_histogram, "elevation distribution"),
-            ):
+            makers = [(figure_profile, "longitudinal profile of the longest flow path")]
+            if not network_mode:
+                makers += [
+                    (figure_hypsometric, "hypsometric curve"),
+                    (figure_histogram, "elevation distribution"),
+                ]
+            for maker, cap in makers:
                 stream = maker(c, style)
                 if stream is not None:
-                    d.picture(stream, f"Catchment {c.outlet_id}: {cap}")
+                    d.picture(stream, f"{word} {c.outlet_id}: {cap}")
 
     # 6. Outputs ----------------------------------------------------------------
     outputs = ctx.get("outputs", [])
