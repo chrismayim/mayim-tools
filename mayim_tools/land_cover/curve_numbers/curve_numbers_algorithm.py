@@ -1,6 +1,6 @@
-"""Processing Toolbox algorithm: Curve numbers.
+"""Processing Toolbox algorithm: SCS Curve Numbers.
 
-Land-cover raster + hydrologic soil groups (Hydrologic soil groups output,
+Land-cover raster + hydrologic soil groups (Hydrological Soil Groups (HSG) output,
 or any group raster) + a land-cover-to-CN lookup -> a curve-number raster
 (design, P05, P95, range, soil share of the uncertainty), zone summary with
 runoff-equivalent curve numbers, metadata and a Word report. Thin wrapper -
@@ -82,7 +82,7 @@ class CurveNumbersAlgorithm(QgsProcessingAlgorithm):
         return "curve_numbers"
 
     def displayName(self):
-        return "Curve numbers"
+        return "SCS Curve Numbers"
 
     def group(self):
         return "Land Cover Tools"
@@ -92,7 +92,7 @@ class CurveNumbersAlgorithm(QgsProcessingAlgorithm):
 
     def shortHelpString(self):
         return (
-            f"Curve numbers (version {core.TOOL_VERSION})\n"
+            f"SCS Curve Numbers (version {core.TOOL_VERSION})\n"
             "\n"
             "PURPOSE:\tMaps SCS curve numbers (CN) from a land-cover raster and "
             "hydrologic soil groups through a published curve-number table, with "
@@ -101,7 +101,7 @@ class CurveNumbersAlgorithm(QgsProcessingAlgorithm):
             "INPUTS:\tLand cover: e.g. worldcover_2021_map.tif from Extract: Land "
             "cover (or any class raster with a custom lookup). Soil groups: "
             "hsg_scssa_recommended.tif or hsg_neh630_recommended.tif from "
-            "Hydrologic soil groups; the matching hsg_*_by_ksat.tif beside it is "
+            "Hydrological Soil Groups (HSG); the matching hsg_*_by_ksat.tif beside it is "
             "found automatically and adds the soil uncertainty. Any raster with "
             "codes 1-4 = A-D also works.\n"
             "\n"
@@ -109,7 +109,7 @@ class CurveNumbersAlgorithm(QgsProcessingAlgorithm):
             "Schmidt & Smithers 2004; groups A, A/B, B, B/C, C, C/D, D) or with "
             "TR-55 / NEH 630 (A-D); or the South African National Land Cover "
             "2018 / 2020 / 2022 (73 classes, the same codes; a local raster or "
-            "Extract: Land cover) with the urban curve numbers "
+            "Extract: Land Cover) with the urban curve numbers "
             "calibrated in Tshwane by WRC Report 2747/1/20 (Loots & Smithers 2020) "
             "and SCS-SA Table 5.1 for other classes. Each class has a design "
             "row and a low / high "
@@ -147,7 +147,7 @@ class CurveNumbersAlgorithm(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterRasterLayer(
                 self.HSG,
-                "Hydrologic soil groups raster (hsg_scssa_recommended.tif or "
+                "Hydrological Soil Groups (HSG) raster (hsg_scssa_recommended.tif or "
                 "hsg_neh630_recommended.tif)",
             )
         )
@@ -366,7 +366,7 @@ class CurveNumbersAlgorithm(QgsProcessingAlgorithm):
         outputs = [
             qgis_ui.OutputLayer(
                 path=str(Path(out_dir) / core.OUT_FILE),
-                name="Curve numbers",
+                name="SCS Curve Numbers",
                 main=True,
                 ramp=core.CN_RAMP,
             )

@@ -1,4 +1,4 @@
-"""Word (.docx) report for Regional soil parameterisation (no QGIS), in the
+"""Word (.docx) report for Regional Soil Parameterisation (no QGIS), in the
 Mayim report and figure standard: house text styles (Doc(house_style=True)),
 16.5 cm figures in the chart style, and the default annexure structure
 (summary, tool and method, inputs and settings, parameters and calculations,

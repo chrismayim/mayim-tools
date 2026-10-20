@@ -1,1 +1,1 @@
-"""Extract: Land cover."""
+"""Extract: Land Cover."""

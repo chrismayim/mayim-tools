@@ -21,7 +21,7 @@ UNCERTAINTY
 P16 and P84 bound the 68 % prediction interval (about +/- one standard
 deviation), published at 120 m only. This tool only acquires data: any
 derived measure (relative interval widths, available water capacity,
-depth harmonisation) is computed by Regional soil parameterisation. Like
+depth harmonisation) is computed by Regional Soil Parameterisation. Like
 any marginal quantiles, P16 sand with P16 clay is not a real soil: sample
 and renormalise to propagate.
 """

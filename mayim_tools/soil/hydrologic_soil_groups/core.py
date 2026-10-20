@@ -1,7 +1,7 @@
-"""Hydrologic soil groups from the Regional soil parameterisation outputs.
+"""Hydrological Soil Groups (HSG) from the Regional Soil Parameterisation outputs.
 No QGIS (GDAL for reading and writing only).
 
-Inputs: the Ksat P5 / P50 / P95 maps of Regional soil parameterisation
+Inputs: the Ksat P5 / P50 / P95 maps of Regional Soil Parameterisation
 (found in its raster folder by band description: <project>_Soil_Ksat.tif,
 or rsp_ksat.tif from runs before v0.8.0; three layers), the depth to a water
 impermeable layer (SoilGrids 2017 depth to bedrock, a raster, a constant or
@@ -36,7 +36,7 @@ from mayim_tools.soil._common.grid import TargetGrid
 from . import neh630, scs_sa
 from . import probability as prob_mod
 
-TOOL_NAME = "Hydrologic soil groups"
+TOOL_NAME = "Hydrological Soil Groups (HSG)"
 TOOL_VERSION = "0.3.0"
 
 LAYERS = ("0-30cm", "30-60cm", "60-100cm")
@@ -277,11 +277,11 @@ def _is_regional_metadata(path: str) -> bool:
             head = f.read(4000)
     except (OSError, UnicodeDecodeError):
         return False
-    return head.startswith("# Run") and "Regional soil parameterisation" in head
+    return head.startswith("# Run") and "regional soil parameterisation" in head.lower()
 
 
 def find_regional_files(folder: str) -> dict:
-    """Locates the Regional soil parameterisation outputs in ``folder``:
+    """Locates the Regional Soil Parameterisation outputs in ``folder``:
     {'ksat': path, 'inputs': path or None, 'metadata': path or None,
     'notes': [...]}. The legacy rsp_* names are used when present; otherwise
     the rasters are recognised by their band descriptions (ksat_0-30cm_P50,
@@ -351,7 +351,7 @@ def read_regional(folder: str) -> tuple[TargetGrid, dict, dict, dict]:
     if missing:
         raise SoilDataError(
             f"{name} lacks Ksat bands for: {', '.join(missing)}. Re-run "
-            "Regional soil parameterisation (all three layers are needed)."
+            "Regional Soil Parameterisation (all three layers are needed)."
         )
     texture = {}
     if files["inputs"]:
@@ -644,7 +644,7 @@ def run(
     result.run_time_utc = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
     result.cell_area_km2 = cell_area_km2(grid)
     log_fn(
-        f"Regional soil parameterisation outputs: {grid.width} x {grid.height} "
+        f"Regional Soil Parameterisation outputs: {grid.width} x {grid.height} "
         f"cells at {grid.res:g}" + (f" ({meta['Tool']})" if meta.get("Tool") else "")
     )
     progress_fn(0.1, "Depths")
@@ -680,7 +680,7 @@ def run(
         valid &= result.zone_raster > 0
         if not valid.any():
             raise SoilDataError(
-                "The zones do not overlap the Regional soil parameterisation outputs."
+                "The zones do not overlap the Regional Soil Parameterisation outputs."
             )
     else:
         result.zone_raster = valid.astype(np.int32)
@@ -727,7 +727,7 @@ def run(
     else:
         result.input_notes.append(
             "Harmonised inputs raster (sand_0-30cm_P50 ...) not found: no texture "
-            "check. Tick 'Harmonised inputs' in Regional soil parameterisation."
+            "check. Tick 'Harmonised inputs' in Regional Soil Parameterisation."
         )
 
     progress_fn(0.3, "Classifying")
@@ -1031,7 +1031,7 @@ def _write_metadata(result: RunResult) -> None:
         ["Run time", result.run_time_utc],
         ["Duration (s)", round(result.seconds, 1)],
         ["Methods", "; ".join(METHODS[m] for m in s.methods)],
-        ["Regional soil parameterisation folder", s.regional_folder],
+        ["Regional Soil Parameterisation folder", s.regional_folder],
         ["Grid", f"{g.width} x {g.height} cells at {g.res:g}"],
         ["Cell area (km2)", _fmt(result.cell_area_km2, 6)],
         ["Zones", ", ".join(result.zone_names)],

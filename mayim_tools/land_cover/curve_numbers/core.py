@@ -1,12 +1,12 @@
 """
-Core logic for "Curve numbers" - no QGIS dependency (GDAL for raster I/O).
+Core logic for "SCS Curve Numbers" - no QGIS dependency (GDAL for raster I/O).
 
 Per cell of the land-cover raster:
 
 * design CN = the lookup's design value for the land-cover class and the
   recommended hydrologic soil group (HSG);
 * soil range = the CN at the HSG of the Ksat P5 and P95 (from the
-  Hydrologic soil groups output hsg_<method>_by_ksat.tif, when present);
+  Hydrological Soil Groups (HSG) output hsg_<method>_by_ksat.tif, when present);
 * condition range = the lookup's low and high values (e.g. veld in good
   and poor condition) at the recommended group;
 * the two ranges are treated as independent 90 % ranges and combined by
@@ -41,14 +41,14 @@ from mayim_tools.soil.regional_parameterisation.core import (
 from . import lookup as lk
 from . import tables as tb
 
-TOOL_NAME = "Curve numbers"
+TOOL_NAME = "SCS Curve Numbers"
 TOOL_VERSION = "0.2.0"
 NODATA_OUT = -9999.0
 OUT_FILE = "curve_numbers.tif"
 BLOCK_ROWS = 1024
 PREVIEW_MAX = 1200  # cells along the longer side of the report maps
 
-# HSG codes of the Hydrologic soil groups tool -> column in tables.GROUPS
+# HSG codes of the Hydrological Soil Groups (HSG) tool -> column in tables.GROUPS
 A, B, C, D = 1, 2, 3, 4
 AD, BD, CD = 11, 12, 13
 AB, BC, CD_SA = 21, 22, 23
@@ -363,7 +363,7 @@ def inspect_hsg(path: str, use_ksat_range: bool = True) -> HsgInput:
     h = HsgInput(path, band, method, grid=raster_grid(path))
     if not method:
         h.notes.append(
-            "The soil-group raster is not a Hydrologic soil groups output; codes "
+            "The soil-group raster is not a Hydrological Soil Groups (HSG) output; codes "
             "1-4 = A-D (11-13 = A/D, B/D, C/D; 21-23 = A/B, B/C, C/D) are expected."
         )
     base = os.path.basename(path)
@@ -561,7 +561,8 @@ def run(
                 prev["share"].append(out["share"][rows, ::step])
                 prev["lc"].append(np.where(lc_valid, lc, 0)[rows, ::step])
             progress_fn(
-                0.9 * (bi + 1) / nblocks, f"Curve numbers: block {bi + 1} of {nblocks}"
+                0.9 * (bi + 1) / nblocks,
+                f"SCS Curve Numbers: block {bi + 1} of {nblocks}",
             )
     finally:
         dst.FlushCache()

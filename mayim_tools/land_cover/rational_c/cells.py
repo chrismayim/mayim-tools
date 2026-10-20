@@ -1,5 +1,5 @@
 """
-Per-cell classes for the Rational run-off coefficients (pure NumPy, no
+Per-cell classes for the Run-off Coefficients (SANRAL Deterministic) (pure NumPy, no
 GDAL, no QGIS): land-cover role, slope class, permeability class (with the
 P05 / P95 classes from the soil-group probabilities), vegetation class
 (design, lower, upper) and the urban C2 (design, lower, upper end).
@@ -20,7 +20,7 @@ from . import lookup as lk
 from . import tables as tb
 
 NONE = -1
-# soil-group code (Hydrologic soil groups tool) -> perm2
+# soil-group code (Hydrological Soil Groups (HSG) tool) -> perm2
 HSG_PERM2 = {
     1: 0,  # A  -> very permeable
     2: 2,  # B  -> permeable

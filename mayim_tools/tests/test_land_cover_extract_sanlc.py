@@ -1,4 +1,4 @@
-"""Tests for Extract: Land cover - the SANLC product (local GeoTIFF)."""
+"""Tests for Extract: Land Cover - the SANLC product (local GeoTIFF)."""
 
 from __future__ import annotations
 

@@ -1,5 +1,5 @@
 """
-Core of "Rational run-off coefficients" - no QGIS dependency (GDAL for the
+Core of "Run-off Coefficients (SANRAL Deterministic)" - no QGIS dependency (GDAL for the
 raster I/O, NumPy for the arithmetic).
 
 All inputs are brought onto one analysis grid (default 20 m) in the
@@ -28,7 +28,7 @@ from . import coefficients as co
 from . import lookup as lk
 from . import tables as tb
 
-TOOL_NAME = "Rational run-off coefficients"
+TOOL_NAME = "Run-off Coefficients (SANRAL Deterministic)"
 TOOL_VERSION = "0.1.0"
 NODATA_F = -9999.0
 NODATA_U8 = 255
@@ -333,7 +333,7 @@ def _descriptions(path: str) -> list[str]:
 
 
 def inspect_soil(path: str, use_probability: bool = True) -> SoilInput:
-    """Recommended-group band and method of a Hydrologic soil groups output,
+    """Recommended-group band and method of a Hydrological Soil Groups (HSG) output,
     and the matching group-probability raster (4 bands, A-D, %)."""
     if not os.path.exists(path):
         raise RationalCError(f"Hydrologic soil group raster not found: {path}")
@@ -344,7 +344,7 @@ def inspect_soil(path: str, use_probability: bool = True) -> SoilInput:
     s = SoilInput(path, band, method)
     if not method:
         s.notes.append(
-            "The soil-group raster is not a Hydrologic soil groups output; codes "
+            "The soil-group raster is not a Hydrological Soil Groups (HSG) output; codes "
             "1-4 = A-D (11-13 = A/D, B/D, C/D; 21-23 = A/B, B/C, C/D) are assumed."
         )
     if not use_probability:

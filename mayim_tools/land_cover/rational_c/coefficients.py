@@ -10,7 +10,7 @@ the PMF.
 
 Uncertainty: C1 P05 / P95 combine the soil (permeability) and land-cover
 (vegetation) ranges as independent 90 % ranges by root-sum-square on each
-side, as in the Curve numbers tool; C2 P05 / P95 are the ends of the
+side, as in the SCS Curve Numbers tool; C2 P05 / P95 are the ends of the
 Table 3.7 ranges.
 """
 

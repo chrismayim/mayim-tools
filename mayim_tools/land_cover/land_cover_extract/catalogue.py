@@ -1,4 +1,4 @@
-"""Data facts for "Extract: Land cover" - no QGIS, no GDAL.
+"""Data facts for "Extract: Land Cover" - no QGIS, no GDAL.
 
 ESA WorldCover 10 m (Zanaga et al. 2021, 2022): 2020 (v100) and 2021
 (v200), 3 x 3 degree cloud-optimised GeoTIFF tiles in EPSG:4326 on the

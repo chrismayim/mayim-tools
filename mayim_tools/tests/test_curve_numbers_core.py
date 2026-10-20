@@ -1,4 +1,4 @@
-"""Tests for Curve numbers (no QGIS; the end-to-end test needs GDAL)."""
+"""Tests for SCS Curve Numbers (no QGIS; the end-to-end test needs GDAL)."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Figures for the Curve numbers report, in the publication style of the
+"""Figures for the SCS Curve Numbers report, in the publication style of the
 soil tools (same map frame, fonts and sizes). matplotlib object API only."""
 
 from __future__ import annotations

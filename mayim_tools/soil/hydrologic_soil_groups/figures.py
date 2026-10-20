@@ -1,5 +1,5 @@
-"""Figures for the Hydrologic soil groups report, in the publication style
-of Regional soil parameterisation (same map frame, fonts and sizes).
+"""Figures for the Hydrological Soil Groups (HSG) report, in the publication style
+of Regional Soil Parameterisation (same map frame, fonts and sizes).
 matplotlib object API only (no pyplot)."""
 
 from __future__ import annotations

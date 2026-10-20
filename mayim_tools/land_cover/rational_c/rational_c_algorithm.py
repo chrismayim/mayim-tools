@@ -1,4 +1,4 @@
-"""Processing Toolbox algorithm: Rational run-off coefficients.
+"""Processing Toolbox algorithm: Run-off Coefficients (SANRAL Deterministic).
 
 Catchment polygons + DEM + SANLC land cover + hydrologic soil groups + MAP
 -> the run-off coefficient C of the Rational method per catchment, after
@@ -160,7 +160,7 @@ class RationalCAlgorithm(QgsProcessingAlgorithm):
         return "rational_c"
 
     def displayName(self):
-        return "Rational run-off coefficients"
+        return "Run-off Coefficients (SANRAL Deterministic)"
 
     def group(self):
         return "Land Cover Tools"
@@ -171,7 +171,7 @@ class RationalCAlgorithm(QgsProcessingAlgorithm):
     def shortHelpString(self):
         fields = "\n".join(f"  {k}: {v}" for k, v in ex.FIELDS.items())
         return (
-            f"Rational run-off coefficients (version {core.TOOL_VERSION})\n"
+            f"Run-off Coefficients (SANRAL Deterministic) (version {core.TOOL_VERSION})\n"
             "\n"
             "PURPOSE:\tWorks out the run-off coefficient C of the Rational method "
             "for each catchment with the SANRAL Drainage Manual (2013), Section "
@@ -185,11 +185,11 @@ class RationalCAlgorithm(QgsProcessingAlgorithm):
             "Delineation catchments, ID field outlet_id). DEM. Land cover: SANLC "
             "2018 / 2020 / 2022 (73 classes; 0 = no data). Soil groups: "
             "hsg_neh630_recommended.tif (or hsg_scssa_recommended.tif) from "
-            "Hydrologic soil groups; the matching hsg_*_probability.tif beside it "
+            "Hydrological Soil Groups (HSG); the matching hsg_*_probability.tif beside it "
             "is found automatically and gives the soil range. MAP (mm), or a MAP "
             "field. Optional: Ft class field (steep_impermeable / flat_permeable), "
             "dolomite polygons, site override polygons, soil texture raster "
-            "(Regional soil parameterisation, USDA codes 1-12) for a cross-check.\n"
+            "(Regional Soil Parameterisation, USDA codes 1-12) for a cross-check.\n"
             "\n"
             "METHOD:\tAll rasters go onto a 20 m analysis grid (land cover and "
             "soil by nearest neighbour, DEM averaged). Slope: Horn, %; classes "
@@ -241,7 +241,7 @@ class RationalCAlgorithm(QgsProcessingAlgorithm):
         )
         self.addParameter(
             QgsProcessingParameterRasterLayer(
-                self.HSG, "Hydrologic soil groups (hsg_*_recommended.tif)"
+                self.HSG, "Hydrological soil groups raster (hsg_*_recommended.tif)"
             )
         )
         self.addParameter(
@@ -590,7 +590,7 @@ class RationalCAlgorithm(QgsProcessingAlgorithm):
             raise QgsProcessingException(str(e)) from e
         except Exception as e:
             raise QgsProcessingException(
-                f"Rational run-off coefficients failed: {e}"
+                f"Run-off Coefficients (SANRAL Deterministic) failed: {e}"
             ) from e
 
         outputs = {

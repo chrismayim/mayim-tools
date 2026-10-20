@@ -195,7 +195,7 @@ def test_provider_registers_seven_algorithms() -> None:
             "soil_tools",
         ),
         "regional_soil_parameterisation": (
-            "Regional soil parameterisation",
+            "Regional Soil Parameterisation",
             "Soil Tools",
             "soil_tools",
         ),
@@ -205,22 +205,22 @@ def test_provider_registers_seven_algorithms() -> None:
             "soil_tools",
         ),
         "hydrologic_soil_groups": (
-            "Hydrologic soil groups",
+            "Hydrological Soil Groups (HSG)",
             "Soil Tools",
             "soil_tools",
         ),
         "land_cover_extract": (
-            "Extract: Land cover",
+            "Extract: Land Cover",
             "Land Cover Tools",
             "land_cover_tools",
         ),
         "curve_numbers": (
-            "Curve numbers",
+            "SCS Curve Numbers",
             "Land Cover Tools",
             "land_cover_tools",
         ),
         "rational_c": (
-            "Rational run-off coefficients",
+            "Run-off Coefficients (SANRAL Deterministic)",
             "Land Cover Tools",
             "land_cover_tools",
         ),

@@ -1,4 +1,4 @@
-"""Processing Toolbox algorithm: Regional soil parameterisation.
+"""Processing Toolbox algorithm: Regional Soil Parameterisation.
 
 Reads the output folders of 'Extract: SoilGrids 2.0', 'Extract: OpenLandMap
 Soils' and/or 'Extract: iSDAsoil (Africa)' and writes hydraulic soil
@@ -87,7 +87,7 @@ OUTPUT_SPECS = [
     ),
     OutputSpec(
         core.OUT_INPUTS,
-        "Harmonised inputs (used by Hydrologic soil groups)",
+        "Harmonised inputs (used by Hydrological Soil Groups (HSG))",
         "Soil Harmonised Inputs",
         RASTER,
     ),
@@ -171,7 +171,7 @@ class RegionalSoilParameterisationAlgorithm(QgsProcessingAlgorithm):
         return "regional_soil_parameterisation"
 
     def displayName(self):
-        return "Regional soil parameterisation"
+        return "Regional Soil Parameterisation"
 
     def group(self):
         return "Soil Tools"
@@ -182,7 +182,7 @@ class RegionalSoilParameterisationAlgorithm(QgsProcessingAlgorithm):
     def shortHelpString(self):
         layers = ", ".join(lab for lab, _, _ in TARGET_LAYERS)
         return (
-            f"Regional soil parameterisation (version {core.TOOL_VERSION})\n"
+            f"Regional Soil Parameterisation (version {core.TOOL_VERSION})\n"
             "\n"
             "PURPOSE:\tEstimates hydraulic soil parameters for any area from the "
             "outputs of 'Extract: SoilGrids 2.0', 'Extract: OpenLandMap Soils' "

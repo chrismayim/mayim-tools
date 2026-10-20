@@ -1,4 +1,4 @@
-"""Word report for Hydrologic soil groups (python-docx and matplotlib,
+"""Word report for Hydrological Soil Groups (HSG) (python-docx and matplotlib,
 imported lazily). Numbers without thousands separators."""
 
 from __future__ import annotations
@@ -68,7 +68,7 @@ def _plain_confidence_text() -> str:
         "Which group a soil belongs to depends mainly on how fast water can "
         "move through its least permeable layer (the saturated hydraulic "
         "conductivity, Ksat). That rate is not known exactly. The soil maps "
-        "behind it are estimates, so Regional soil parameterisation gives a "
+        "behind it are estimates, so Regional Soil Parameterisation gives a "
         "likely middle value and a range, from a low value it is unlikely to "
         "fall below to a high value it is unlikely to exceed. This tool works "
         "out how likely each group is, given that range. The recommended group "
@@ -140,7 +140,7 @@ def write_report(result) -> str:
         f"This report assigns hydrologic soil groups to {len(result.zone_names)} "
         f"zone{'s' if len(result.zone_names) != 1 else ''} covering {_f(area, 1)} "
         "km2, using the saturated hydraulic conductivity (Ksat) estimated by "
-        "Regional soil parameterisation"
+        "Regional Soil Parameterisation"
         + (f" ({meta.get('Tool')})" if meta.get("Tool") else "")
         + ", the depth to a water impermeable layer and the depth to the water "
         f"table. Method{'s' if both else ''}: "
@@ -242,7 +242,7 @@ def write_report(result) -> str:
         widths_cm=[7.0, 2.6, 3.4, 3.0],
     )
     d.para(
-        "The Ksat layers of Regional soil parameterisation are 0-30, 30-60 and "
+        "The Ksat layers of Regional Soil Parameterisation are 0-30, 30-60 and "
         "60-100 cm. The 0-50 and 0-60 cm ranges use the 0-30 and 30-60 cm "
         "layers (the 30-60 cm value stands in for 30-50 cm); 0-100 cm uses all "
         "three. A group applies when Ksat exceeds its lower limit."
@@ -449,7 +449,7 @@ def write_report(result) -> str:
     for text in (
         "Ksat comes from pedotransfer functions applied to global soil maps; it "
         "describes the soil matrix, not macropores, crusting or compaction, and "
-        "its uncertainty is often wide (see the Regional soil parameterisation "
+        "its uncertainty is often wide (see the Regional Soil Parameterisation "
         "report).",
         "Bedrock depth is mapped coarsely and without uncertainty; restrictive "
         "layers other than bedrock (duripans, plinthite, dense clay B horizons) "

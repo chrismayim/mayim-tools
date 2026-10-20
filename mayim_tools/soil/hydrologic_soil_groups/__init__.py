@@ -1,1 +1,1 @@
-"""Hydrologic soil groups (Soil Tools)."""
+"""Hydrological Soil Groups (HSG) (Soil Tools)."""

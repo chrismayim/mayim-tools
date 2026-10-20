@@ -1,5 +1,5 @@
 """
-CSV outputs of "Rational run-off coefficients" (no QGIS dependency): the C
+CSV outputs of "Run-off Coefficients (SANRAL Deterministic)" (no QGIS dependency): the C
 CSV read by SANRAL Deterministic Peak Flows, the catchment attribute rows
 (also used for the shapefile) and the sectioned results CSV. CSVs are UTF-8
 with BOM; numbers have no thousands separators.

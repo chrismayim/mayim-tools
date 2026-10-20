@@ -1,5 +1,5 @@
 """
-Land-cover lookup for the Rational run-off coefficients: each class of the
+Land-cover lookup for the Run-off Coefficients (SANRAL Deterministic): each class of the
 South African National Land Cover (SANLC 2018 / 2020 / 2022, same 73 codes)
 gets a role (rural, urban, water or ineffective), a Table 3.7 vegetation
 class (with a lower and upper class for the uncertainty) for rural classes,

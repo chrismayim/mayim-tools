@@ -1,4 +1,4 @@
-"""Tests for Regional soil parameterisation (no QGIS needed).
+"""Tests for Regional Soil Parameterisation (no QGIS needed).
 
 Method checks reproduce published values (Saxton & Rawls 2006, Table 3);
 the end-to-end tests build small synthetic extraction folders with the
@@ -716,7 +716,7 @@ def test_output_standard_paths(tmp_path, folders):
     ct = band.GetColorTable()
     assert ct.GetColorEntry(7)[:3] == (0x46, 0xD1, 0x43)  # SCL as in the QML
     ksat = gdal.Open(str(tmp_path / "ras" / "MC2025_014_Soil_Ksat.tif"))
-    assert ksat.GetMetadataItem("TOOL").startswith("Regional soil parameterisation")
+    assert ksat.GetMetadataItem("TOOL").startswith("Regional Soil Parameterisation")
     raw = (tmp_path / "csv" / "MC2025_014_Soil_Design_Parameters.csv").read_bytes()
     assert raw.startswith(b"\xef\xbb\xbf")
     header = raw.decode("utf-8-sig").splitlines()[0]

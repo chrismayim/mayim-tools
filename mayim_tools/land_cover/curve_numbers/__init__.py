@@ -1,1 +1,1 @@
-"""Curve numbers."""
+"""SCS Curve Numbers."""

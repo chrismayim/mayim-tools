@@ -1,4 +1,4 @@
-"""Tests for Extract: Land cover (ESA WorldCover) - no QGIS, no network."""
+"""Tests for Extract: Land Cover (ESA WorldCover) - no QGIS, no network."""
 
 from __future__ import annotations
 

@@ -1,5 +1,5 @@
 """QGIS layout maps of the USDA texture class per depth layer for the
-Regional soil parameterisation report: the texture raster in the Mayim layer
+Regional Soil Parameterisation report: the texture raster in the Mayim layer
 style (styles/SOIL_USDA_classification.qml) at 70 % transparency over the
 OpenStreetMap background, with the optional site and catchment boundary
 layers drawn above it in their project symbology (the zones as a dashed

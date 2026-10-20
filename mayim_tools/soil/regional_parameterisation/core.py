@@ -1,4 +1,4 @@
-"""Regional soil parameterisation - orchestration (no QGIS).
+"""Regional Soil Parameterisation - orchestration (no QGIS).
 
 Stages (see the design note):
     1. harmonise  - inputs.py: read each extraction folder, select bands by
@@ -57,7 +57,7 @@ from .uncertainty import (
     run_layer,
 )
 
-TOOL_NAME = "Regional soil parameterisation"
+TOOL_NAME = "Regional Soil Parameterisation"
 TOOL_VERSION = "0.8.1"
 CHUNK_CELLS = 1024
 MAX_CELLS_DEFAULT = 2_000_000  # ~1800 km2 at 30 m; about 6 GB of memory

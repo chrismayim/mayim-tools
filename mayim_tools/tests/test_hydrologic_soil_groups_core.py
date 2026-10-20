@@ -1,4 +1,4 @@
-"""Tests for Hydrologic soil groups (no QGIS)."""
+"""Tests for Hydrological Soil Groups (HSG) (no QGIS)."""
 
 from __future__ import annotations
 

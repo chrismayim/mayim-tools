@@ -1,4 +1,4 @@
-"""QGIS layout maps for the Rational run-off coefficients report: one raster
+"""QGIS layout maps for the Run-off Coefficients (SANRAL Deterministic) report: one raster
 (role, slope, permeability, vegetation, C1 or C 1:50) in its Mayim style
 (styles/RC_*.qml, 70 % opaque) over the OpenStreetMap background, with the
 catchment boundaries (black outline, labelled with the catchment ID) above

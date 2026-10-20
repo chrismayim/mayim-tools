@@ -1,4 +1,4 @@
-"""Figures for the Regional soil parameterisation report, in the Mayim chart
+"""Figures for the Regional Soil Parameterisation report, in the Mayim chart
 house style (report and figure standard, section 2; _common/report_figures).
 
 No QGIS. matplotlib's object API only (no pyplot), which is safe on QGIS's

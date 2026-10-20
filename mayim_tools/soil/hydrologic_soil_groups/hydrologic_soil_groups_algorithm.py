@@ -1,6 +1,6 @@
-"""Processing Toolbox algorithm: Hydrologic soil groups.
+"""Processing Toolbox algorithm: Hydrological Soil Groups (HSG).
 
-Reads the output folder of 'Regional soil parameterisation' (Ksat P5 / P50
+Reads the output folder of 'Regional Soil Parameterisation' (Ksat P5 / P50
 / P95 per layer) and writes hydrologic soil groups by USDA-NRCS NEH 630
 Chapter 7 (2009) and / or the SCS-SA groups (Schulze, Schmidt & Smithers,
 2004), with group probabilities, a recommended group and its confidence,
@@ -82,7 +82,7 @@ class HydrologicSoilGroupsAlgorithm(QgsProcessingAlgorithm):
         return "hydrologic_soil_groups"
 
     def displayName(self):
-        return "Hydrologic soil groups"
+        return "Hydrological Soil Groups (HSG)"
 
     def group(self):
         return "Soil Tools"
@@ -92,11 +92,11 @@ class HydrologicSoilGroupsAlgorithm(QgsProcessingAlgorithm):
 
     def shortHelpString(self):
         return (
-            f"Hydrologic soil groups (version {core.TOOL_VERSION})\n"
+            f"Hydrological Soil Groups (HSG), version {core.TOOL_VERSION}\n"
             "\n"
             "PURPOSE:\tAssigns hydrologic soil groups for curve-number runoff "
             "methods from the saturated hydraulic conductivity (Ksat) of "
-            "'Regional soil parameterisation', the depth to a water impermeable "
+            "'Regional Soil Parameterisation', the depth to a water impermeable "
             "layer and the depth to the water table - with the probability of "
             "each group, a recommended group and its confidence. Curve numbers "
             "are a separate step.\n"
@@ -126,7 +126,7 @@ class HydrologicSoilGroupsAlgorithm(QgsProcessingAlgorithm):
             "60-80 %, Low < 60 %). The groups at the Ksat P5 (more runoff) and "
             "P95 (less runoff) are written too.\n"
             "\n"
-            "INPUTS:\tRegional soil parameterisation raster output folder. The "
+            "INPUTS:\tRegional Soil Parameterisation raster output folder. The "
             "Ksat raster (e.g. <project>_Soil_Ksat.tif, or rsp_ksat.tif from "
             "older runs) and the harmonised inputs raster (for an NEH 630 texture "
             "cross-check) are found by their band descriptions; when several runs "
@@ -154,7 +154,7 @@ class HydrologicSoilGroupsAlgorithm(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterFile(
                 self.REGIONAL_FOLDER,
-                "Regional soil parameterisation raster folder",
+                "Regional Soil Parameterisation raster folder",
                 behavior=_folder_behavior(),
             )
         )

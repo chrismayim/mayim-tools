@@ -27,7 +27,7 @@ DATA SOURCE
   same properties, which - unlike 2.0 - also cover urban and bare
   areas. Its depths are points (0, 5, 15, 30, 60, 100, 200 cm); the
   tool stores them as published (one band per depth point); conversion
-  to intervals is done by Regional soil parameterisation.
+  to intervals is done by Regional Soil Parameterisation.
 
 UNITS
 SoilGrids stores integers. Every value written by this tool has
@@ -40,7 +40,7 @@ UNCERTAINTY
 Each variable can be extracted as the mean and the 5 %, 50 % and 95 %
 prediction quantiles (SoilGrids' own 90 % prediction interval). This tool
 only acquires data: derived measures (e.g. relative interval widths) are
-computed by Regional soil parameterisation, not here. ISRIC's own
+computed by Regional Soil Parameterisation, not here. ISRIC's own
 "uncertainty" layer is not downloaded (it can be recomputed from the
 quantiles). Texture quantiles are MARGINAL: Q0.05 sand + Q0.05 clay is not a real
 soil. Uncertainty propagation must sample and renormalise the
@@ -1182,7 +1182,7 @@ def build_metadata(
                 "its native depth POINTS (0, 5, 15, 30, 60, 100, 200 cm; only "
                 "the points bounding the selected intervals are read), one band "
                 "per point, tagged [SG2017]. Conversion to intervals is done by "
-                "Regional soil parameterisation, not here. Use to fill cells "
+                "Regional Soil Parameterisation, not here. Use to fill cells "
                 "masked in 2.0, with a wider uncertainty than 2.0.",
             ]
         )

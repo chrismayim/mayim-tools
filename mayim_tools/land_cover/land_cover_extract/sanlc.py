@@ -1,4 +1,4 @@
-"""South African National Land Cover (SANLC) for "Extract: Land cover" -
+"""South African National Land Cover (SANLC) for "Extract: Land Cover" -
 the class legend, editions and the extraction from a local GeoTIFF. No QGIS.
 
 The SANLC is published by the Department of Forestry, Fisheries and the

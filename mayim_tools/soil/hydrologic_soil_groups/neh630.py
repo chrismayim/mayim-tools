@@ -52,7 +52,7 @@ GROUP_COLOUR = {
 SINGLE = (A, B, C, D)
 DUAL_OF = {A: AD, B: BD, C: CD, D: D}
 
-# Layers of the Regional soil parameterisation outputs used for each
+# Layers of the Regional Soil Parameterisation outputs used for each
 # depth range. The 30-60 cm layer stands in for 30-50 cm (0-50 cm range):
 # its Ksat is the average over 30-60 cm.
 DEPTH_RANGE_LAYERS = {

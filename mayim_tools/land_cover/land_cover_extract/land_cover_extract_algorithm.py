@@ -1,4 +1,4 @@
-"""Processing Toolbox algorithm: Extract: Land cover.
+"""Processing Toolbox algorithm: Extract: Land Cover.
 
 Area mode (default): an extent or polygon layer in, one class GeoTIFF per
 year out (Byte, embedded colour table and class names). Point mode: a
@@ -140,7 +140,7 @@ class LandCoverExtractAlgorithm(QgsProcessingAlgorithm):
         return "land_cover_extract"
 
     def displayName(self):
-        return "Extract: Land cover"
+        return "Extract: Land Cover"
 
     def group(self):
         return "Land Cover Tools"
@@ -150,7 +150,7 @@ class LandCoverExtractAlgorithm(QgsProcessingAlgorithm):
 
     def shortHelpString(self):
         return (
-            f"Extract: Land cover (version {core.TOOL_VERSION})\n"
+            f"Extract: Land Cover (version {core.TOOL_VERSION})\n"
             "\n"
             "PURPOSE:\tLand cover for an area or for points, as the land-use "
             "input for curve numbers, run-off coefficients and other runoff "
@@ -524,7 +524,7 @@ class LandCoverExtractAlgorithm(QgsProcessingAlgorithm):
         from mayim_tools.soil._common.gdal_io import gdal_version
 
         gdal_ver = gdal_version()
-        tool = f"Extract: Land cover (mayim_tools) v{core.TOOL_VERSION}"
+        tool = f"Extract: Land Cover (mayim_tools) v{core.TOOL_VERSION}"
         feedback.pushInfo(f"GDAL {gdal_ver}; SANLC {year} from {path}")
         try:
             if mode_idx == 0:

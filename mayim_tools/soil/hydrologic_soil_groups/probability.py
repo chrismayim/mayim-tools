@@ -1,5 +1,5 @@
 """Probability of each hydrologic soil group from the Ksat P5 / P50 / P95
-of the Regional soil parameterisation. No QGIS, no GDAL.
+of the Regional Soil Parameterisation. No QGIS, no GDAL.
 
 Per cell, ln(Ksat) is described by a two-piece normal distribution with
 its median at ln(P50): sigma_lo = (ln P50 - ln P5) / 1.645 below the

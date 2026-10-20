@@ -1,4 +1,4 @@
-"""Rational run-off coefficients: tables, per-cell classes, the catchment
+"""Run-off Coefficients (SANRAL Deterministic): tables, per-cell classes, the catchment
 arithmetic (SANRAL Application Guide example 3.1) and a synthetic GDAL run."""
 
 from __future__ import annotations

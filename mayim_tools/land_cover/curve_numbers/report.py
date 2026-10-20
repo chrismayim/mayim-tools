@@ -1,4 +1,4 @@
-"""Word report for Curve numbers (python-docx and matplotlib, imported
+"""Word report for SCS Curve Numbers (python-docx and matplotlib, imported
 lazily). Numbers without thousands separators; guideline-neutral wording."""
 
 from __future__ import annotations

@@ -109,11 +109,11 @@ def plan_selection(variables, depths, statistics) -> Selection:
         sel.warnings.append(
             "ecec is the EFFECTIVE cation exchange capacity (at soil pH), not the "
             "CEC at pH 7 that some pedotransfer functions (Toth et al. 2015) use. "
-            "Regional soil parameterisation does not use it."
+            "Regional Soil Parameterisation does not use it."
         )
     if "sd" not in stats:
         sel.warnings.append(
-            "Standard deviations not selected: Regional soil parameterisation will "
+            "Standard deviations not selected: Regional Soil Parameterisation will "
             "have no input uncertainty for iSDAsoil."
         )
     return sel

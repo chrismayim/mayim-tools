@@ -1,5 +1,5 @@
 """
-Core logic for "Extract: Land cover" - no QGIS dependency.
+Core logic for "Extract: Land Cover" - no QGIS dependency.
 
 ESA WorldCover 10 m tiles are read straight from the public cloud-optimised
 GeoTIFFs with QGIS's own GDAL (/vsicurl/, with an unsigned /vsis3/
@@ -527,7 +527,7 @@ def build_metadata(
 ):
     now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
     run_rows = [
-        ["Tool", f"Extract: Land cover (mayim_tools) v{TOOL_VERSION}"],
+        ["Tool", f"Extract: Land Cover (mayim_tools) v{TOOL_VERSION}"],
         ["Run time", now],
         ["Duration (s)", round(result.seconds, 1)],
         ["Mode", result.mode],

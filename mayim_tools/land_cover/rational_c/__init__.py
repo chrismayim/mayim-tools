@@ -1,1 +1,1 @@
-"""Rational run-off coefficients (SANRAL Drainage Manual Table 3.7)."""
+"""Run-off Coefficients (SANRAL Deterministic) (SANRAL Drainage Manual Table 3.7)."""

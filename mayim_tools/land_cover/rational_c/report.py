@@ -1,5 +1,5 @@
 """
-Word report for "Rational run-off coefficients", in the Mayim report
+Word report for "Run-off Coefficients (SANRAL Deterministic)", in the Mayim report
 standard (title page, summary, method, inputs, parameters, results,
 outputs, notes, references). python-docx and matplotlib are imported
 lazily. Layout maps are rendered by QGIS through ``map_fn`` when given
@@ -478,7 +478,7 @@ def write_report(
         "(e.g. the tree / bush / grass / bare sub-classes of urban land) are less "
         "certain. The land cover and soil rasters are resampled by nearest "
         "neighbour; small features below the analysis cell may be missed.",
-        "Hydrologic soil groups are mapped to the permeability classes by their "
+        "Hydrological Soil Groups (HSG) are mapped to the permeability classes by their "
         "infiltration rates; the Drainage Manual describes the classes by texture "
         "(p. 3-19), so the texture cross-check is given where a texture raster is "
         "available. SCS-SA groups use lower Ksat limits than NEH 630 and so "
