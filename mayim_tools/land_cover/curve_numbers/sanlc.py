@@ -1,4 +1,4 @@
-"""SANLC 2018 / 2020 (73 classes) to curve-number lookup.
+"""SANLC 2018 / 2020 / 2022 (73 classes) to curve-number lookup.
 
 Built from Chris's composite table (October 2026), which takes the WRC
 Report 2747/1/20 values (Loots & Smithers 2020, Table 9.7, DEA 2013/14 land
@@ -27,8 +27,8 @@ composite's value looked low for the cover, the alternative is the high
 end (annual crops, Karoo and other low shrubland, sugarcane, clear-felled
 plantations).
 
-Colours are the published SANLC 2018 legend colours. The 2022 legend has
-not been checked against these codes.
+Colours are the published SANLC 2018 legend colours. SANLC 2022 uses the
+same 73 codes (checked against the 2022 attribute table, October 2026).
 """
 
 from __future__ import annotations

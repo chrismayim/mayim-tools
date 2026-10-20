@@ -1755,7 +1755,7 @@ DEFAULT_LOOKUPS = {
 from .sanlc import SANLC_2020, SANLC_SOURCE  # noqa: E402
 
 DEFAULT_LOOKUPS["sanlc_2020"] = (
-    "SANLC 2018 / 2020 (73 classes) - WRC 2747/1/20 and SCS-SA Table 5.1",
+    "SANLC 2018 / 2020 / 2022 (73 classes) - WRC 2747/1/20 and SCS-SA Table 5.1",
     "scs_sa",
     SANLC_2020,
     SANLC_SOURCE,

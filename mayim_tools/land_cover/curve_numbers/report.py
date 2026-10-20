@@ -290,7 +290,7 @@ def write_report(result) -> str:
         )
         if result.settings.lookup_key.startswith("sanlc"):
             d.para(
-                "For the South African National Land Cover (SANLC 2018 / 2020, 73 "
+                "For the South African National Land Cover (SANLC 2018 / 2020 / 2022, 73 "
                 "classes) the lookup is a composite. Urban, plantation and natural "
                 "vegetation classes take the preliminary calibrated curve numbers "
                 "of WRC Report 2747/1/20 (Loots & Smithers, 2020, Table 9.7), which "

@@ -38,7 +38,7 @@ LOOKUP_OPTIONS = [
     ("worldcover_tr55", "ESA WorldCover - TR-55 / NEH 630"),
     (
         "sanlc_2020",
-        "SANLC 2018 / 2020 (73 classes) - WRC 2747/1/20 + SCS-SA (South Africa)",
+        "SANLC 2018 / 2020 / 2022 (73 classes) - WRC 2747/1/20 + SCS-SA (South Africa)",
     ),
     ("custom", "Custom lookup CSV (below)"),
 ]
@@ -108,10 +108,10 @@ class CurveNumbersAlgorithm(QgsProcessingAlgorithm):
             "LOOKUP:\tBuilt in: ESA WorldCover with SCS-SA Table 5.1 (Schulze, "
             "Schmidt & Smithers 2004; groups A, A/B, B, B/C, C, C/D, D) or with "
             "TR-55 / NEH 630 (A-D); or the South African National Land Cover "
-            "2018 / 2020 (73 classes, a local raster) with the urban curve numbers "
+            "2018 / 2020 / 2022 (73 classes, the same codes; a local raster or "
+            "Extract: Land cover) with the urban curve numbers "
             "calibrated in Tshwane by WRC Report 2747/1/20 (Loots & Smithers 2020) "
-            "and SCS-SA Table 5.1 for other classes. Check the SANLC 2022 legend "
-            "matches the 2018 / 2020 codes before using it. Each class has a design "
+            "and SCS-SA Table 5.1 for other classes. Each class has a design "
             "row and a low / high "
             "row (e.g. veld fair; good and poor). Every run writes "
             "cn_lookup_used.csv: edit it and choose 'Custom lookup CSV' to use your "
