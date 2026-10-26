@@ -1,4 +1,11 @@
-"""CSV table exporters for Stage 1 results."""
+"""CSV table exporters for Precipitation data to DDF.
+
+Mayim output standard: every CSV is UTF-8 with a byte-order mark (so Excel
+opens it cleanly). The diagnostic CSVs, whose headings are abbreviated,
+start with a column key as '# column: meaning' lines (read them with pandas
+``comment='#'``). The recommended DDF CSV has no key: its headings are
+written out in full and other tools read it as a DDF input.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +15,77 @@ from pathlib import Path
 import numpy as np
 
 from .schemas import FrequencyAnalysisResult
+
+CSV_ENCODING = "utf-8-sig"
+KEY_PREFIX = "# "
+
+PARAMETERS_KEY = {
+    "Duration": "duration",
+    "Distribution": "distribution fitted (GEV, GUMBEL, GLO or LP3)",
+    "Method": "fitting method",
+    "Recommended": "True for the distribution closest on the L-moment ratio diagram",
+    "NYears": "number of years in the annual maximum series",
+    "LocationXi": "location parameter xi (mm)",
+    "ScaleAlpha": "scale parameter alpha (mm)",
+    "ShapeKappa": "shape parameter kappa (-; Hosking sign convention)",
+    "LP3_Log10Mean": "LP3 only: mean of log10 of the annual maxima",
+    "LP3_Log10SD": "LP3 only: standard deviation of log10 of the annual maxima",
+    "LP3_Log10Skew": "LP3 only: skewness of log10 of the annual maxima",
+    "L1": "first sample L-moment, the mean (mm)",
+    "L2": "second sample L-moment (mm)",
+    "L3": "third sample L-moment (mm)",
+    "T3_Lskewness": "sample L-skewness tau3 = L3/L2 (-)",
+    "T4_Lkurtosis": "sample L-kurtosis tau4 (-)",
+}
+QUANTILES_KEY = {
+    "Duration": "duration",
+    "Distribution": "distribution fitted (GEV, GUMBEL, GLO or LP3)",
+    "Recommended": "True for the distribution closest on the L-moment ratio diagram",
+    "AEP_<p>_RT<T>yr ...": (
+        "design depth (mm) at annual exceedance probability p, return period "
+        "T = 1/p years, from that duration's own fit"
+    ),
+}
+RECOMMENDATIONS_KEY = {
+    "Duration": "duration",
+    "Tau3_sample": "sample L-skewness tau3 (-)",
+    "Tau4_sample": "sample L-kurtosis tau4 (-)",
+    "Recommended": "distribution closest to the sample point on the ratio diagram",
+    "Rank<n>_Distribution ...": "n-th closest distribution",
+    "Rank<n>_Tau4Distance ...": (
+        "its distance from the sample point on the ratio diagram (-)"
+    ),
+}
+AMS_KEY = {
+    "Duration": "duration",
+    "Year": "calendar year (after any time-zone offset)",
+    "AnnualMaxMM": (
+        "annual maximum depth for that duration (mm; fixed-interval correction "
+        "included when it is on)"
+    ),
+}
+YEAR_COMPLETENESS_KEY = {
+    "Year": "calendar year (after any time-zone offset)",
+    "NExpectedReadings": "readings expected at the native time step",
+    "NValidReadings": "valid (not missing) readings",
+    "Completeness": "valid / expected readings (0-1)",
+    "Included": "True if the year is used in the annual maximum series",
+    "ExclusionReason": "why the year was left out",
+}
+
+
+def _open(path):
+    return open(path, "w", newline="", encoding=CSV_ENCODING)
+
+
+def _write_key(f, key: dict, columns) -> None:
+    """'# Column key' then '# column: meaning' for the columns present (and
+    for pattern entries ending in '...')."""
+    columns = set(columns)
+    f.write(f"{KEY_PREFIX}Column key\n")
+    for col, meaning in key.items():
+        if col in columns or col.endswith("..."):
+            f.write(f"{KEY_PREFIX}{col}: {meaning}\n")
 
 
 def write_parameters(result: FrequencyAnalysisResult, path: str | Path) -> None:
@@ -20,7 +98,8 @@ def write_parameters(result: FrequencyAnalysisResult, path: str | Path) -> None:
         r.duration_label: r.recommended_distribution for r in result.recommendations
     }
 
-    with open(path, "w", newline="") as f:
+    with _open(path) as f:
+        _write_key(f, PARAMETERS_KEY, PARAMETERS_KEY)
         w = csv.writer(f)
         w.writerow(
             [
@@ -85,11 +164,12 @@ def write_quantiles(result: FrequencyAnalysisResult, path: str | Path) -> None:
         for q in result.quantiles
     }
 
-    with open(path, "w", newline="") as f:
+    with _open(path) as f:
         w = csv.writer(f)
         header = ["Duration", "Distribution", "Recommended"] + [
             f"AEP_{aep}_RT{round(1/aep,1)}yr" for aep in aeps
         ]
+        _write_key(f, QUANTILES_KEY, header)
         w.writerow(header)
         for dur, dist in rows_keys:
             is_recommended = recommended_lookup.get(dur) == dist
@@ -104,7 +184,7 @@ def write_recommendations(result: FrequencyAnalysisResult, path: str | Path) -> 
     """L-moment ratio diagram diagnostic: per duration, the sample's
     actual (tau3, tau4) point, each candidate distribution's distance
     from it (best fit first), and the recommended distribution."""
-    with open(path, "w", newline="") as f:
+    with _open(path) as f:
         w = csv.writer(f)
         if not result.recommendations:
             w.writerow(["No recommendations computed - see warnings."])
@@ -113,6 +193,7 @@ def write_recommendations(result: FrequencyAnalysisResult, path: str | Path) -> 
         header = ["Duration", "Tau3_sample", "Tau4_sample", "Recommended"]
         for i in range(1, max_candidates + 1):
             header += [f"Rank{i}_Distribution", f"Rank{i}_Tau4Distance"]
+        _write_key(f, RECOMMENDATIONS_KEY, header)
         w.writerow(header)
         for r in result.recommendations:
             row = [
@@ -151,7 +232,7 @@ def write_recommended_ddf(result: FrequencyAnalysisResult, path: str | Path) -> 
     def fmt(v):
         return round(float(v), 3) if np.isfinite(v) else ""
 
-    with open(path, "w", newline="") as f:
+    with _open(path) as f:
         w = csv.writer(f)
         header = ["Duration", "Distribution"]
         for t in rps:
@@ -205,7 +286,7 @@ def write_per_duration_best_fit_ddf(
         for q in result.quantiles
     }
 
-    with open(path, "w", newline="") as f:
+    with _open(path) as f:
         w = csv.writer(f)
         if not durations:
             w.writerow(["No recommended distributions available - see warnings."])
@@ -226,9 +307,10 @@ def write_per_duration_best_fit_ddf(
 def write_ams(result: FrequencyAnalysisResult, path: str | Path) -> None:
     """Stage 1.1: the annual maximum series itself, long format - one
     row per duration per year (useful for auditing/plotting)."""
-    with open(path, "w", newline="") as f:
+    with _open(path) as f:
+        _write_key(f, AMS_KEY, AMS_KEY)
         w = csv.writer(f)
-        w.writerow(["Duration", "Year", "AnnualMaxMM"])
+        w.writerow(list(AMS_KEY))
         for ds in result.duration_series:
             for year, value in zip(ds.years, ds.values_mm, strict=False):
                 w.writerow([ds.duration_label, year, round(value, 3)])
@@ -241,7 +323,8 @@ def write_year_completeness(result: FrequencyAnalysisResult, path: str | Path) -
     year_records = result.duration_series[
         0
     ].year_records  # identical across all durations by construction
-    with open(path, "w", newline="") as f:
+    with _open(path) as f:
+        _write_key(f, YEAR_COMPLETENESS_KEY, YEAR_COMPLETENESS_KEY)
         w = csv.writer(f)
         w.writerow(
             [
@@ -267,7 +350,7 @@ def write_year_completeness(result: FrequencyAnalysisResult, path: str | Path) -
 
 
 def write_metadata(result: FrequencyAnalysisResult, path: str | Path) -> None:
-    with open(path, "w", newline="") as f:
+    with _open(path) as f:
         w = csv.writer(f)
         w.writerow(["Key", "Value"])
         for k, v in result.metadata.items():

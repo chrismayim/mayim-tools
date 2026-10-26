@@ -1,10 +1,22 @@
-"""CSV export for ERA5/ERA5-Land point extraction results."""
+"""CSV export for ERA5/ERA5-Land point extraction results (UTF-8 with BOM,
+Mayim output standard)."""
 
 from __future__ import annotations
 
 import csv
 import math
 from pathlib import Path
+
+# The audit CSV starts with this column key ('#' lines; read with pandas
+# comment='#'). The main CSV has none: the rainfall tools read it directly.
+ANOMALIES_KEY = {
+    "Site": "site name",
+    "ReferenceTime": "forecast reference (initialisation) time of the GRIB field",
+    "StepHours": "forecast step (h) after the reference time",
+    "ValidTime": "time the value is valid for",
+    "AccumulatedMM": "accumulated precipitation since the reference time (mm)",
+    "PrecipitationMMRaw": "increment after de-accumulation, before clipping (mm)",
+}
 
 
 def write_era5_csv(results_by_site: dict, path: str | Path) -> tuple:
@@ -28,7 +40,7 @@ def write_era5_csv(results_by_site: dict, path: str | Path) -> tuple:
     is exactly what happened before this fix."""
     n_rows = 0
     n_missing = 0
-    with open(path, "w", newline="") as f:
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f)
         w.writerow(["Site", "ValidTime", "PrecipitationMM"])
         for site, result in results_by_site.items():
@@ -53,7 +65,10 @@ def write_era5_anomalies(results_by_site: dict, path: str | Path) -> int:
     the number of rows written (0 if there were no anomalies for any
     site)."""
     n_rows = 0
-    with open(path, "w", newline="") as f:
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+        f.write("# Column key\n")
+        for col, meaning in ANOMALIES_KEY.items():
+            f.write(f"# {col}: {meaning}\n")
         w = csv.writer(f)
         w.writerow(
             [

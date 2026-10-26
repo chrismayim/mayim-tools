@@ -13,33 +13,35 @@ from pathlib import Path
 
 import pandas as pd
 from qgis.core import (
-    Qgis,
     QgsCoordinateReferenceSystem,
     QgsCoordinateTransform,
-    QgsFeature,
-    QgsFeatureSink,
-    QgsField,
-    QgsFields,
-    QgsGeometry,
-    QgsPointXY,
     QgsProcessing,
     QgsProcessingAlgorithm,
     QgsProcessingContext,
     QgsProcessingException,
     QgsProcessingFeedback,
-    QgsProcessingLayerPostProcessorInterface,
     QgsProcessingParameterBoolean,
     QgsProcessingParameterEnum,
-    QgsProcessingParameterFeatureSink,
     QgsProcessingParameterFeatureSource,
     QgsProcessingParameterField,
-    QgsProcessingParameterFileDestination,
     QgsProcessingParameterNumber,
     QgsProcessingParameterPoint,
     QgsProcessingParameterString,
 )
-from qgis.PyQt.QtCore import QMetaType
 from qgis.PyQt.QtGui import QIcon
+
+from mayim_tools.rainfall._common.extract_outputs import (
+    OUTPUT_CSV,
+    OUTPUT_MATCHED_POINTS,
+    OUTPUT_QUERY_POINTS,
+    ExtractOutputs,
+    add_output_parameters,
+    extract_specs,
+    files_help,
+    matched_points_layer,
+    poi_layer,
+    write_dataframe_csv,
+)
 
 from .core import (
     DEFAULT_GIOVANNI_VARIABLE,
@@ -55,19 +57,7 @@ WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
 
 STYLES_DIR = Path(__file__).resolve().parent / "styles"
 
-
-class _StylePostProcessor(QgsProcessingLayerPostProcessorInterface):
-    """Loads a saved QML style (symbology + labeling) onto an output
-    layer once Processing has finished loading it into the project -
-    same pattern as era5_extract_algorithm.py's own post-processor."""
-
-    def __init__(self, style_path: Path):
-        super().__init__()
-        self.style_path = str(style_path)
-
-    def postProcessLayer(self, layer, context, feedback):
-        layer.loadNamedStyle(self.style_path)
-        layer.triggerRepaint()
+OUTPUT_SPECS = extract_specs("IMERG")
 
 
 class ImergExtractAlgorithm(QgsProcessingAlgorithm):
@@ -110,8 +100,11 @@ class ImergExtractAlgorithm(QgsProcessingAlgorithm):
         return "rainfall_tools"
 
     def shortHelpString(self):
+        return self._base_help() + "\n\n" + files_help(OUTPUT_SPECS)
+
+    def _base_help(self):
         return (
-            "IMERG Point Extractor (version 0.4.0)\n"
+            "IMERG Point Extractor (version 0.5.0)\n"
             "\n"
             "PURPOSE:\tExtracts the full available NASA GPM IMERG Final Run "
             "30-minute precipitation record (2000-06-01 to today, ~455,000 "
@@ -306,30 +299,7 @@ class ImergExtractAlgorithm(QgsProcessingAlgorithm):
                 optional=True,
             )
         )
-        self.addParameter(
-            QgsProcessingParameterFileDestination(
-                self.OUTPUT_CSV,
-                "Output CSV",
-                fileFilter="CSV files (*.csv)",
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterFeatureSink(
-                self.OUTPUT_MATCHED_POINTS,
-                "Output: matched grid cell location (vector point; optional; "
-                "granule method only - see tool description)",
-                optional=True,
-                type=QgsProcessing.SourceType.TypeVectorPoint,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterFeatureSink(
-                self.OUTPUT_QUERY_POINTS,
-                "Output: POI (query point(s); optional)",
-                optional=True,
-                type=QgsProcessing.SourceType.TypeVectorPoint,
-            )
-        )
+        add_output_parameters(self, OUTPUT_SPECS)
 
     def _collect_sites(self, parameters, context, feedback):
         source = self.parameterAsSource(parameters, self.INPUT_POINTS, context)
@@ -393,7 +363,9 @@ class ImergExtractAlgorithm(QgsProcessingAlgorithm):
         earthdata_password = (
             self.parameterAsString(parameters, self.EARTHDATA_PASSWORD, context) or None
         )
-        output_csv = self.parameterAsFileOutput(parameters, self.OUTPUT_CSV, context)
+        out = ExtractOutputs(
+            self, OUTPUT_SPECS, parameters, context, feedback, STYLES_DIR
+        )
 
         if earthdata_username and earthdata_password:
             saved_paths = save_earthdata_credentials(
@@ -475,126 +447,21 @@ class ImergExtractAlgorithm(QgsProcessingAlgorithm):
             if all_rows
             else pd.DataFrame(columns=["Site", "Timestamp", "PrecipitationMMHR"])
         )
-        combined.to_csv(output_csv, index=False)
-        feedback.pushInfo(f"{len(combined)} total rows written to {output_csv}")
-
-        outputs = {self.OUTPUT_CSV: output_csv}
-
-        matched_points_result = self._write_matched_points(
-            parameters, context, results_by_site
+        out.write_csv(
+            OUTPUT_CSV,
+            lambda p: write_dataframe_csv(combined, p)
+            or f"{len(combined)} total rows written to {p}",
         )
-        if matched_points_result:
-            outputs[self.OUTPUT_MATCHED_POINTS] = matched_points_result
-            self._register_style(
-                context, matched_points_result, "snapped_grid_point.qml"
-            )
-        elif method == "giovanni":
+        if out.wants(OUTPUT_MATCHED_POINTS) and method == "giovanni":
             feedback.pushInfo(
                 "Matched grid cell output left empty - the Giovanni method never "
                 "reports which grid cell it used internally (see tool description)."
             )
-
-        query_points_result = self._write_query_points(parameters, context, sites)
-        if query_points_result:
-            outputs[self.OUTPUT_QUERY_POINTS] = query_points_result
-            self._register_style(context, query_points_result, "poi.qml")
-
-        return outputs
-
-    def _write_matched_points(self, parameters, context, results_by_site):
-        """One point per site, at the actual nearest-gridpoint coordinate
-        the data was extracted from (result.matched_lat/matched_lon - see
-        core.py's FetchResult) - the same location already reported in the
-        'matched to the nearest grid cell' warning message, now also
-        available as a vector layer. Only ever populated for sites
-        processed via the granule-based method (see FetchResult's
-        docstring comment) - sites with no matched coordinate (Giovanni
-        method, or no granule succeeded) are skipped rather than written
-        with a missing geometry."""
-        sites_with_match = [
-            (label, result)
-            for label, result in results_by_site.items()
-            if result.matched_lat is not None and result.matched_lon is not None
-        ]
-        if not sites_with_match:
-            return None
-
-        fields = QgsFields()
-        fields.append(QgsField("site", QMetaType.Type.QString))
-        fields.append(QgsField("requested_lat", QMetaType.Type.Double))
-        fields.append(QgsField("requested_lon", QMetaType.Type.Double))
-        fields.append(QgsField("matched_lat", QMetaType.Type.Double))
-        fields.append(QgsField("matched_lon", QMetaType.Type.Double))
-        fields.append(QgsField("distance_km", QMetaType.Type.Double))
-
-        sink, dest_id = self.parameterAsSink(
-            parameters,
-            self.OUTPUT_MATCHED_POINTS,
-            context,
-            fields,
-            Qgis.WkbType.Point,
-            WGS84,
-        )
-        if sink is None:
-            return None
-
-        for label, result in sites_with_match:
-            feat = QgsFeature(fields)
-            feat.setGeometry(
-                QgsGeometry.fromPointXY(
-                    QgsPointXY(result.matched_lon, result.matched_lat)
-                )
+        else:
+            out.write_layer(
+                OUTPUT_MATCHED_POINTS,
+                matched_points_layer(results_by_site),
+                "snapped_grid_point.qml",
             )
-            feat.setAttributes(
-                [
-                    label,
-                    result.requested_lat,
-                    result.requested_lon,
-                    result.matched_lat,
-                    result.matched_lon,
-                    result.distance_km,
-                ]
-            )
-            sink.addFeature(feat, QgsFeatureSink.Flag.FastInsert)
-        return dest_id
-
-    def _write_query_points(self, parameters, context, sites):
-        """Minimal layer: just the site label + the query point geometry
-        actually requested (the clicked/typed point, or every feature from
-        the input point layer) - populated regardless of extraction
-        method, unlike the matched grid cell output above."""
-        if not sites:
-            return None
-        fields = QgsFields()
-        fields.append(QgsField("site", QMetaType.Type.QString))
-        fields.append(QgsField("latitude", QMetaType.Type.Double))
-        fields.append(QgsField("longitude", QMetaType.Type.Double))
-
-        sink, dest_id = self.parameterAsSink(
-            parameters,
-            self.OUTPUT_QUERY_POINTS,
-            context,
-            fields,
-            Qgis.WkbType.Point,
-            WGS84,
-        )
-        if sink is None:
-            return None
-        for label, lat, lon in sites:
-            feat = QgsFeature(fields)
-            feat.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(lon, lat)))
-            feat.setAttributes([label, lat, lon])
-            sink.addFeature(feat, QgsFeatureSink.Flag.FastInsert)
-        return dest_id
-
-    def _register_style(self, context, dest_id, style_filename):
-        """Attaches a saved QML style to an output layer via a
-        post-processor, so it loads already symbolised. The processor
-        instance is kept alive on self._post_processors since Processing
-        only holds a weak reference to it."""
-        if not dest_id:
-            return
-        details = context.layerToLoadOnCompletionDetails(dest_id)
-        processor = _StylePostProcessor(STYLES_DIR / style_filename)
-        details.setPostProcessor(processor)
-        self._post_processors.append(processor)
+        out.write_layer(OUTPUT_QUERY_POINTS, poi_layer(sites), "poi.qml")
+        return out.finish()

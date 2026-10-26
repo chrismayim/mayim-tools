@@ -12,32 +12,34 @@ import tempfile
 from pathlib import Path
 
 from qgis.core import (
-    Qgis,
     QgsCoordinateReferenceSystem,
     QgsCoordinateTransform,
-    QgsFeature,
-    QgsFeatureSink,
-    QgsField,
-    QgsFields,
-    QgsGeometry,
-    QgsPointXY,
     QgsProcessing,
     QgsProcessingAlgorithm,
     QgsProcessingContext,
     QgsProcessingException,
     QgsProcessingFeedback,
-    QgsProcessingLayerPostProcessorInterface,
     QgsProcessingParameterEnum,
-    QgsProcessingParameterFeatureSink,
     QgsProcessingParameterFeatureSource,
     QgsProcessingParameterField,
-    QgsProcessingParameterFileDestination,
     QgsProcessingParameterNumber,
     QgsProcessingParameterPoint,
     QgsProcessingParameterString,
 )
-from qgis.PyQt.QtCore import QMetaType
 from qgis.PyQt.QtGui import QIcon
+
+from mayim_tools._common.output_files import CSV, OutputSpec
+from mayim_tools.rainfall._common.extract_outputs import (
+    OUTPUT_CSV,
+    OUTPUT_MATCHED_POINTS,
+    OUTPUT_QUERY_POINTS,
+    ExtractOutputs,
+    add_output_parameters,
+    extract_specs,
+    files_help,
+    matched_points_layer,
+    poi_layer,
+)
 
 from .core import (
     DATASETS,
@@ -51,19 +53,19 @@ WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
 
 STYLES_DIR = Path(__file__).resolve().parent / "styles"
 
-
-class _StylePostProcessor(QgsProcessingLayerPostProcessorInterface):
-    """Loads a saved QML style (symbology + labeling) onto an output
-    layer once Processing has finished loading it into the project -
-    same pattern as design_rainfall_algorithm.py's own post-processor."""
-
-    def __init__(self, style_path: Path):
-        super().__init__()
-        self.style_path = str(style_path)
-
-    def postProcessLayer(self, layer, context, feedback):
-        layer.loadNamedStyle(self.style_path)
-        layer.triggerRepaint()
+OUTPUT_ANOMALIES = "OUTPUT_ANOMALIES"
+OUTPUT_SPECS = extract_specs(
+    "ERA5",
+    extra=[
+        OutputSpec(
+            OUTPUT_ANOMALIES,
+            "Negative-value anomalies audit (CSV)",
+            "ERA5 Anomalies",
+            CSV,
+            False,
+        )
+    ],
+)
 
 
 class Era5ExtractAlgorithm(QgsProcessingAlgorithm):
@@ -108,8 +110,11 @@ class Era5ExtractAlgorithm(QgsProcessingAlgorithm):
         return "rainfall_tools"
 
     def shortHelpString(self):
+        return self._base_help() + "\n\n" + files_help(OUTPUT_SPECS)
+
+    def _base_help(self):
         return (
-            "Extract: ERA5 precipitation (version 0.5.0)\n"
+            "Extract: ERA5 precipitation (version 0.6.0)\n"
             "\n"
             "PURPOSE:\tExtracts ERA5 or ERA5-Land total precipitation at a "
             "point for a specified date range or the full available record "
@@ -293,36 +298,7 @@ class Era5ExtractAlgorithm(QgsProcessingAlgorithm):
                 optional=True,
             )
         )
-        self.addParameter(
-            QgsProcessingParameterFileDestination(
-                self.OUTPUT_CSV, "Output CSV", fileFilter="CSV files (*.csv)"
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterFileDestination(
-                self.OUTPUT_ANOMALIES,
-                "Output: negative-value anomalies audit CSV (large negative "
-                "values; optional)",
-                fileFilter="CSV files (*.csv)",
-                optional=True,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterFeatureSink(
-                self.OUTPUT_MATCHED_POINTS,
-                "Output: matched grid cell location (vector point; optional)",
-                optional=True,
-                type=QgsProcessing.SourceType.TypeVectorPoint,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterFeatureSink(
-                self.OUTPUT_QUERY_POINTS,
-                "Output: POI (query point(s); optional)",
-                optional=True,
-                type=QgsProcessing.SourceType.TypeVectorPoint,
-            )
-        )
+        add_output_parameters(self, OUTPUT_SPECS)
 
     def collect_sites(self, parameters, context, feedback):
         source = self.parameterAsSource(parameters, self.INPUT_POINTS, context)
@@ -381,7 +357,9 @@ class Era5ExtractAlgorithm(QgsProcessingAlgorithm):
         end_date = self.parameterAsString(parameters, self.END_DATE, context) or None
         years_per_chunk = self.parameterAsInt(parameters, self.YEARS_PER_CHUNK, context)
         api_key = self.parameterAsString(parameters, self.CDS_API_KEY, context) or None
-        output_csv = self.parameterAsFileOutput(parameters, self.OUTPUT_CSV, context)
+        out = ExtractOutputs(
+            self, OUTPUT_SPECS, parameters, context, feedback, STYLES_DIR
+        )
 
         work_dir = tempfile.mkdtemp(prefix="era5_extract_")
         feedback.pushInfo(
@@ -455,140 +433,28 @@ class Era5ExtractAlgorithm(QgsProcessingAlgorithm):
             feedback.pushInfo(f"[{label}] {len(result.dataframe)} rows retrieved.")
             results_by_site[label] = result
 
-        n_rows, n_missing = write_era5_csv(results_by_site, output_csv)
-        feedback.pushInfo(f"{n_rows} total rows written to {output_csv}")
-
-        if n_missing:
-            feedback.pushWarning(
-                f"{n_missing} row(s) had a missing (NaN) PrecipitationMM value - "
-                f"written as an empty cell, not zero or dropped. This means the "
-                f"source GRIB data had a genuine gap for those specific "
-                f"timestamps - worth checking which timestamps before treating "
-                f"the output as complete."
-            )
-
-        outputs = {self.OUTPUT_CSV: output_csv}
-        anomalies_path = self.parameterAsFileOutput(
-            parameters, self.OUTPUT_ANOMALIES, context
-        )
-        if anomalies_path:
-            n_anomalies = write_era5_anomalies(results_by_site, anomalies_path)
-            feedback.pushInfo(
-                f"{n_anomalies} anomaly row(s) written to {anomalies_path}"
-            )
-            outputs[self.OUTPUT_ANOMALIES] = anomalies_path
-
-        matched_points_result = self._write_matched_points(
-            parameters, context, results_by_site
-        )
-        if matched_points_result:
-            outputs[self.OUTPUT_MATCHED_POINTS] = matched_points_result
-            self._register_style(
-                context, matched_points_result, "snapped_grid_point.qml"
-            )
-
-        query_points_result = self._write_query_points(parameters, context, sites)
-        if query_points_result:
-            outputs[self.OUTPUT_QUERY_POINTS] = query_points_result
-            self._register_style(context, query_points_result, "poi.qml")
-
-        return outputs
-
-    def _write_matched_points(self, parameters, context, results_by_site):
-        """One point per site, at the actual nearest-gridpoint coordinate
-        the data was extracted from (result.matched_lat/matched_lon - see
-        core.py's Era5Result) - the same location already reported in the
-        'matched to the nearest grid cell' warning message, now also
-        available as a vector layer. Mirrors design_rainfall_algorithm.py's
-        _write_query_points pattern. Sites where no chunk/request
-        succeeded (matched_lat/matched_lon still None) are skipped rather
-        than written with a missing geometry."""
-        sites_with_match = [
-            (label, result)
-            for label, result in results_by_site.items()
-            if result.matched_lat is not None and result.matched_lon is not None
-        ]
-        if not sites_with_match:
-            return None
-
-        fields = QgsFields()
-        fields.append(QgsField("site", QMetaType.Type.QString))
-        fields.append(QgsField("requested_lat", QMetaType.Type.Double))
-        fields.append(QgsField("requested_lon", QMetaType.Type.Double))
-        fields.append(QgsField("matched_lat", QMetaType.Type.Double))
-        fields.append(QgsField("matched_lon", QMetaType.Type.Double))
-        fields.append(QgsField("distance_km", QMetaType.Type.Double))
-
-        sink, dest_id = self.parameterAsSink(
-            parameters,
-            self.OUTPUT_MATCHED_POINTS,
-            context,
-            fields,
-            Qgis.WkbType.Point,
-            WGS84,
-        )
-        if sink is None:
-            return None
-
-        for label, result in sites_with_match:
-            feat = QgsFeature(fields)
-            feat.setGeometry(
-                QgsGeometry.fromPointXY(
-                    QgsPointXY(result.matched_lon, result.matched_lat)
+        def write_main(p):
+            n_rows, n_missing = write_era5_csv(results_by_site, p)
+            if n_missing:
+                feedback.pushWarning(
+                    f"{n_missing} row(s) had a missing (NaN) PrecipitationMM value - "
+                    "written as an empty cell, not zero or dropped. This means the "
+                    "source GRIB data had a genuine gap for those specific "
+                    "timestamps - worth checking which timestamps before treating "
+                    "the output as complete."
                 )
-            )
-            feat.setAttributes(
-                [
-                    label,
-                    result.requested_lat,
-                    result.requested_lon,
-                    result.matched_lat,
-                    result.matched_lon,
-                    result.distance_km,
-                ]
-            )
-            sink.addFeature(feat, QgsFeatureSink.Flag.FastInsert)
-        return dest_id
+            return f"{n_rows} total rows written to {p}"
 
-    def _write_query_points(self, parameters, context, sites):
-        """Minimal layer: just the site label + the query point geometry
-        actually requested (the clicked/typed point, or every feature from
-        the input point layer) - useful to see/symbolise the requested
-        location(s) independently of the matched grid cell output above.
-        Mirrors design_rainfall_algorithm.py's own _write_query_points."""
-        if not sites:
-            return None
-        fields = QgsFields()
-        fields.append(QgsField("site", QMetaType.Type.QString))
-        fields.append(QgsField("latitude", QMetaType.Type.Double))
-        fields.append(QgsField("longitude", QMetaType.Type.Double))
-
-        sink, dest_id = self.parameterAsSink(
-            parameters,
-            self.OUTPUT_QUERY_POINTS,
-            context,
-            fields,
-            Qgis.WkbType.Point,
-            WGS84,
+        out.write_csv(OUTPUT_CSV, write_main)
+        out.write_csv(
+            OUTPUT_ANOMALIES,
+            lambda p: f"{write_era5_anomalies(results_by_site, p)} anomaly row(s) "
+            f"written to {p}",
         )
-        if sink is None:
-            return None
-        for label, lat, lon in sites:
-            feat = QgsFeature(fields)
-            feat.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(lon, lat)))
-            feat.setAttributes([label, lat, lon])
-            sink.addFeature(feat, QgsFeatureSink.Flag.FastInsert)
-        return dest_id
-
-    def _register_style(self, context, dest_id, style_filename):
-        """Attaches a saved QML style to an output layer via a
-        post-processor, so it loads already symbolised - same pattern as
-        design_rainfall_algorithm.py's own _register_style. The
-        processor instance is kept alive on self._post_processors since
-        Processing only holds a weak reference to it."""
-        if not dest_id:
-            return
-        details = context.layerToLoadOnCompletionDetails(dest_id)
-        processor = _StylePostProcessor(STYLES_DIR / style_filename)
-        details.setPostProcessor(processor)
-        self._post_processors.append(processor)
+        out.write_layer(
+            OUTPUT_MATCHED_POINTS,
+            matched_points_layer(results_by_site),
+            "snapped_grid_point.qml",
+        )
+        out.write_layer(OUTPUT_QUERY_POINTS, poi_layer(sites), "poi.qml")
+        return out.finish()

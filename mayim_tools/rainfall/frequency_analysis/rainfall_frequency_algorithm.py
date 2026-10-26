@@ -6,12 +6,17 @@ distribution fits (diagnostic), a duration-consistent DDF model
 
 Thin wrapper - all real logic lives in rainfall/_common/rfa/ (zero QGIS
 dependency, independently testable).
+
+Outputs follow the Mayim output standard: a tick box per output, CSV and
+Word folders, files named <project number>_<description>[_<site>].
 """
 
+import os
 from pathlib import Path
 
 import pandas as pd
 from qgis.core import (
+    Qgis,
     QgsProcessingAlgorithm,
     QgsProcessingContext,
     QgsProcessingException,
@@ -20,12 +25,19 @@ from qgis.core import (
     QgsProcessingParameterDefinition,
     QgsProcessingParameterEnum,
     QgsProcessingParameterFile,
-    QgsProcessingParameterFileDestination,
+    QgsProcessingParameterFolderDestination,
     QgsProcessingParameterNumber,
     QgsProcessingParameterString,
 )
 from qgis.PyQt.QtGui import QIcon
 
+from mayim_tools._common.output_files import (
+    CSV,
+    EXTENSIONS,
+    WORD,
+    OutputSpec,
+    clean_name_part,
+)
 from mayim_tools.rainfall._common.rfa.analysis import (
     DEFAULT_DISTRIBUTIONS,
     DEFAULT_EXCEEDANCE_PROBABILITIES,
@@ -43,6 +55,66 @@ from mayim_tools.rainfall._common.rfa.export import (
 from mayim_tools.rainfall._common.rfa.timebase import EXTENDED_DURATIONS_MIN
 
 _ADVANCED = QgsProcessingParameterDefinition.Flag.FlagAdvanced
+
+TOOL_NAME = "Precipitation data to DDF"
+TOOL_VERSION = "2.0.0"
+
+# Selectable outputs: key, dialog label, file-name description, folder
+# kind, ticked by default. The chart PNG goes to the Word folder.
+OUTPUT_SPECS = [
+    OutputSpec("OUTPUT_RECOMMENDED_DDF", "Recommended DDF (CSV)", "Recommended DDF", CSV),
+    OutputSpec("OUTPUT_REPORT", "Report (Word)", "DDF Report", WORD),
+    OutputSpec("OUTPUT_AMS", "Annual maximum series (CSV)", "Annual Maximum Series", CSV),
+    OutputSpec("OUTPUT_METADATA", "Metadata and model parameters (CSV)", "DDF Metadata", CSV),
+    OutputSpec("OUTPUT_DDF_PNG", "DDF chart (PNG)", "DDF Chart", WORD, False),
+    OutputSpec(
+        "OUTPUT_PARAMETERS", "Per-duration distribution parameters (CSV, diagnostic)",
+        "DDF Distribution Parameters", CSV, False,
+    ),
+    OutputSpec(
+        "OUTPUT_QUANTILES", "Per-duration quantiles, all distributions (CSV, diagnostic)",
+        "DDF Quantiles", CSV, False,
+    ),
+    OutputSpec(
+        "OUTPUT_RECOMMENDATIONS", "L-moment ratio diagram ranking (CSV, diagnostic)",
+        "DDF Ratio Diagram Ranking", CSV, False,
+    ),
+    OutputSpec(
+        "OUTPUT_YEAR_COMPLETENESS", "Year completeness (CSV)", "Year Completeness", CSV,
+        False,
+    ),
+]  # fmt: skip
+SPEC_BY_KEY = {spec.key: spec for spec in OUTPUT_SPECS}
+FOLDER_PARAMS = {
+    CSV: ("FOLDER_CSV", "Output folder for CSV files"),
+    WORD: ("FOLDER_WORD", "Output folder for Word reports (and the chart PNG)"),
+}
+
+
+def _software_version() -> str:
+    parts = []
+    metadata = Path(__file__).resolve().parents[2] / "metadata.txt"
+    try:
+        for line in metadata.read_text(encoding="utf-8").splitlines():
+            if line.startswith("version="):
+                parts.append(f"Mayim Tools {line.split('=', 1)[1].strip()}")
+                break
+    except OSError:
+        pass
+    parts.append(f"QGIS {Qgis.version()}")
+    return ", ".join(parts)
+
+
+def output_path(spec, folders, project_number, site=None):
+    """Standard file name <project number>_<description>[_<site>].<ext>;
+    the chart is a .png in the Word folder."""
+    desc = spec.description + (f" {clean_name_part(site)}" if site else "")
+    path = OutputSpec(spec.key, spec.label, desc, spec.kind).path(
+        folders, project_number
+    )
+    if spec.key == "OUTPUT_DDF_PNG":
+        path = str(Path(path).with_suffix(".png"))
+    return path
 
 
 class RainfallFrequencyAlgorithm(QgsProcessingAlgorithm):
@@ -63,6 +135,9 @@ class RainfallFrequencyAlgorithm(QgsProcessingAlgorithm):
     RANDOM_SEED = "RANDOM_SEED"
     DISTRIBUTIONS = "DISTRIBUTIONS"
     GEV_METHOD = "GEV_METHOD"
+    SITE = "SITE"
+    PROJECT_NUMBER = "PROJECT_NUMBER"
+    PROJECT_NAME = "PROJECT_NAME"
     OUTPUT_RECOMMENDED_DDF = "OUTPUT_RECOMMENDED_DDF"
     OUTPUT_REPORT = "OUTPUT_REPORT"
     OUTPUT_DDF_PNG = "OUTPUT_DDF_PNG"
@@ -98,7 +173,14 @@ class RainfallFrequencyAlgorithm(QgsProcessingAlgorithm):
         return "rainfall_tools"
 
     def shortHelpString(self):
+        files = "\n".join(
+            f"  {spec.label}: <project number>_"
+            f"{clean_name_part(spec.description)}_<site>"
+            f"{'.png' if spec.key == 'OUTPUT_DDF_PNG' else EXTENSIONS[spec.kind]}"
+            for spec in OUTPUT_SPECS
+        )
         return (
+            f"{TOOL_NAME} (version {TOOL_VERSION})\n\n"
             "PURPOSE\n"
             "Derives a Depth-Duration-Frequency (DDF) table from a recorded "
             "precipitation time series - a gauge record, or a gridded product "
@@ -200,13 +282,20 @@ class RainfallFrequencyAlgorithm(QgsProcessingAlgorithm):
             "per duration for the diagnostics (all four recommended) and GEV "
             "L-moments (default) or MLE.\n"
             "\n"
+            "Site, project number and project name: the site is added to the "
+            "file names and the report; the project number is the file-name "
+            "prefix; both appear on the report title page.\n\n"
             "OUTPUTS\n"
-            "Recommended DDF CSV: one row per duration; '{T}yr Depth (mm)' plus "
-            "'{T}yr Lower/Upper (mm)' bounds. Word report: inputs, method, model "
-            "parameters, recommended DDF table and chart, AMS, ratio diagram, "
-            "model-vs-independent comparison, warnings, references. Optional: DDF "
-            "chart PNG, per-duration parameters and quantiles (all distributions), "
-            "ratio-diagram ranking, AMS, year completeness and metadata CSVs."
+            "Tick the outputs wanted (recommended DDF, report, annual maximum "
+            "series and metadata by default) and choose the CSV and Word folders. "
+            "Files are named <project number>_<description>_<site> with "
+            "underscores and replace files of the same name; a file that is open "
+            "in Excel, Word or QGIS cannot be replaced - close it and run again "
+            "(the other outputs are still written). The recommended DDF CSV has "
+            "one row per duration with '{T}yr Depth (mm)' and '{T}yr Lower / "
+            "Upper (mm)' columns (the Design Rainfall layout). The CSVs are UTF-8 "
+            "with a byte-order mark; the diagnostic CSVs start with a column key "
+            "('#' lines). The Word report follows the Mayim report standard.\n" + files
         )
 
     def initAlgorithm(self, config=None):
@@ -342,54 +431,34 @@ class RainfallFrequencyAlgorithm(QgsProcessingAlgorithm):
             advanced=True,
         )
         add(
-            QgsProcessingParameterFileDestination(
-                self.OUTPUT_RECOMMENDED_DDF,
-                "Output: recommended DDF CSV (duration-consistent, with bounds)",
-                fileFilter="CSV files (*.csv)",
-            )
-        )
-        add(
-            QgsProcessingParameterFileDestination(
-                self.OUTPUT_REPORT,
-                "Output: Word report (.docx, optional)",
-                fileFilter="Word documents (*.docx)",
+            QgsProcessingParameterString(
+                self.SITE,
+                "Site / gauge name (added to the file names and the report, optional)",
                 optional=True,
             )
         )
-        for key, label in ((self.OUTPUT_DDF_PNG, "Output: DDF chart PNG (optional)"),):
+        add(
+            QgsProcessingParameterString(
+                self.PROJECT_NUMBER,
+                "Project number (file name prefix, optional)",
+                optional=True,
+            )
+        )
+        add(
+            QgsProcessingParameterString(
+                self.PROJECT_NAME,
+                "Project name (report title page, optional)",
+                optional=True,
+            )
+        )
+        for spec in OUTPUT_SPECS:
             add(
-                QgsProcessingParameterFileDestination(
-                    key, label, fileFilter="PNG files (*.png)", optional=True
+                QgsProcessingParameterBoolean(
+                    spec.key, f"Output: {spec.label}", defaultValue=spec.default
                 )
             )
-        for key, label in (
-            (
-                self.OUTPUT_PARAMETERS,
-                "Output: per-duration distribution parameters CSV (diagnostic, optional)",
-            ),
-            (
-                self.OUTPUT_QUANTILES,
-                "Output: per-duration quantiles CSV, all distributions (diagnostic, optional)",
-            ),
-            (
-                self.OUTPUT_RECOMMENDATIONS,
-                "Output: L-moment ratio diagram ranking CSV (diagnostic, optional)",
-            ),
-            (self.OUTPUT_AMS, "Output: annual maximum series CSV (optional)"),
-            (
-                self.OUTPUT_YEAR_COMPLETENESS,
-                "Output: year completeness / audit CSV (optional)",
-            ),
-            (
-                self.OUTPUT_METADATA,
-                "Output: metadata / model parameters CSV (optional)",
-            ),
-        ):
-            add(
-                QgsProcessingParameterFileDestination(
-                    key, label, fileFilter="CSV files (*.csv)", optional=True
-                )
-            )
+        for name, label in FOLDER_PARAMS.values():
+            add(QgsProcessingParameterFolderDestination(name, label, optional=True))
 
     @staticmethod
     def _floats(text, what):
@@ -430,6 +499,34 @@ class RainfallFrequencyAlgorithm(QgsProcessingAlgorithm):
             self.parameterAsString(parameters, self.DURATIONS, context), "durations"
         ) or tuple(EXTENDED_DURATIONS_MIN)
         n_boot = self.parameterAsInt(parameters, self.N_BOOTSTRAP, context)
+
+        def text(name):
+            return (self.parameterAsString(parameters, name, context) or "").strip()
+
+        site = text(self.SITE)
+        project_number = text(self.PROJECT_NUMBER)
+        project_name = text(self.PROJECT_NAME)
+        selected = [
+            spec
+            for spec in OUTPUT_SPECS
+            if self.parameterAsBoolean(parameters, spec.key, context)
+        ]
+        if not selected:
+            raise QgsProcessingException("Tick at least one output.")
+        folders = {}
+        for kind in {spec.kind for spec in selected}:
+            name, label = FOLDER_PARAMS[kind]
+            folder = self.parameterAsFileOutput(parameters, name, context)
+            if not folder:
+                raise QgsProcessingException(
+                    f"Choose the {label[0].lower() + label[1:]}."
+                )
+            os.makedirs(folder, exist_ok=True)
+            folders[kind] = folder
+        paths = {
+            spec.key: output_path(spec, folders, project_number, site)
+            for spec in selected
+        }
 
         try:
             df = pd.read_csv(csv_path)
@@ -489,49 +586,107 @@ class RainfallFrequencyAlgorithm(QgsProcessingAlgorithm):
             for note in m.notes:
                 feedback.pushInfo(f"  {note}")
 
-        outputs = {}
-        ddf_path = self.parameterAsFileOutput(
-            parameters, self.OUTPUT_RECOMMENDED_DDF, context
-        )
-        write_recommended_ddf(result, ddf_path)
-        outputs[self.OUTPUT_RECOMMENDED_DDF] = ddf_path
+        outputs = {
+            name: folders[kind]
+            for kind, (name, _) in FOLDER_PARAMS.items()
+            if kind in folders
+        }
+        written = []  # (label, path) for the report and the log
+
+        def save(key, writer):
+            path = paths[key]
+            try:
+                ok = writer(path)
+            except ImportError as e:
+                feedback.pushWarning(f"{SPEC_BY_KEY[key].label}: not written ({e}).")
+                return
+            except Exception as e:
+                feedback.reportError(
+                    f"{SPEC_BY_KEY[key].label}: {Path(path).name} could not be "
+                    f"written ({e}). If it is open in Excel, Word or QGIS, close it "
+                    "and run again.",
+                    fatalError=False,
+                )
+                return
+            if ok is False:
+                return
+            outputs[key] = path
+            written.append((SPEC_BY_KEY[key].label, path))
+            feedback.pushInfo(f"Written: {path}")
 
         for key, fn in (
+            (self.OUTPUT_RECOMMENDED_DDF, write_recommended_ddf),
+            (self.OUTPUT_AMS, write_ams),
+            (self.OUTPUT_METADATA, write_metadata),
             (self.OUTPUT_PARAMETERS, write_parameters),
             (self.OUTPUT_QUANTILES, write_quantiles),
             (self.OUTPUT_RECOMMENDATIONS, write_recommendations),
-            (self.OUTPUT_AMS, write_ams),
             (self.OUTPUT_YEAR_COMPLETENESS, write_year_completeness),
-            (self.OUTPUT_METADATA, write_metadata),
         ):
-            path = self.parameterAsFileOutput(parameters, key, context)
-            if path:
-                fn(result, path)
-                outputs[key] = path
+            if key in paths:
+                save(key, lambda p, fn=fn: fn(result, p))
 
-        png = self.parameterAsFileOutput(parameters, self.OUTPUT_DDF_PNG, context)
-        if png:
-            from . import charts
+        from . import charts
 
-            if charts.write_ddf_chart(result, png):
-                outputs[self.OUTPUT_DDF_PNG] = png
+        ddf_chart = None
+        style_notes = []
+        if self.OUTPUT_DDF_PNG in paths or self.OUTPUT_REPORT in paths:
+            try:
+                ddf_chart, style_notes = charts.ddf_figure(result)
+            except ImportError:
+                feedback.pushWarning("matplotlib is not available - no charts drawn.")
+            except ValueError:
+                ddf_chart = None
+        for note in style_notes:
+            feedback.pushInfo(note)
+
+        if self.OUTPUT_DDF_PNG in paths:
+            if ddf_chart is None:
+                feedback.pushWarning("DDF chart (PNG): nothing to draw - not written.")
             else:
-                feedback.pushWarning("matplotlib not available - chart not produced.")
 
-        rep = self.parameterAsFileOutput(parameters, self.OUTPUT_REPORT, context)
-        if rep:
+                def write_png(p):
+                    with open(p, "wb") as fh:
+                        fh.write(ddf_chart.getvalue())
+
+                save(self.OUTPUT_DDF_PNG, write_png)
+
+        if self.OUTPUT_REPORT in paths:
             try:
                 from . import report
-
-                report.write_docx(
-                    result,
-                    rep,
-                    inputs={"series": csv_path},
-                )
-                outputs[self.OUTPUT_REPORT] = rep
             except ImportError:
+                report = None
+            if report is None:
                 feedback.pushWarning(
                     "python-docx is not installed - Word report not produced "
                     "(install with: python -m pip install python-docx)."
                 )
+            else:
+                rep_path = paths[self.OUTPUT_REPORT]
+                context_info = {
+                    "project_number": project_number,
+                    "project_name": project_name,
+                    "site": site,
+                    "tool_version": TOOL_VERSION,
+                    "software": _software_version(),
+                    "outputs": written + [("This report", rep_path)],
+                }
+
+                def write_report(p):
+                    notes = report.write_docx(
+                        result,
+                        p,
+                        inputs={"series": csv_path, "site": site},
+                        context=context_info,
+                        charts_in={"ddf": ddf_chart} if ddf_chart else None,
+                    )
+                    for note in notes:
+                        feedback.pushInfo(note)
+
+                save(self.OUTPUT_REPORT, write_report)
+
+        if not written:
+            raise QgsProcessingException(
+                "No output could be written - see the errors above."
+            )
         return outputs
