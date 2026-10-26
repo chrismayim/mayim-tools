@@ -2,10 +2,15 @@
 hyetograph CSVs out (incremental depth, cumulative depth, incremental
 intensity), via the Generalized Alternating Block Method.
 
+Outputs follow the Mayim report and figure standard: the user ticks the
+outputs wanted and chooses the CSV folder; files are named <project
+number>_<description> with underscores.
+
 Thin wrapper - all real logic lives in core.py/export.py (zero QGIS
 dependency, independently testable; see tests/test_core.py).
 """
 
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -16,11 +21,18 @@ from qgis.core import (
     QgsProcessingFeedback,
     QgsProcessingParameterBoolean,
     QgsProcessingParameterFile,
-    QgsProcessingParameterFileDestination,
+    QgsProcessingParameterFolderDestination,
     QgsProcessingParameterNumber,
     QgsProcessingParameterString,
 )
 from qgis.PyQt.QtGui import QIcon
+
+from mayim_tools._common.output_files import (
+    CSV,
+    EXTENSIONS,
+    OutputSpec,
+    clean_name_part,
+)
 
 from .core import PEAK_RATIOS, parse_idf_table
 from .export import (
@@ -28,6 +40,33 @@ from .export import (
     write_incremental_depth,
     write_incremental_intensity,
 )
+
+TOOL_VERSION = "0.4.0"
+
+# Selectable outputs: key, dialog label, file-name description, folder
+# kind, ticked by default. All three share the CSV folder.
+OUTPUT_SPECS = [
+    OutputSpec(
+        "OUTPUT_INCREMENTAL_DEPTH", "Incremental depth vs time (CSV)",
+        "Incremental Depth", CSV,
+    ),
+    OutputSpec(
+        "OUTPUT_CUMULATIVE_DEPTH", "Cumulative depth vs time (CSV)",
+        "Cumulative Depth", CSV,
+    ),
+    OutputSpec(
+        "OUTPUT_INCREMENTAL_INTENSITY", "Incremental intensity vs time (CSV)",
+        "Incremental Intensity", CSV,
+    ),
+]  # fmt: skip
+SPEC_BY_KEY = {spec.key: spec for spec in OUTPUT_SPECS}
+FOLDER_PARAMS = {CSV: ("FOLDER_CSV", "Output folder for CSV files")}
+
+WRITERS = {
+    "OUTPUT_INCREMENTAL_DEPTH": write_incremental_depth,
+    "OUTPUT_CUMULATIVE_DEPTH": write_cumulative_depth,
+    "OUTPUT_INCREMENTAL_INTENSITY": write_incremental_intensity,
+}
 
 
 class DdfToHyetographsAlgorithm(QgsProcessingAlgorithm):
@@ -37,9 +76,7 @@ class DdfToHyetographsAlgorithm(QgsProcessingAlgorithm):
     TARGET_DURATIONS = "TARGET_DURATIONS"
     TIMESTEP_MIN = "TIMESTEP_MIN"
     ALLOW_SHORT_DURATION_EXTRAPOLATION = "ALLOW_SHORT_DURATION_EXTRAPOLATION"
-    OUTPUT_INCREMENTAL_DEPTH = "OUTPUT_INCREMENTAL_DEPTH"
-    OUTPUT_CUMULATIVE_DEPTH = "OUTPUT_CUMULATIVE_DEPTH"
-    OUTPUT_INCREMENTAL_INTENSITY = "OUTPUT_INCREMENTAL_INTENSITY"
+    PROJECT_NUMBER = "PROJECT_NUMBER"
 
     def icon(self):
         logo = Path(__file__).resolve().parents[2] / "icons" / "mayim_logo.png"
@@ -61,8 +98,13 @@ class DdfToHyetographsAlgorithm(QgsProcessingAlgorithm):
         return "rainfall_tools"
 
     def shortHelpString(self):
+        files = "\n".join(
+            f"  {spec.label}: <project number>_"
+            f"{clean_name_part(spec.description)}{EXTENSIONS[spec.kind]}"
+            for spec in OUTPUT_SPECS
+        )
         return (
-            "DDF to Alternating Block Design Hyetographs (version 0.3.0)\n"
+            f"DDF to Alternating Block Design Hyetographs (version {TOOL_VERSION})\n"
             "\n"
             "PURPOSE:\tConverts a DDF/IDF table (Duration x Return Period "
             "depths) into design storm hyetographs at 5 peak-position "
@@ -127,7 +169,16 @@ class DdfToHyetographsAlgorithm(QgsProcessingAlgorithm):
             "combination across every return period found in the table.\n"
             "  Timestep: the hyetograph's block width in minutes.\n"
             "  Allow short-duration extrapolation: off by default - see "
-            "BACKGROUND above."
+            "BACKGROUND above.\n"
+            "\n"
+            "OUTPUTS:\tTick the outputs wanted (all three by default) and "
+            "choose the CSV output folder. Files are named <project "
+            "number>_<description> with underscores (just <description> "
+            "without a project number) and replace files of the same name; "
+            "a file that is open in Excel or QGIS cannot be replaced - "
+            "close it and run again (the other outputs are still written). "
+            "Written as UTF-8 with a byte-order mark, so Excel opens them "
+            "cleanly.\n" + files
         )
 
     def initAlgorithm(self, config=None):
@@ -169,26 +220,22 @@ class DdfToHyetographsAlgorithm(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
-            QgsProcessingParameterFileDestination(
-                self.OUTPUT_INCREMENTAL_DEPTH,
-                "Output: incremental depth vs time CSV",
-                fileFilter="CSV files (*.csv)",
+            QgsProcessingParameterString(
+                self.PROJECT_NUMBER,
+                "Project number (file name prefix, optional)",
+                optional=True,
             )
         )
-        self.addParameter(
-            QgsProcessingParameterFileDestination(
-                self.OUTPUT_CUMULATIVE_DEPTH,
-                "Output: cumulative depth vs time CSV",
-                fileFilter="CSV files (*.csv)",
+        for spec in OUTPUT_SPECS:
+            self.addParameter(
+                QgsProcessingParameterBoolean(
+                    spec.key, f"Output: {spec.label}", defaultValue=spec.default
+                )
             )
-        )
-        self.addParameter(
-            QgsProcessingParameterFileDestination(
-                self.OUTPUT_INCREMENTAL_INTENSITY,
-                "Output: incremental intensity vs time CSV",
-                fileFilter="CSV files (*.csv)",
+        for name, label in FOLDER_PARAMS.values():
+            self.addParameter(
+                QgsProcessingParameterFolderDestination(name, label, optional=True)
             )
-        )
 
     def processAlgorithm(
         self, parameters, context: QgsProcessingContext, feedback: QgsProcessingFeedback
@@ -204,6 +251,27 @@ class DdfToHyetographsAlgorithm(QgsProcessingAlgorithm):
         allow_short_duration_extrapolation = self.parameterAsBoolean(
             parameters, self.ALLOW_SHORT_DURATION_EXTRAPOLATION, context
         )
+        project_number = (
+            self.parameterAsString(parameters, self.PROJECT_NUMBER, context) or ""
+        ).strip()
+
+        selected = [
+            spec
+            for spec in OUTPUT_SPECS
+            if self.parameterAsBoolean(parameters, spec.key, context)
+        ]
+        if not selected:
+            raise QgsProcessingException("Tick at least one output.")
+        folders = {}
+        for kind in {spec.kind for spec in selected}:
+            name, label = FOLDER_PARAMS[kind]
+            folder = self.parameterAsFileOutput(parameters, name, context)
+            if not folder:
+                raise QgsProcessingException(f"Choose the {label.lower()}.")
+            os.makedirs(folder, exist_ok=True)
+            folders[kind] = folder
+        paths = {spec.key: spec.path(folders, project_number) for spec in selected}
+        want = set(paths)
 
         try:
             target_durations = [
@@ -272,49 +340,54 @@ class DdfToHyetographsAlgorithm(QgsProcessingAlgorithm):
                 f"data or a recognized short-duration formula instead if available."
             )
 
-        try:
-            inc_path = self.parameterAsFileOutput(
-                parameters, self.OUTPUT_INCREMENTAL_DEPTH, context
-            )
-            n_inc = write_incremental_depth(
-                return_periods_and_durations,
-                timestep_min,
-                tables,
-                inc_path,
-                allow_short_duration_extrapolation,
+        outputs = {
+            name: folders[kind]
+            for kind, (name, _) in FOLDER_PARAMS.items()
+            if kind in folders
+        }
+        written = []  # (label, path) for the log
+
+        def done(key, path):
+            outputs[key] = path
+            written.append((SPEC_BY_KEY[key].label, path))
+
+        def failed(key, path, error):
+            feedback.reportError(
+                f"{SPEC_BY_KEY[key].label}: {Path(path).name} could not be written "
+                f"({error}). If it is open in QGIS or Excel, close it and run "
+                "again.",
+                fatalError=False,
             )
 
-            cum_path = self.parameterAsFileOutput(
-                parameters, self.OUTPUT_CUMULATIVE_DEPTH, context
-            )
-            write_cumulative_depth(
-                return_periods_and_durations,
-                timestep_min,
-                tables,
-                cum_path,
-                allow_short_duration_extrapolation,
-            )
+        n_rows = len(return_periods_and_durations)
+        for key, writer in WRITERS.items():
+            if key not in want:
+                continue
+            path = paths[key]
+            try:
+                writer(
+                    return_periods_and_durations,
+                    timestep_min,
+                    tables,
+                    path,
+                    allow_short_duration_extrapolation,
+                )
+            except ValueError as e:
+                raise QgsProcessingException(str(e)) from e
+            except Exception as e:
+                failed(key, path, e)
+                continue
+            done(key, path)
 
-            int_path = self.parameterAsFileOutput(
-                parameters, self.OUTPUT_INCREMENTAL_INTENSITY, context
+        if not written:
+            raise QgsProcessingException(
+                "No output could be written - see the errors above."
             )
-            write_incremental_intensity(
-                return_periods_and_durations,
-                timestep_min,
-                tables,
-                int_path,
-                allow_short_duration_extrapolation,
-            )
-        except ValueError as e:
-            raise QgsProcessingException(str(e)) from e
-
         feedback.pushInfo(
-            f"{n_inc} row(s) written to each of the 3 outputs "
+            f"{n_rows} row(s) written to each of {len(written)} output(s) "
             f"({len(tables)} return period(s) x {len(target_durations)} target duration(s))."
         )
+        for label, path in written:
+            feedback.pushInfo(f"{label}: {path}")
 
-        return {
-            self.OUTPUT_INCREMENTAL_DEPTH: inc_path,
-            self.OUTPUT_CUMULATIVE_DEPTH: cum_path,
-            self.OUTPUT_INCREMENTAL_INTENSITY: int_path,
-        }
+        return outputs

@@ -12,6 +12,9 @@ side by side - only the VALUE at each cell differs:
   block's own time-step width in hours
 
 Shorter-duration rows leave trailing columns blank, same as before.
+
+Written UTF-8 with BOM (Mayim output standard), so Excel opens them
+without mangling any special characters in the header.
 """
 
 from __future__ import annotations
@@ -87,7 +90,7 @@ def _write_wide(
             header.append(f"{pct}_{_format_time_label(step * timestep_min)}")
 
     n_rows = 0
-    with open(path, "w", newline="") as f:
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f)
         w.writerow(header)
 
