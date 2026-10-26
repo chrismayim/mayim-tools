@@ -37,7 +37,7 @@ def test_provider_registers_seven_algorithms() -> None:
     provider = loaded_provider()
 
     algorithms = provider.algorithms()
-    assert len(algorithms) == 34
+    assert len(algorithms) == 36
 
     by_name = {algorithm.name(): algorithm for algorithm in algorithms}
 
@@ -76,6 +76,8 @@ def test_provider_registers_seven_algorithms() -> None:
         "terrain_profile",
         "dws_wr2012_extract",
         "rational_c",
+        "prepare_hec_hms_project",
+        "prepare_swmm_project",
     }
 
     expected = {
@@ -248,6 +250,16 @@ def test_provider_registers_seven_algorithms() -> None:
             "Extract: DWS and WR2012 data",
             "Hydrological Tools",
             "hydrological_tools",
+        ),
+        "prepare_hec_hms_project": (
+            "Prepare HEC-HMS project",
+            "Data Tools",
+            "data_tools",
+        ),
+        "prepare_swmm_project": (
+            "Prepare SWMM project",
+            "Data Tools",
+            "data_tools",
         ),
     }
 

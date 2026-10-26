@@ -795,13 +795,17 @@ def paint_c50(out, c: Catchment, cr: CatchmentResult, cells, dolo, grid, s) -> N
 def write_rasters(r: RunResult, cells: dict, c50) -> None:
     gdal = _gdal()
     g = r.grid
+    # class arrays may be int8; widen first, as numpy 2 refuses to mix 255
+    # into an int8 result (NEP 50) where numpy 1 silently upcast
+    role = cells["role"].astype(np.int16)
+    scls = cells["scls"].astype(np.int16)
+    perm = cells["perm"].astype(np.int16)
+    veg = cells["veg"].astype(np.int16)
     data = {
-        "role": np.where(cells["role"] > 0, cells["role"], NODATA_U8),
-        "slope_class": np.where(cells["scls"] >= 0, cells["scls"] + 1, NODATA_U8),
-        "perm_class": np.where(
-            (cells["perm"] >= 0) & (cells["role"] == 1), cells["perm"] + 1, NODATA_U8
-        ),
-        "veg_class": np.where(cells["veg"] >= 0, cells["veg"] + 1, NODATA_U8),
+        "role": np.where(role > 0, role, NODATA_U8),
+        "slope_class": np.where(scls >= 0, scls + 1, NODATA_U8),
+        "perm_class": np.where((perm >= 0) & (role == 1), perm + 1, NODATA_U8),
+        "veg_class": np.where(veg >= 0, veg + 1, NODATA_U8),
         "c1": cells["c1"],
         "c2": cells["c2"],
         "c50": c50,

@@ -9,11 +9,12 @@ def read_csv_any_delimiter(path):
     """Read a CSV that might actually be comma-, tab-, or semicolon-
     delimited (users regularly paste/export tab-separated data with a
     '.csv' extension) by sniffing the delimiter rather than assuming
-    comma."""
-    df = pd.read_csv(path, sep=None, engine="python")
+    comma. A UTF-8 byte-order mark (written by the Mayim CSV outputs so
+    that Excel shows units correctly) is removed."""
+    df = pd.read_csv(path, sep=None, engine="python", encoding="utf-8-sig")
     if df.shape[1] == 1:
         for sep in ["\t", ";", ","]:
-            candidate = pd.read_csv(path, sep=sep)
+            candidate = pd.read_csv(path, sep=sep, encoding="utf-8-sig")
             if candidate.shape[1] > 1:
                 return candidate
     return df

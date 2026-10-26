@@ -1,7 +1,11 @@
-"""Word (.docx) report for Adjust Sub-daily Rainfall to DDF.
+"""Word (.docx) report for Adjust Sub-daily Rainfall to DDF, in the Mayim
+report standard: title page, summary, tool and method, inputs and settings,
+parameters and calculations, results, outputs, notes and limitations, and
+references (house text styles, 9 pt tables with #ADADCC headers, numbered
+captions, 16.5 cm house-style figure).
 
-Requires python-docx (soft import, same pattern as the Design Rainfall
-tool) so core.py and the CSV outputs never depend on it.
+Requires python-docx (soft import) so core.py and the CSV outputs never
+depend on it. Numbers have no thousands separators.
 """
 
 from __future__ import annotations
@@ -10,315 +14,430 @@ import datetime as _dt
 import math
 
 REFERENCES = [
+    "Ball, J., Babister, M., Nathan, R., Weeks, W., Weinmann, E., Retallick, M. "
+    "and Testoni, I. (eds) (2019). Australian Rainfall and Runoff: A Guide to "
+    "Flood Estimation, Books 2 and 4. Commonwealth of Australia (Geoscience "
+    "Australia).",
+    "Efron, B. and Tibshirani, R.J. (1993). An Introduction to the Bootstrap. "
+    "Chapman and Hall, New York.",
     "Guerreiro, S.B., et al. (2024). Unravelling the complex interplay between "
     "daily and sub-daily rainfall extremes in different climates. Weather and "
     "Climate Extremes.",
+    "Hosking, J.R.M. and Wallis, J.R. (1997). Regional Frequency Analysis: An "
+    "Approach Based on L-Moments. Cambridge University Press.",
     "Lavers, D.A., et al. (2022). An evaluation of ERA5 precipitation for climate "
-    "monitoring. Quarterly Journal of the Royal Meteorological Society, 148, "
+    "monitoring. Quarterly Journal of the Royal Meteorological Society 148: "
     "3152-3165.",
-    "Wu, G., Lv, P., Mao, Y. & Wang, K. (2024). ERA5 precipitation over China: "
-    "better relative hourly and daily distribution than absolute values. Journal "
-    "of Climate, 37(5), 1581-1596.",
     "Maraun, D. (2013). Bias correction, quantile mapping, and downscaling: "
-    "revisiting the inflation issue. Journal of Climate, 26(6), 2137-2143.",
+    "revisiting the inflation issue. Journal of Climate 26(6): 2137-2143.",
     "Reder, A., et al. (2022). Characterizing extreme values of precipitation at "
     "very high resolution: an experiment over twenty European cities. Weather and "
     "Climate Extremes.",
-    "Hosking, J.R.M. & Wallis, J.R. (1997). Regional Frequency Analysis: An "
-    "Approach Based on L-Moments. Cambridge University Press.",
-    "Weiss, L.L. (1964). Ratio of true to fixed-interval maximum rainfall. Journal "
-    "of the Hydraulics Division, ASCE, 90(1), 77-82.",
-    "Smithers, J.C. & Schulze, R.E. (2003). Design Rainfall and Flood Estimation "
+    "Smithers, J.C. and Schulze, R.E. (2003). Design Rainfall and Flood Estimation "
     "in South Africa. WRC Report K5/1060, Water Research Commission, Pretoria.",
-    "Ball, J., et al. (eds) (2019). Australian Rainfall and Runoff: A Guide to "
-    "Flood Estimation, Books 2 and 4. Commonwealth of Australia (Geoscience "
-    "Australia).",
-    "Efron, B. & Tibshirani, R.J. (1993). An Introduction to the Bootstrap. "
-    "Chapman & Hall.",
+    "Weiss, L.L. (1964). Ratio of true to fixed-interval maximum rainfall. Journal "
+    "of the Hydraulics Division, ASCE 90(1): 77-82.",
+    "Wu, G., Lv, P., Mao, Y. and Wang, K. (2024). ERA5 precipitation over China: "
+    "better relative hourly and daily distribution than absolute values. Journal "
+    "of Climate 37(5): 1581-1596.",
 ]
+TITLE = "Adjust Sub-daily Rainfall to DDF"
+MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun"] + [
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+]
+TEXT_WIDTH_CM = 16.5
 
 
 def _f(v, nd=2):
-    if v is None:
+    """Number with ``nd`` decimals and no thousands separator; '-' when
+    missing."""
+    if v is None or v == "":
         return "-"
     try:
-        if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
-            return "-"
-        return f"{float(v):.{nd}f}"
+        x = float(v)
     except (TypeError, ValueError):
         return str(v)
+    if math.isnan(x) or math.isinf(x):
+        return "-"
+    return f"{x:.{nd}f}"
 
 
-def _table(doc, header, rows, widths=None):
-    t = doc.add_table(rows=1, cols=len(header))
-    t.style = (
-        "Light Grid Accent 1"
-        if "Light Grid Accent 1" in [s.name for s in doc.styles]
-        else "Table Grid"
+def _txt(v) -> str:
+    if v is None or v == "":
+        return "-"
+    if isinstance(v, bool):
+        return "yes" if v else "no"
+    if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+        return "-"
+    return str(v)
+
+
+def _list(v) -> str:
+    """A comma-separated list with a space after each comma (so it is never
+    read as a thousands separator)."""
+    if v is None or v == "":
+        return "-"
+    if isinstance(v, list | tuple):
+        return ", ".join(f"{x:g}" if isinstance(x, float) else str(x) for x in v)
+    return ", ".join(
+        p.strip() for p in str(v).replace(";", ",").split(",") if p.strip()
     )
-    for j, h in enumerate(header):
-        t.rows[0].cells[j].text = str(h)
-    for r in rows:
-        cells = t.add_row().cells
-        for j, v in enumerate(r):
-            cells[j].text = str(v)
-    return t
 
 
-def write_docx(result, path, chart_path=None, inputs=None):
-    from docx import Document
-    from docx.shared import Cm, Pt
+def _even(n_cols: int, first: float) -> list[float]:
+    rest = (TEXT_WIDTH_CM - first) / max(n_cols - 1, 1)
+    return [first] + [rest] * (n_cols - 1)
+
+
+def _role(r):
+    return {"calibration": "fitted", "validation": "check"}.get(r, r)
+
+
+def write_docx(
+    result,
+    path,
+    chart_path=None,
+    inputs=None,
+    chart=None,
+    context=None,
+):
+    """Writes the report and returns a list of notes (figures that could not
+    be added). ``chart`` is a PNG stream (house-style figure); without it
+    ``chart_path`` (a PNG file) is used, or the figure is drawn here.
+    ``context`` gives project_number, project_name, software, settings
+    (extra [(item, value)] rows), outputs [(label, path)] and warnings."""
+    from mayim_tools._common.docx_report import Doc
 
     inputs = inputs or {}
+    context = context or {}
+    notes: list[str] = []
     md = result.metadata
     ap = result.adjust_params
-    doc = Document()
-    style = doc.styles["Normal"]
-    style.font.name = "Calibri"
-    style.font.size = Pt(10)
-
-    doc.add_heading("Adjustment of Sub-daily Rainfall to a Reference DDF", level=0)
-    p = doc.add_paragraph()
-    p.add_run(
-        f"Site: {inputs.get('site') or md.get('reference_site') or '-'}    "
-        f"Generated: {_dt.date.today().isoformat()}    "
-        f"Tool: Mayim Tools - Adjust Sub-daily Rainfall to DDF"
-    )
-    s = doc.add_paragraph()
-    run = s.add_run(f"Reference: {md.get('reference_tier')}. {result.status_stamp}.")
-    run.bold = "INDICATIVE" in result.status_stamp
-
-    # 1 Purpose
-    doc.add_heading("1. Purpose", level=1)
-    doc.add_paragraph(
-        "Gridded reanalysis and satellite rainfall products (e.g. ERA5) represent "
-        "grid-cell averages and, in the case of reanalyses, parameterised convection. "
-        "Their short-duration (sub-daily) intensities are therefore typically lower "
-        "than point (gauge) intensities, and the shortfall tends to grow towards "
-        "rarer events. This report documents the adjustment of the input sub-daily "
-        "series so that its annual-maximum depths at all tested durations are "
-        "consistent with the supplied reference Depth-Duration-Frequency (DDF) "
-        "table, while retaining the timing and sequence of the recorded storms."
-    )
-
-    # 2 Inputs
-    doc.add_heading("2. Inputs", level=1)
-    rows = [
-        ("Rainfall series", inputs.get("series", "-")),
-        ("Record analysed", f"{md.get('record_start')} to {md.get('record_end')}"),
-        ("Native time step", f"{_f(md.get('native_step_min'), 0)} min"),
-        ("Complete years used", str(md.get("n_years_used"))),
-        ("Years excluded (completeness)", md.get("years_excluded") or "none"),
-        ("Time-zone offset applied", f"{_f(md.get('timezone_offset_h'), 1)} h"),
-        ("Reference DDF", inputs.get("ddf", "-")),
-        ("Reference tier", md.get("reference_tier")),
-        ("Reference already areal (ARF applied)", str(md.get("reference_is_areal"))),
-        ("Reference durations (min)", md.get("reference_durations_min")),
-        ("Reference return periods (yr)", md.get("reference_return_periods_yr")),
-        (
-            "Reference conversions",
-            "; ".join(
-                x
-                for x in (
-                    md.get("reference_fixed_day_conversions"),
-                    (
-                        f"dropped: {md.get('reference_durations_dropped')}"
-                        if md.get("reference_durations_dropped")
-                        else ""
-                    ),
-                )
-                if x
-            )
-            or "none",
-        ),
-        ("Distribution / fitting", md.get("distribution")),
-        ("Fixed-interval correction", md.get("fixed_interval_correction")),
-        (
-            "Storm separation",
-            f"IETD {_f(md.get('ietd_hours'), 1)} h, minimum depth "
-            f"{_f(md.get('min_event_depth_mm'), 1)} mm; {md.get('n_events')} storms",
-        ),
-    ]
-    _table(doc, ["Item", "Value"], rows)
-
-    # 3 Method
-    doc.add_heading("3. Method", level=1)
-    doc.add_paragraph(
-        "Annual-maximum series (AMS) are extracted from the series with sliding "
-        "windows at each duration and fitted with the distribution above; return "
-        "periods are annual-maximum values (AEP = 1/T), consistent with the "
-        "reference table. Maxima from fixed-interval data are multiplied by the "
-        "Weiss (1964) factor 1/(1 - 1/(8n)) for an n-step window. Missing data are "
-        "never treated as zero; years below the completeness threshold are "
-        "excluded from every duration."
-    )
     mi = result.map_info or {}
-    doc.add_paragraph(
-        "Pass 1 - magnitude and annual total. The product's own AMS distribution G "
-        "is fitted at the anchor duration "
-        f"({_f(md.get('anchor_duration_min', 0) / 60, 0)} h). "
-        "Each storm's anchor-duration depth x is mapped to a target depth f(x) "
-        "and the whole storm is multiplied by f(x)/x, which retains storm timing. For "
-        "storms in the annual-maximum range (x >= x0, where x0 is the product's "
-        f"depth at T0 = {_f(mi.get('transfer_t0_yr'), 1)} yr) f(x) is the reference "
-        "depth at the storm's own return period in G, T = G^-1(x): the reference table "
-        "(interpolated in ln T, extrapolated beyond its rarest return period and "
-        "flagged), extended between T0 and the table's most frequent return period by "
-        "a GEV fitted to the table. For smaller storms f(x) = f(x0)(x/x0)^gamma, and "
-        "rain outside any storm takes the factor of the smallest storm. The exponent "
-        "gamma is solved so that the adjusted series reproduces the target mean "
-        "annual precipitation (MAP). gamma > 1 lowers light rain relative to heavy "
-        "rain, concentrating the same annual total into fewer, heavier storms; this "
-        "corrects the well-documented tendency of reanalysis products to spread "
-        "rainfall as too-frequent light rain with too-weak peaks (Lavers et al. 2022; "
-        "Wu et al. 2024). Because pass 2 conserves mass, the MAP is retained exactly."
+    site = inputs.get("site") or md.get("input_site") or md.get("reference_site")
+    tier3 = "INDICATIVE" in (result.status_stamp or "")
+
+    d = Doc(house_style=True)
+    purpose = (
+        "This report documents the adjustment of a sub-daily gridded rainfall "
+        "series so that its annual-maximum depths at every tested duration match "
+        "a reference depth-duration-frequency (DDF) table, while the timing and "
+        "sequence of the recorded storms are kept, for use in design and "
+        "continuous simulation."
     )
-    doc.add_paragraph(
-        "Pass 2 - within-storm shape (nested peak-window scaling). Working down a "
-        "ladder of calibration durations, the highest-depth window of each rung's "
-        "duration inside the storm's peak window at the previous rung is multiplied "
-        "by alpha = exp(a + c(ln T - ln 10)) and the remainder of that parent window "
-        "by beta = (P - alpha C)/(P - C). The parent total P is unchanged, so rainfall "
-        "mass is conserved at every coarser duration, zero-rain steps remain zero and "
-        "storm timing is preserved. The coefficients (a, c) of each rung are fitted "
-        "so that the adjusted series' implied DDF matches the reference at that "
-        "rung's duration. Durations between the rungs and longer than the anchor "
-        "are not fitted and serve as independent validation."
-    )
-    if ap.get("ensemble_n_realisations"):
-        doc.add_paragraph(
-            f"Stochastic ensemble. {ap.get('ensemble_n_realisations')} realisations "
-            "were generated by multiplying each storm's alpha at every rung by an "
-            "independent mean-one lognormal factor (sigma = "
-            f"{_f(ap.get('ensemble_sigma'), 2)}), with the coefficients re-fitted "
-            "so that the ensemble-median implied DDF matches the reference. The "
-            "spread across realisations expresses within-storm variability that a "
-            "DDF table cannot itself constrain."
-        )
-    doc.add_paragraph(
-        f"Uncertainty. The 5-95% intervals are from {md.get('n_bootstrap')} "
-        "bootstrap resamples of whole years (Efron & Tibshirani 1993). A duration is "
-        "'consistent' when the median ratio is within "
-        f"±{_f(md.get('tolerance_pct'), 0)}% "
-        "of 1, 'inconclusive' when outside that but the interval still includes 1, "
-        "and 'flatter'/'peakier' otherwise."
+    if tier3:
+        purpose += f" {result.status_stamp}."
+    d.title_page(
+        TITLE,
+        purpose,
+        [
+            ("Project number", context.get("project_number") or "-"),
+            ("Project / site", context.get("project_name") or site or "-"),
+            ("Prepared by", "Mayim Consulting"),
+            (
+                "Tool and version",
+                f"{TITLE}, version {context.get('tool_version') or '-'}",
+            ),
+            ("Software", context.get("software") or "-"),
+            ("Report date", _dt.date.today().isoformat()),
+            ("Document status", "Draft"),
+        ],
+        subtitle=context.get("project_name") or None,
     )
 
-    # 4 Results
-    doc.add_heading("4. Results", level=1)
-    doc.add_paragraph(
-        f"Before adjustment: {md.get('overall_verdict')}. After adjustment: "
-        f"{result.verdict_after or 'not adjusted'}. Validation durations only: "
-        f"{ap.get('verdict_after_validation_durations', '-')}. Anchor self-check "
-        f"(pass 1): {'passed' if result.self_check_passed else 'WARNING'} (max "
-        f"deviation {_f(100 * md.get('self_check_max_deviation', 0), 1)}%)."
+    # ------------------------------------------------------------ summary
+    d.heading("Summary", 1)
+    d.para(
+        f"The rainfall series{f' for {site}' if site else ''} "
+        f"({md.get('record_start')} to {md.get('record_end')}, "
+        f"{md.get('n_years_used')} complete years at a {_f(md.get('native_step_min'), 0)} "
+        "min step) was adjusted to the reference DDF. Before adjustment: "
+        f"{md.get('overall_verdict') or '-'}. After adjustment: "
+        f"{result.verdict_after or 'not adjusted'}."
     )
-    if mi:
-        doc.add_paragraph("Table A. Mean annual precipitation and rainfall frequency.")
-        _table(
-            doc,
-            ["Item", "Value"],
+    if tier3:
+        d.para(f"{result.status_stamp}: the reference is a gridded product only.")
+    d.caption("Table", "Summary of the adjustment")
+    d.table(
+        ["Item", "Value"],
+        [
+            ["Reference tier", _txt(md.get("reference_tier"))],
+            ["Mean annual precipitation, input (mm)", _f(mi.get("map_input_mm"), 1)],
             [
-                (
-                    "MAP of input series (complete years)",
-                    f"{_f(mi.get('map_input_mm'), 1)} mm",
-                ),
-                (
-                    "Target MAP",
-                    f"{_f(mi.get('map_target_mm'), 1)} mm "
-                    f"(source: {mi.get('map_target_source', '-')})",
-                ),
-                ("MAP of adjusted series", f"{_f(mi.get('map_output_mm'), 1)} mm"),
-                ("Bulk exponent gamma", _f(mi.get("transfer_gamma"), 3)),
-                (
-                    "Transfer start x0 (product depth at T0)",
-                    f"{_f(mi.get('transfer_x0_mm'), 1)} mm",
-                ),
-                (
-                    "Wet steps per year (> "
-                    f"{_f(mi.get('wet_step_threshold_mm'), 2)} mm), input -> adjusted",
-                    f"{_f(mi.get('wet_steps_per_year_input'), 0)} -> "
-                    f"{_f(mi.get('wet_steps_per_year_adjusted'), 0)}",
-                ),
+                "Target mean annual precipitation (mm)",
+                f"{_f(mi.get('map_target_mm'), 1)} ({mi.get('map_target_source', '-')})",
             ],
-        )
-    if result.monthly_rows:
-        names = [
-            "Jan",
-            "Feb",
-            "Mar",
-            "Apr",
-            "May",
-            "Jun",
-            "Jul",
-            "Aug",
-            "Sep",
-            "Oct",
-            "Nov",
-            "Dec",
-        ]
-        doc.add_paragraph(
-            "Table B. Mean monthly rainfall (mm), input -> adjusted (seasonal check)."
-        )
-        _table(
-            doc,
-            ["Month", "Input", "Adjusted", "Ratio"],
+            ["Mean annual precipitation, adjusted (mm)", _f(mi.get("map_output_mm"), 1)],
+            ["Bulk exponent γ (-)", _f(mi.get("transfer_gamma"), 3)],
             [
-                (
-                    names[r["month"] - 1],
+                "Anchor self-check (pass 1)",
+                f"{'passed' if result.self_check_passed else 'WARNING'}, maximum "
+                f"deviation {_f(100 * (md.get('self_check_max_deviation') or 0), 1)} %",
+            ],
+            [
+                "Verdict, validation durations only",
+                _txt(ap.get("verdict_after_validation_durations")),
+            ],
+            ["Storms identified / reshaped", f"{_txt(md.get('n_events'))} / "
+             f"{_txt(ap.get('n_storms_adjusted'))}"],
+        ],  # fmt: skip
+        [7.0, 9.5],
+    )
+
+    # ------------------------------------------------------------ method
+    d.heading("Tool and method", 1)
+    anchor_h = (md.get("anchor_duration_min") or 1440) / 60
+    for step in (
+        [
+            "The series is regularised to its native time step; missing data stay "
+            "missing (never zero) and years below the completeness threshold are left "
+            "out of every duration. A time-zone offset, when given, is applied before "
+            "calendar years and months are assigned.",
+            "Annual-maximum series (AMS) are extracted with sliding windows at each "
+            "duration and fitted with the chosen distribution; return periods are "
+            "annual-maximum values (AEP = 1/T), as in the reference table. Maxima from "
+            "fixed-interval data are multiplied by the Weiss (1964) factor.",
+            "Storms are separated by the inter-event time definition (IETD) and a "
+            "minimum storm depth.",
+            f"Pass 1, magnitude and annual total: the product's own AMS distribution G "
+            f"is fitted at the anchor duration ({_f(anchor_h, 0)} h). Each storm's "
+            "anchor depth x is mapped to a target depth f(x) and the whole storm is "
+            "multiplied by f(x)/x, which keeps its timing. In the annual-maximum range "
+            f"(x ≥ x0, the product's depth at T0 = {_f(mi.get('transfer_t0_yr'), 1)} "
+            "years) f(x) is the reference depth at the storm's own return period in G. "
+            "Smaller storms follow f(x) = f(x0)(x/x0)^γ, with γ solved so that the "
+            "adjusted series reproduces the target mean annual precipitation (MAP); "
+            "γ > 1 moves the annual total out of light rain into fewer, heavier storms "
+            "(Lavers et al. 2022; Wu et al. 2024).",
+            "Pass 2, within-storm shape: working down a ladder of calibration durations, "
+            "the peak window of each storm at that duration is multiplied by α and the "
+            "rest of its parent window by β, so the parent total is unchanged (mass is "
+            "conserved, dry steps stay dry, timing is kept). The coefficients of each "
+            "rung are fitted so that the adjusted series' implied DDF matches the "
+            "reference at that duration.",
+            "Durations between the rungs and longer than the anchor are not fitted; "
+            "they are the independent validation. The ratio F of implied to reference "
+            "depth is reported before and after, with 5-95 % intervals from "
+            f"{_txt(md.get('n_bootstrap'))} bootstrap resamples of whole years (Efron "
+            "and Tibshirani 1993).",
+        ]
+        + (
+            [
+                f"Stochastic ensemble: {ap.get('ensemble_n_realisations')} realisations "
+                "multiply each storm's α at every rung by an independent mean-one "
+                f"lognormal factor (σ = {_f(ap.get('ensemble_sigma'), 2)}); the "
+                "coefficients are re-fitted so that the ensemble-median implied DDF "
+                "matches the reference."
+            ]
+            if ap.get("ensemble_n_realisations")
+            else []
+        )
+        + (
+            [
+                "Storm library: normalised patterns of the adjusted storms with their "
+                "AEP band, shape (Early / Middle / Late) and an embedded-burst flag "
+                "(Ball et al. 2019), for Monte Carlo design storms."
+            ]
+            if md.get("n_library_patterns")
+            else []
+        )
+    ):
+        d.numbered(step)
+
+    # ------------------------------------------------------------ inputs
+    d.heading("Inputs and settings", 1)
+    conversions = "; ".join(
+        x
+        for x in (
+            md.get("reference_fixed_day_conversions"),
+            (
+                f"dropped: {md.get('reference_durations_dropped')}"
+                if md.get("reference_durations_dropped")
+                else ""
+            ),
+        )
+        if x
+    )
+    rows = [
+        ["Rainfall series", _txt(inputs.get("series"))],
+        ["Site", _txt(site)],
+        ["Record analysed", f"{md.get('record_start')} to {md.get('record_end')}"],
+        ["Native time step (min)", _f(md.get("native_step_min"), 0)],
+        ["Complete years used", _txt(md.get("n_years_used"))],
+        ["Years left out (completeness)", _list(md.get("years_excluded")) if md.get("years_excluded") else "none"],
+        ["Minimum year completeness (-)", _f(md.get("min_completeness"), 2)],
+        ["Time-zone offset applied (h)", _f(md.get("timezone_offset_h"), 1)],
+        ["Reference DDF", _txt(inputs.get("ddf"))],
+        ["Reference tier", _txt(md.get("reference_tier"))],
+        ["Reference already areal (ARF applied)", _txt(md.get("reference_is_areal"))],
+        ["Reference durations (min)", _list(md.get("reference_durations_min"))],
+        ["Reference return periods (years)", _list(md.get("reference_return_periods_yr"))],
+        ["Reference conversions", conversions or "none"],
+        ["Target MAP source", _txt(mi.get("map_target_source"))],
+        ["Anchor duration (h)", _f(anchor_h, 0)],
+        ["Calibration durations (min)", _list(ap.get("calibration_durations_min"))],
+        ["Validation durations (min)", _list(ap.get("validation_durations_min"))],
+        ["Peak concentration varies with return period", _txt(md.get("rarity_dependent"))],
+        ["Distribution / fitting", _txt(md.get("distribution"))],
+        ["Fixed-interval correction", _txt(md.get("fixed_interval_correction"))],
+        ["IETD (h)", _f(md.get("ietd_hours"), 1)],
+        ["Minimum storm depth (mm)", _f(md.get("min_event_depth_mm"), 1)],
+        ["Tolerance |F - 1| (%)", _f(md.get("tolerance_pct"), 0)],
+        ["Bootstrap replicates", _txt(md.get("n_bootstrap"))],
+        ["Ensemble realisations / σ", f"{_txt(ap.get('ensemble_n_realisations') or 0)} / "
+         f"{_f(ap.get('ensemble_sigma'), 2) if ap.get('ensemble_n_realisations') else '-'}"],
+        ["Random seed", _txt(md.get("random_seed"))],
+    ] + [[a, _txt(b)] for a, b in context.get("settings", [])]  # fmt: skip
+    d.caption("Table", "Inputs and settings")
+    d.table(["Item", "Value"], rows, [7.0, 9.5])
+
+    # ------------------------------------------------------------ parameters
+    d.heading("Parameters and calculations", 1)
+    d.caption("Table", "Parameters and definitions")
+    d.table(
+        ["Parameter", "Value", "Definition / equation (source)"],
+        [
+            ["Weiss factor W (-)", "1/(1 - 1/(8n))",
+             "True to fixed-interval maximum for an n-step window (Weiss 1964)"],
+            ["Ratio F (-)", "implied / reference",
+             "DDF depth implied by the series over the reference depth"],
+            ["Product distribution G", _txt(md.get("distribution")),
+             "AMS fit of the product at the anchor duration (Hosking and Wallis 1997)"],
+            ["Transfer start x0 (mm)", _f(mi.get("transfer_x0_mm"), 1),
+             f"Product anchor depth at T0 = {_f(mi.get('transfer_t0_yr'), 1)} years"],
+            ["Bulk exponent γ (-)", _f(mi.get("transfer_gamma"), 3),
+             "f(x) = f(x0)(x/x0)^γ below x0; solved for the target MAP"],
+            ["Peak factor α (-)", "exp(a + c(ln T - ln 10))",
+             "Pass-2 multiplier of the peak window; a, c fitted per rung"],
+            ["Remainder factor β (-)", "(P - αC)/(P - C)",
+             "Keeps the parent window total P (C = peak window depth)"],
+            ["Tolerance (%)", _f(md.get("tolerance_pct"), 0),
+             "Consistent when |F - 1| is within the tolerance"],
+            ["Bootstrap interval", "5-95 %",
+             f"{_txt(md.get('n_bootstrap'))} resamples of whole years (Efron and Tibshirani 1993)"],
+        ],  # fmt: skip
+        [4.6, 3.4, 8.5],
+    )
+    d.para(
+        "Verdicts: 'consistent' when the median F is within the tolerance of 1, "
+        "'inconclusive' when outside it but the interval still includes 1, and "
+        "'flatter' or 'peakier' otherwise."
+    )
+
+    # ------------------------------------------------------------ results
+    d.heading("Results", 1)
+    d.heading("Mean annual precipitation and rainfall frequency", 2)
+    d.caption("Table", "Mean annual precipitation and rainfall frequency")
+    d.table(
+        ["Item", "Value"],
+        [
+            ["MAP of the input series, complete years (mm)", _f(mi.get("map_input_mm"), 1)],
+            ["Target MAP (mm)", f"{_f(mi.get('map_target_mm'), 1)} "
+             f"(source: {mi.get('map_target_source', '-')})"],
+            ["MAP of the adjusted series (mm)", _f(mi.get("map_output_mm"), 1)],
+            ["Bulk exponent γ (-)", _f(mi.get("transfer_gamma"), 3)],
+            ["Transfer start x0 (mm)", _f(mi.get("transfer_x0_mm"), 1)],
+            [f"Wet steps per year (> {_f(mi.get('wet_step_threshold_mm'), 2)} mm), "
+             "input / adjusted",
+             f"{_f(mi.get('wet_steps_per_year_input'), 0)} / "
+             f"{_f(mi.get('wet_steps_per_year_adjusted'), 0)}"],
+        ],  # fmt: skip
+        [9.5, 7.0],
+    )
+    if result.monthly_rows:
+        d.caption("Table", "Mean monthly rainfall, input and adjusted (seasonal check)")
+        d.table(
+            ["Month", "Input (mm)", "Adjusted (mm)", "Ratio (-)"],
+            [
+                [
+                    MONTHS[r["month"] - 1],
                     _f(r["input_mean_mm"], 1),
                     _f(r["adjusted_mean_mm"], 1),
                     _f(r["ratio"], 2),
-                )
+                ]
                 for r in result.monthly_rows
             ],
+            [4.0, 4.2, 4.2, 4.1],
         )
-    if chart_path:
+
+    d.heading("Consistency with the reference DDF", 2)
+    stream = chart
+    if stream is None and chart_path:
         try:
-            doc.add_picture(str(chart_path), width=Cm(16.5))
-            cap = doc.add_paragraph().add_run(
-                "Figure 1. Ratio F of implied to reference DDF depth against "
-                "duration, before (left) and after (right) adjustment; bands show "
-                "5-95% bootstrap intervals, the grey band the tolerance."
-            )
-            cap.italic = True
-        except Exception:  # a missing/corrupt chart must not fail the report
-            pass
+            with open(chart_path, "rb") as fh:
+                import io
+
+                stream = io.BytesIO(fh.read())
+        except OSError as exc:
+            notes.append(f"Chart file could not be read ({exc}).")
+    if stream is None:
+        try:
+            from .export import flatness_figure
+
+            stream, style_notes = flatness_figure(result)
+            notes.extend(style_notes)
+        except ImportError:
+            notes.append("matplotlib is not available: the chart was not drawn.")
+        except Exception as exc:  # noqa: BLE001 - the report must still be written
+            notes.append(f"The chart could not be drawn ({exc}).")
+    if stream is not None:
+        caption = (
+            "Ratio F of implied to reference DDF depth against duration, before "
+            "(left) and after (right) adjustment; shaded bands are the 5-95 % "
+            "bootstrap intervals and the grey band the tolerance"
+        )
+        if tier3:
+            caption += f" ({result.status_stamp})"
+        try:
+            d.picture(stream, caption)
+        except Exception as exc:  # noqa: BLE001
+            notes.append(f"The chart could not be added ({exc}).")
 
     aris = sorted({r["return_period_yr"] for r in result.after_rows})
     durs = sorted({r["duration_min"] for r in result.after_rows})
     look = {(r["duration_min"], r["return_period_yr"]): r for r in result.after_rows}
-    header = ["Duration", "Role"] + [f"1:{t:g} yr" for t in aris]
-    rows = []
-    for d in durs:
-        role = {"calibration": "fitted", "validation": "check"}.get(
-            look[(d, aris[0])]["role"], look[(d, aris[0])]["role"]
+    if aris and durs:
+        rp_head = [f"1:{t:g} (-)" for t in aris]
+        rows = []
+        for dur in durs:
+            first = look[(dur, aris[0])]
+            rows.append(
+                [first["duration"], _role(first["role"])]
+                + [
+                    f"{_f(look[(dur, t)]['F_before'])} / {_f(look[(dur, t)]['F_after'])}"
+                    for t in aris
+                ]
+            )
+        d.caption(
+            "Table",
+            "Ratio F (implied / reference), before / after adjustment, by duration "
+            "and return period (fitted = calibration rung, check = validation)",
         )
-        rows.append(
-            [look[(d, aris[0])]["duration"], role]
+        d.table(
+            ["Duration", "Role"] + rp_head,
+            rows,
+            [2.0, 1.6] + [(TEXT_WIDTH_CM - 3.6) / len(aris)] * len(aris),
+        )
+        rows = [
+            [look[(dur, aris[0])]["duration"]]
             + [
-                f"{_f(look[(d, t)]['F_before'])} -> {_f(look[(d, t)]['F_after'])}"
+                f"{_f(look[(dur, t)]['reference_depth_mm'], 1)} / "
+                f"{_f(look[(dur, t)]['adjusted_implied_depth_mm'], 1)}"
                 for t in aris
             ]
+            for dur in durs
+        ]
+        d.caption("Table", "Depth (mm), reference / adjusted series")
+        d.table(
+            ["Duration"] + [f"1:{t:g} (mm)" for t in aris],
+            rows,
+            _even(len(aris) + 1, 2.4),
         )
-    doc.add_paragraph(
-        "Table 1. Ratio F (implied / reference), before -> after. Role: fitted = "
-        "calibration rung, check = independent validation duration."
-    )
-    _table(doc, header, rows)
-
-    rows = []
-    for d in durs:
-        rows.append(
-            [look[(d, aris[0])]["duration"]]
-            + [
-                f"{_f(look[(d, t)]['reference_depth_mm'], 1)} / "
-                f"{_f(look[(d, t)]['adjusted_implied_depth_mm'], 1)}"
-                for t in aris
-            ]
-        )
-    doc.add_paragraph("Table 2. Depth (mm): reference / adjusted series.")
-    _table(doc, ["Duration"] + [f"1:{t:g} yr" for t in aris], rows)
 
     rung_rows = []
     for k in sorted(ap):
@@ -333,78 +452,84 @@ def write_docx(result, path, chart_path=None, inputs=None):
                 ]
             )
     if rung_rows:
-        doc.add_paragraph("Table 3. Fitted pass-2 coefficients per calibration rung.")
-        _table(doc, ["Rung", "a", "c", "RMSE (log)"], rung_rows)
+        d.caption("Table", "Fitted pass-2 coefficients per calibration rung")
+        d.table(["Rung", "a (-)", "c (-)", "RMSE of ln depth (-)"], rung_rows,
+                [4.0, 4.0, 4.0, 4.5])  # fmt: skip
 
-    if result.ensemble_rows:
-        erows = []
+    if result.ensemble_rows and aris:
         el = {
             (r["duration_min"], r["return_period_yr"]): r for r in result.ensemble_rows
         }
-        for d in durs:
-            erows.append(
-                [look[(d, aris[0])]["duration"]]
-                + [
-                    f"{_f(el[(d, t)]['F_ensemble_p05'])}-"
-                    f"{_f(el[(d, t)]['F_ensemble_p95'])}"
-                    for t in aris
-                ]
-            )
-        doc.add_paragraph("Table 4. Ensemble spread of F (5-95% across realisations).")
-        _table(doc, ["Duration"] + [f"1:{t:g} yr" for t in aris], erows)
+        erows = [
+            [look[(dur, aris[0])]["duration"]]
+            + [
+                (
+                    f"{_f(el[(dur, t)]['F_ensemble_p05'])} - {_f(el[(dur, t)]['F_ensemble_p95'])}"
+                    if (dur, t) in el
+                    else "-"
+                )
+                for t in aris
+            ]
+            for dur in durs
+        ]
+        d.caption("Table", "Ensemble spread of F (5-95 % across realisations)")
+        d.table(
+            ["Duration"] + [f"1:{t:g} (-)" for t in aris],
+            erows,
+            _even(len(aris) + 1, 2.4),
+        )
 
-    # 5 Diagnostics
-    doc.add_heading("5. Diagnostics", level=1)
+    d.heading("Diagnostics", 2)
     diag = [
-        ("Storms identified", md.get("n_events")),
-        (
-            "Storms touching missing data (not reshaped)",
-            md.get("n_events_touching_missing"),
-        ),
-        (
-            "Storms in the bulk segment (below T0)",
-            md.get("n_events_bulk_segment"),
-        ),
-        (
-            "Storms beyond reference range (extrapolated)",
-            md.get("n_events_beyond_reference_range"),
-        ),
-        ("Storms reshaped in pass 2", ap.get("n_storms_adjusted")),
-        ("Calibration durations (min)", ap.get("calibration_durations_min")),
-        ("Validation durations (min)", ap.get("validation_durations_min")),
-        ("Random seed", md.get("random_seed")),
-    ]
-    _table(doc, ["Item", "Value"], [(a, "-" if b is None else b) for a, b in diag])
-    if result.warnings:
-        doc.add_paragraph("Warnings:")
-        for w in result.warnings:
-            doc.add_paragraph(w, style="List Bullet")
+        ["Storms identified", _txt(md.get("n_events"))],
+        ["Storms touching missing data (not reshaped)", _txt(md.get("n_events_touching_missing"))],
+        ["Storms in the bulk segment (below T0)", _txt(md.get("n_events_bulk_segment"))],
+        ["Storms beyond the reference range (extrapolated)",
+         _txt(md.get("n_events_beyond_reference_range"))],
+        ["Storms reshaped in pass 2", _txt(ap.get("n_storms_adjusted"))],
+        ["Storm library patterns", _txt(md.get("n_library_patterns"))],
+    ]  # fmt: skip
+    d.caption("Table", "Diagnostics")
+    d.table(["Item", "Value"], diag, [9.5, 7.0])
 
-    # 6 Limitations
-    doc.add_heading("6. Interpretation and limitations", level=1)
+    # ------------------------------------------------------------ outputs
+    outputs = context.get("outputs") or []
+    if outputs:
+        d.heading("Outputs", 1)
+        d.caption("Table", "Files written")
+        d.table(["Output", "File"], [[a, b] for a, b in outputs], [5.0, 11.5])
+
+    # ------------------------------------------------------------ notes
+    d.heading("Notes and limitations", 1)
     for txt in (
         "The adjusted series is a statistical reconstruction for design and "
         "continuous-simulation use. It reproduces the reference DDF in the "
-        "annual-maximum sense; individual storms are not claimed to be the "
-        "true historical point rainfall.",
+        "annual-maximum sense; individual storms are not claimed to be the true "
+        "historical point rainfall.",
         "No detail finer than the input's native time step is created.",
         "The target MAP should describe the same period as the series. A long-term "
         "MAP from a different period (e.g. the gauge period behind a published DDF) "
         "embeds any trend between the two periods.",
-        "The reference DDF is taken as correct. Its own uncertainty (e.g. the "
-        "Design Rainfall lower/upper bounds, reported in the consistency CSV) is "
-        "not propagated into the adjustment.",
+        "The reference DDF is taken as correct. Its own uncertainty (e.g. the Design "
+        "Rainfall lower and upper bounds, given in the consistency CSV) is not "
+        "propagated into the adjustment.",
         "Part of the pre-adjustment deficit is the legitimate point-versus-area "
         "difference of a grid cell. If the adjusted series is to represent a "
         "catchment rather than a point, supply an areally reduced reference DDF.",
-        "Validation durations are an internal consistency check; independent "
-        "gauge records, where available, remain the preferred verification.",
+        "Validation durations are an internal consistency check; independent gauge "
+        "records, where available, remain the preferred verification.",
     ):
-        doc.add_paragraph(txt, style="List Bullet")
+        d.bullet(txt)
+    msgs = list(
+        dict.fromkeys(list(result.warnings) + list(context.get("warnings", [])) + notes)
+    )
+    if msgs:
+        d.label("Processing messages")
+        for m in msgs:
+            d.bullet(m)
 
-    doc.add_heading("References", level=1)
-    for r in REFERENCES:
-        doc.add_paragraph(r, style="List Bullet")
-
-    doc.save(str(path))
-    return True
+    d.heading("References", 1)
+    for ref in REFERENCES:
+        d.para(ref)
+    d.doc.save(str(path))
+    return notes

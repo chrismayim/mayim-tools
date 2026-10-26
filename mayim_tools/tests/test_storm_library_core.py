@@ -422,7 +422,7 @@ def test_exports_write_blank_for_missing(tmp_path, identity_result):
     export.write_library_csv(identity_result, tmp_path / "l.csv")
     export.write_events_csv(identity_result, tmp_path / "e.csv")
     export.write_metadata_csv(identity_result, tmp_path / "m.csv")
-    c = pd.read_csv(tmp_path / "c.csv")
+    c = pd.read_csv(tmp_path / "c.csv", comment="#")
     assert {
         "before_F",
         "before_F_p50",
@@ -431,7 +431,7 @@ def test_exports_write_blank_for_missing(tmp_path, identity_result):
         "after_decision",
         "status",
     } <= set(c.columns)
-    lib = pd.read_csv(tmp_path / "l.csv")
+    lib = pd.read_csv(tmp_path / "l.csv", comment="#")
     assert len(lib) == len(identity_result.library_rows)
     m = pd.read_csv(tmp_path / "m.csv")
     assert "overall_verdict" in set(m["key"])
@@ -440,6 +440,37 @@ def test_exports_write_blank_for_missing(tmp_path, identity_result):
     pytest.importorskip("matplotlib")
     assert export.write_flatness_png(identity_result, tmp_path / "f.png")
     assert (tmp_path / "f.png").stat().st_size > 1000
+
+
+def test_csvs_follow_the_output_standard(tmp_path, identity_result):
+    export.write_consistency_csv(identity_result, tmp_path / "c.csv")
+    export.write_events_csv(identity_result, tmp_path / "e.csv")
+    raw = (tmp_path / "c.csv").read_bytes()
+    assert raw.startswith(b"\xef\xbb\xbf")  # UTF-8 with BOM
+    text = raw.decode("utf-8-sig").splitlines()
+    assert text[0] == "# Column key"
+    assert any(line.startswith("# before_F: ") for line in text)
+    header = next(line for line in text if not line.startswith("#"))
+    assert header.startswith("duration_min,duration,return_period_yr")
+    ev = pd.read_csv(tmp_path / "e.csv", comment="#")
+    assert "scale_factor" in ev.columns
+    # the shared reader used by the other rainfall tools removes the BOM
+    from mayim_tools.rainfall._common.csvio import read_csv_any_delimiter
+
+    export.write_metadata_csv(identity_result, tmp_path / "m.csv")
+    m = read_csv_any_delimiter(tmp_path / "m.csv")
+    assert list(m.columns) == ["key", "value"]
+
+
+def test_chart_is_house_size(identity_result):
+    pytest.importorskip("matplotlib")
+    from PIL import Image
+
+    stream, _notes = export.flatness_figure(identity_result)
+    img = Image.open(stream)
+    w, h = img.size
+    assert w == round(16.5 / 2.54 * 200)  # 16.5 cm at 200 dpi, not cropped
+    assert h == round(export.FIGURE_HEIGHT_CM / 2.54 * 200)
 
 
 # ----------------------------------------------------------------------
@@ -548,11 +579,34 @@ def test_report_docx_written(tmp_path, adjusted_result):
     png = tmp_path / "c.png"
     assert export.write_flatness_png(res, png)
     out = tmp_path / "r.docx"
-    report.write_docx(res, out, chart_path=png, inputs={"series": "x.csv"})
+    notes = report.write_docx(
+        res,
+        out,
+        chart_path=png,
+        inputs={"series": "x.csv", "site": "BH01"},
+        context={"project_number": "MC2025_014", "outputs": [("CSV", "a.csv")]},
+    )
+    assert notes == []
     import docx
 
-    text = "\n".join(p.text for p in docx.Document(str(out)).paragraphs)
-    assert "Pass 1 - magnitude" in text and "References" in text
+    doc = docx.Document(str(out))
+    text = "\n".join(p.text for p in doc.paragraphs)
+    assert "Pass 1, magnitude" in text and "References" in text
+    assert doc.paragraphs[0].text == "" or "Adjust Sub-daily" in text
+    heads = [p.text for p in doc.paragraphs if p.style.name == "Heading 1"]
+    assert heads[:4] == ["Summary", "Tool and method", "Inputs and settings",
+                         "Parameters and calculations"]  # fmt: skip
+    assert "Outputs" in heads and heads[-1] == "References"
+    assert any("Figure 1:" in p.text for p in doc.paragraphs)
+    assert any(p.text.startswith("Table 1:") for p in doc.paragraphs)
+    # no thousands separators in the tables
+    import re
+
+    cells = " ".join(c.text for t in doc.tables for r in t.rows for c in r.cells)
+    assert not re.search(r"\d,\d{3}", cells)
+    # the report draws the chart itself when none is supplied
+    notes = report.write_docx(res, tmp_path / "r2.docx", inputs={})
+    assert all(n.startswith("Font ") for n in notes)  # font substitution only
     export.write_ensemble_csv(res, tmp_path / "e.csv")
     ens = pd.read_csv(tmp_path / "e.csv")
     assert list(ens.columns) == ["ValidTime", "R001", "R002", "R003", "R004"]

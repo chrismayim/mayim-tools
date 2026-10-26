@@ -10,25 +10,72 @@ Processing parameters are used.
 library is still one of its outputs.)
 """
 
-import tempfile
+import os
 from pathlib import Path
 
 import pandas as pd
 from qgis.core import (
+    Qgis,
     QgsProcessingAlgorithm,
     QgsProcessingException,
     QgsProcessingParameterBoolean,
     QgsProcessingParameterEnum,
     QgsProcessingParameterFile,
-    QgsProcessingParameterFileDestination,
+    QgsProcessingParameterFolderDestination,
     QgsProcessingParameterNumber,
     QgsProcessingParameterString,
 )
 from qgis.PyQt.QtGui import QIcon
 
+from mayim_tools._common.output_files import CSV, WORD, OutputSpec, clean_name_part
 from mayim_tools.rainfall._common.ddf import DDFTable, read_ddf_csv
 
 from . import core, export
+
+# Selectable outputs (Mayim output standard): key, dialog label, file-name
+# description, folder kind, ticked by default. The chart PNG goes to the
+# Word folder, beside the report it belongs to.
+OUTPUT_SPECS = [
+    OutputSpec("OUTPUT_ADJUSTED", "Adjusted rainfall series (CSV)", "Adjusted Rainfall Series", CSV),
+    OutputSpec("OUTPUT_REPORT", "Report (Word)", "DDF Adjustment Report", WORD),
+    OutputSpec("OUTPUT_CONSISTENCY", "Before/after DDF consistency (CSV)", "DDF Consistency", CSV),
+    OutputSpec("OUTPUT_METADATA", "Metadata (CSV)", "DDF Adjustment Metadata", CSV),
+    OutputSpec("OUTPUT_ENSEMBLE", "Ensemble series (CSV; needs realisations > 0)", "Adjusted Rainfall Ensemble", CSV, False),
+    OutputSpec("OUTPUT_LIBRARY", "Storm library (CSV)", "Storm Library", CSV, False),
+    OutputSpec("OUTPUT_EVENTS", "Storm audit (CSV)", "Storm Audit", CSV, False),
+    OutputSpec("OUTPUT_PNG", "Before/after chart (PNG)", "DDF Adjustment Chart", WORD, False),
+]  # fmt: skip
+SPEC_BY_KEY = {spec.key: spec for spec in OUTPUT_SPECS}
+FOLDER_PARAMS = {
+    CSV: ("FOLDER_CSV", "Output folder for CSV files"),
+    WORD: ("FOLDER_WORD", "Output folder for Word reports (and the chart PNG)"),
+}
+
+
+def _software_version() -> str:
+    parts = []
+    metadata = Path(__file__).resolve().parents[2] / "metadata.txt"
+    try:
+        for line in metadata.read_text(encoding="utf-8").splitlines():
+            if line.startswith("version="):
+                parts.append(f"Mayim Tools {line.split('=', 1)[1].strip()}")
+                break
+    except OSError:
+        pass
+    parts.append(f"QGIS {Qgis.version()}")
+    return ", ".join(parts)
+
+
+def output_path(spec, folders, project_number, site=None):
+    """Standard file name <project number>_<description>[_<site>].<ext>;
+    the chart is a .png in the Word folder."""
+    desc = spec.description + (f" {clean_name_part(site)}" if site else "")
+    path = OutputSpec(spec.key, spec.label, desc, spec.kind).path(
+        folders, project_number
+    )
+    if spec.key == "OUTPUT_PNG":
+        path = str(Path(path).with_suffix(".png"))
+    return path
 
 
 class AdjustToDdfAlgorithm(QgsProcessingAlgorithm):
@@ -65,6 +112,8 @@ class AdjustToDdfAlgorithm(QgsProcessingAlgorithm):
     OUTPUT_EVENTS = "OUTPUT_EVENTS"
     OUTPUT_METADATA = "OUTPUT_METADATA"
     OUTPUT_PNG = "OUTPUT_PNG"
+    PROJECT_NUMBER = "PROJECT_NUMBER"
+    PROJECT_NAME = "PROJECT_NAME"
 
     _TIER_OPTIONS = [core.REFERENCE_TIERS[k] for k in (1, 2, 3)]
     _ANCHOR_OPTIONS = [
@@ -101,6 +150,7 @@ class AdjustToDdfAlgorithm(QgsProcessingAlgorithm):
 
     def shortHelpString(self):
         return (
+            f"{core.TOOL_NAME} (version {core.TOOL_VERSION})\n\n"
             "PURPOSE\n"
             "Adjusts a sub-daily gridded rainfall series (ERA5, IMERG, CMORPH, "
             "PERSIANN-CCS...) so that its annual-maximum depths at every tested "
@@ -298,13 +348,21 @@ class AdjustToDdfAlgorithm(QgsProcessingAlgorithm):
             " defaults. Final - bootstrap 1000; realisations 20 at sigma 0.35 if an"
             " uncertainty band is wanted.\n"
             "\n"
-            "Outputs: adjusted series CSV (Site, ValidTime, PrecipitationMM = "
-            "adjusted, plus input depth and adjustment factors; usable directly in "
-            "other Mayim Tools) and Word report (requires python-docx in QGIS's "
-            "Python). Optional: ensemble CSV (one column per realisation), "
-            "before/after consistency CSV, storm library CSV (for Monte Carlo "
-            "design storms), storm audit CSV, metadata CSV and before/after chart "
-            "PNG."
+            "Project number / project name (optional): the project number is the "
+            "file-name prefix; both go on the report's title page.\n"
+            "\n"
+            "OUTPUTS\n"
+            "Tick the outputs wanted; they are written to the CSV and Word folders "
+            "as <project number>_<description>_<site>, with underscores: adjusted "
+            "series CSV (Site, ValidTime, PrecipitationMM = adjusted, plus input "
+            "depth and adjustment factors; usable directly in other Mayim Tools), "
+            "Word report in the Mayim report standard (requires python-docx in "
+            "QGIS's Python), before/after consistency CSV and metadata CSV (ticked "
+            "by default); ensemble CSV (one column per realisation), storm library "
+            "CSV (for Monte Carlo design storms), storm audit CSV and the "
+            "before/after chart PNG (Word folder). CSVs are UTF-8 with BOM; the "
+            "consistency, storm library and storm audit CSVs start with a column "
+            "key ('#' lines). Existing files are overwritten."
         )
 
     def initAlgorithm(self, config=None):
@@ -503,39 +561,27 @@ class AdjustToDdfAlgorithm(QgsProcessingAlgorithm):
             )
         )
         add(
-            QgsProcessingParameterFileDestination(
-                self.OUTPUT_ADJUSTED,
-                "Output: adjusted rainfall series CSV",
-                fileFilter="CSV files (*.csv)",
+            QgsProcessingParameterString(
+                self.PROJECT_NUMBER,
+                "Project number (file name prefix and report, optional)",
+                optional=True,
             )
         )
         add(
-            QgsProcessingParameterFileDestination(
-                self.OUTPUT_REPORT,
-                "Output: report (Word .docx)",
-                fileFilter="Word documents (*.docx)",
+            QgsProcessingParameterString(
+                self.PROJECT_NAME,
+                "Project / site name (report title page, optional)",
+                optional=True,
             )
         )
-        for name, label, filt in (
-            (self.OUTPUT_ENSEMBLE, "Output: ensemble series CSV (optional)", "CSV"),
-            (
-                self.OUTPUT_CONSISTENCY,
-                "Output: before/after DDF consistency CSV (optional)",
-                "CSV",
-            ),
-            (self.OUTPUT_LIBRARY, "Output: storm library CSV (optional)", "CSV"),
-            (self.OUTPUT_EVENTS, "Output: storm audit CSV (optional)", "CSV"),
-            (self.OUTPUT_METADATA, "Output: metadata CSV (optional)", "CSV"),
-            (self.OUTPUT_PNG, "Output: before/after chart PNG (optional)", "PNG"),
-        ):
+        for spec in OUTPUT_SPECS:
             add(
-                QgsProcessingParameterFileDestination(
-                    name,
-                    label,
-                    fileFilter=f"{filt} files (*.{filt.lower()})",
-                    optional=True,
+                QgsProcessingParameterBoolean(
+                    spec.key, f"Output: {spec.label}", defaultValue=spec.default
                 )
             )
+        for name, label in FOLDER_PARAMS.values():
+            add(QgsProcessingParameterFolderDestination(name, label, optional=True))
 
     def processAlgorithm(self, parameters, context, feedback):
         series_path = self.parameterAsFile(parameters, self.INPUT_SERIES, context)
@@ -555,10 +601,29 @@ class AdjustToDdfAlgorithm(QgsProcessingAlgorithm):
                     f"Could not parse durations: {txt!r}"
                 ) from None
 
-        def out(name):
-            return self.parameterAsFileOutput(parameters, name, context) or None
-
-        want_library = out(self.OUTPUT_LIBRARY) is not None
+        selected = [
+            spec
+            for spec in OUTPUT_SPECS
+            if self.parameterAsBoolean(parameters, spec.key, context)
+        ]
+        if not selected:
+            raise QgsProcessingException("Tick at least one output.")
+        folders = {}
+        for kind in {spec.kind for spec in selected}:
+            fname, flabel = FOLDER_PARAMS[kind]
+            folder = self.parameterAsFileOutput(parameters, fname, context)
+            if not folder:
+                raise QgsProcessingException(f"Choose the {flabel.lower()}.")
+            os.makedirs(folder, exist_ok=True)
+            folders[kind] = folder
+        want = {spec.key for spec in selected}
+        project_number = self.parameterAsString(
+            parameters, self.PROJECT_NUMBER, context
+        ).strip()
+        project_name = self.parameterAsString(
+            parameters, self.PROJECT_NAME, context
+        ).strip()
+        want_library = self.OUTPUT_LIBRARY in want
         cfg = core.StormLibraryConfig(
             anchor_min=self._ANCHOR_OPTIONS[
                 self.parameterAsEnum(parameters, self.ANCHOR_DURATION, context)
@@ -705,49 +770,113 @@ class AdjustToDdfAlgorithm(QgsProcessingAlgorithm):
                 f"mean F {fb:.2f} -> {fa:.2f}"
             )
 
-        outputs = {}
-        path = out(self.OUTPUT_ADJUSTED)
-        export.write_adjusted_series_csv(result, path, site=site_used)
-        outputs[self.OUTPUT_ADJUSTED] = path
+        paths = {
+            key: output_path(SPEC_BY_KEY[key], folders, project_number, site_used)
+            for key in want
+        }
+        outputs = {
+            name: folders[kind]
+            for kind, (name, _) in FOLDER_PARAMS.items()
+            if kind in folders
+        }
+        written = []  # (label, path), for the report and the log
 
-        png = out(self.OUTPUT_PNG)
-        chart = png or str(Path(tempfile.mkdtemp()) / "adjust_to_ddf_chart.png")
-        chart_ok = export.write_flatness_png(result, chart)
-        if png and chart_ok:
-            outputs[self.OUTPUT_PNG] = png
-        elif not chart_ok:
-            feedback.pushWarning("matplotlib not available - chart not produced.")
+        def save(key, writer):
+            path = paths[key]
+            try:
+                writer(path)
+            except OSError as e:
+                feedback.reportError(
+                    f"{Path(path).name} could not be written ({e}) - it is probably "
+                    "open in another program; close it and run again.",
+                    fatalError=False,
+                )
+                return False
+            outputs[key] = path
+            written.append((SPEC_BY_KEY[key].label, path))
+            return True
 
-        path = out(self.OUTPUT_REPORT)
-        try:
-            from . import report
-
-            report.write_docx(
-                result,
-                path,
-                chart_path=chart if chart_ok else None,
-                inputs={"series": series_path, "ddf": ddf_path, "site": site_used},
+        if self.OUTPUT_ADJUSTED in want:
+            save(
+                self.OUTPUT_ADJUSTED,
+                lambda p: export.write_adjusted_series_csv(result, p, site=site_used),
             )
-            outputs[self.OUTPUT_REPORT] = path
-        except ImportError:
-            feedback.pushWarning(
-                "python-docx is not installed in QGIS's Python - report not written. "
-                "Install it from the OSGeo4W Shell: python -m pip install python-docx"
-            )
-
-        for name, fn in (
-            (self.OUTPUT_ENSEMBLE, export.write_ensemble_csv),
+        for key, fn in (
             (self.OUTPUT_CONSISTENCY, export.write_consistency_csv),
+            (self.OUTPUT_METADATA, export.write_metadata_csv),
+            (self.OUTPUT_ENSEMBLE, export.write_ensemble_csv),
             (self.OUTPUT_LIBRARY, export.write_library_csv),
             (self.OUTPUT_EVENTS, export.write_events_csv),
-            (self.OUTPUT_METADATA, export.write_metadata_csv),
         ):
-            p = out(name)
-            if p:
-                fn(result, p)
-                outputs[name] = p
-        if out(self.OUTPUT_ENSEMBLE) and not result.ensemble:
+            if key in want:
+                save(key, lambda p, fn=fn: fn(result, p))
+        if self.OUTPUT_ENSEMBLE in want and not result.ensemble:
             feedback.pushWarning(
                 "Ensemble CSV requested but realisations = 0 - file is header-only."
             )
+
+        chart = None
+        chart_notes = []
+        if self.OUTPUT_PNG in want or self.OUTPUT_REPORT in want:
+            try:
+                chart, chart_notes = export.flatness_figure(result)
+            except ImportError:
+                feedback.pushWarning("matplotlib not available - chart not produced.")
+            except Exception as e:  # noqa: BLE001 - a chart must not lose the results
+                feedback.pushWarning(f"The chart could not be drawn: {e}")
+            for note in chart_notes:
+                feedback.pushWarning(note)
+        if self.OUTPUT_PNG in want and chart is not None:
+
+            def write_png(p):
+                with open(p, "wb") as fh:
+                    fh.write(chart.getvalue())
+
+            save(self.OUTPUT_PNG, write_png)
+
+        if self.OUTPUT_REPORT in want:
+            path = paths[self.OUTPUT_REPORT]
+            try:
+                from . import report
+
+                if chart is not None:
+                    chart.seek(0)
+                notes = report.write_docx(
+                    result,
+                    path,
+                    chart=chart,
+                    inputs={"series": series_path, "ddf": ddf_path, "site": site_used},
+                    context={
+                        "project_number": project_number,
+                        "project_name": project_name,
+                        "software": _software_version(),
+                        "tool_version": core.TOOL_VERSION,
+                        "settings": [
+                            ("Target MAP (mm/yr)", f"{cfg.target_map_mm:.1f}"
+                             if cfg.target_map_mm else "input series' own MAP"),
+                        ],
+                        "outputs": written + [("This report", path)],
+                        "warnings": list(warns) + chart_notes,
+                    },
+                )  # fmt: skip
+                for note in notes:
+                    if note not in chart_notes:
+                        feedback.pushWarning(note)
+                outputs[self.OUTPUT_REPORT] = path
+                written.append((SPEC_BY_KEY[self.OUTPUT_REPORT].label, path))
+            except ImportError:
+                feedback.pushWarning(
+                    "python-docx is not installed in QGIS's Python - report not "
+                    "written. Install it from the OSGeo4W Shell: python -m pip "
+                    "install python-docx"
+                )
+            except OSError as e:
+                feedback.reportError(
+                    f"{Path(path).name} could not be written ({e}) - it is probably "
+                    "open in Word; close it and run again.",
+                    fatalError=False,
+                )
+
+        for label, path in written:
+            feedback.pushInfo(f"{label}: {path}")
         return outputs

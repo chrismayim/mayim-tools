@@ -82,6 +82,9 @@ from . import adjust as _adj
 # Constants
 # ---------------------------------------------------------------------------
 
+TOOL_NAME = "Adjust Sub-daily Rainfall to DDF"
+TOOL_VERSION = "1.0.0"
+
 REFERENCE_TIERS = {
     1: "Tier 1 - published gauge-based DDF",
     2: "Tier 2 - GSDR-IDF / literature IDF / gauge-derived DDF",
@@ -933,7 +936,7 @@ class StormLibraryEngine:
             )
 
         res.metadata = {
-            "tool": "Adjust Sub-daily Rainfall to DDF",
+            "tool": f"{TOOL_NAME} (mayim_tools) v{TOOL_VERSION}",
             "reference_tier": tier_label,
             "status": tier_stamp,
             "reference_is_areal": cfg.reference_is_areal,

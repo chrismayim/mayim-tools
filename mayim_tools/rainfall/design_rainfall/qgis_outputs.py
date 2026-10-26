@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from mayim_tools.hydrology.catchment_delineation.qgis_outputs import save_shapefile
 from qgis.core import (
     Qgis,
     QgsFeature,
@@ -25,6 +24,8 @@ from qgis.core import (
     QgsProcessingLayerPostProcessorInterface,
 )
 from qgis.PyQt.QtCore import QMetaType
+
+from mayim_tools.hydrology.catchment_delineation.qgis_outputs import save_shapefile
 
 __all__ = [
     "save_shapefile",

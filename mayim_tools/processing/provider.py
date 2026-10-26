@@ -13,11 +13,17 @@ from qgis.core import QgsProcessingProvider
 from qgis.PyQt.QtGui import QIcon
 
 from mayim_tools.data.grib_to_csv.grib_to_csv_algorithm import GribToCsvAlgorithm
+from mayim_tools.data.hec_hms_project import (
+    prepare_hec_hms_project_algorithm as prepare_hec_hms_project_algo,
+)
 from mayim_tools.data.netcdf4_to_csv.netcdf4_list_variables_algorithm import (
     Netcdf4ListVariablesAlgorithm,
 )
 from mayim_tools.data.netcdf4_to_csv.netcdf4_to_csv_algorithm import (
     Netcdf4ToCsvAlgorithm,
+)
+from mayim_tools.data.swmm_project import (
+    prepare_swmm_project_algorithm as prepare_swmm_project_algo,
 )
 from mayim_tools.hec_ras.import_ras_2d_data import (
     import_ras_2d_data_algorithm as import_ras_2d_data_algo,
@@ -158,3 +164,5 @@ class MayimToolsProvider(QgsProcessingProvider):
         self.addAlgorithm(inundation_boundary_algo.InundationBoundaryAlgorithm())
         self.addAlgorithm(terrain_profile_algo.TerrainProfileAlgorithm())
         self.addAlgorithm(dws_wr2012_algo.DwsWr2012Algorithm())
+        self.addAlgorithm(prepare_hec_hms_project_algo.PrepareHecHmsProjectAlgorithm())
+        self.addAlgorithm(prepare_swmm_project_algo.PrepareSwmmProjectAlgorithm())

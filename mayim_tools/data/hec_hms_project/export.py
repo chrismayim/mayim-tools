@@ -1,0 +1,304 @@
+"""
+Sectioned CSV of the HEC-HMS model set-up (and the computed peak flows) -
+zero QGIS dependency. Numbers are written plainly, without thousands
+separators.
+"""
+
+from __future__ import annotations
+
+import csv
+import math
+
+from .core import ROUTE_LAG, ROUTE_MC, ROUTE_MUSKINGUM, TRANSFORM_CLARK, ProjectResult
+from .storms import SOURCE_LABELS, ari_label, duration_label
+
+SUBBASIN_FIELDS = [
+    ("name", "-", "HEC-HMS sub-basin name"),
+    ("downstream", "-", "element it drains to"),
+    ("area_km2", "km2", "area"),
+    ("cn", "-", "SCS curve number used (AMC as in the CN raster)"),
+    ("cn_mean", "-", "area-weighted mean CN of the raster cells"),
+    ("cn_runoff", "-", "runoff-equivalent CN at the CN design depth"),
+    ("cn_p05", "-", "5th percentile of the cell CNs"),
+    ("cn_p95", "-", "95th percentile of the cell CNs"),
+    ("s_mm", "mm", "potential maximum retention S = 25400/CN - 254"),
+    ("ia_mm", "mm", "initial abstraction Ia = lambda S"),
+    ("imperv_pct", "%", "directly connected impervious area"),
+    ("tc_raw_min", "min", "time of concentration from the input"),
+    ("tc_min", "min", "time of concentration used (after the minimum)"),
+    ("lag_min", "min", "SCS lag = 0.6 Tc"),
+    ("clark_tc_h", "h", "Clark time of concentration"),
+    ("clark_r_h", "h", "Clark storage coefficient R"),
+    ("lat", "deg", "centroid latitude"),
+    ("lon", "deg", "centroid longitude"),
+    ("flags", "-", "tc_floor: Tc raised to the minimum"),
+]
+REACH_FIELDS = [
+    ("name", "-", "HEC-HMS reach name"),
+    ("downstream", "-", "element it flows into"),
+    ("method", "-", "routing method"),
+    ("length_m", "m", "reach length"),
+    ("slope", "m/m", "channel slope (Muskingum-Cunge)"),
+    ("travel_min", "min", "travel time (Muskingum K, or length / velocity)"),
+    ("k_source", "-", "where the travel time came from"),
+    ("k_h", "h", "Muskingum K"),
+    ("x", "-", "Muskingum X"),
+    ("steps", "-", "Muskingum sub-reaches for the time step"),
+    ("lag_min", "min", "Lag routing lag"),
+    ("n", "-", "Manning n (Muskingum-Cunge)"),
+    ("width_m", "m", "bottom width (Muskingum-Cunge trapezoid)"),
+    ("side_slope", "H:V", "side slope (Muskingum-Cunge trapezoid)"),
+    ("celerity_ms", "m/s", "index celerity (Muskingum-Cunge)"),
+    ("flags", "-", "lag_fallback: too short for Muskingum; min_slope: slope raised"),
+]
+STORM_FIELDS = [
+    ("run", "-", "simulation run and meteorologic model name"),
+    ("source", "-", "rainfall source"),
+    ("ari_years", "years", "return period"),
+    ("duration", "-", "storm duration"),
+    ("total_mm", "mm", "storm depth"),
+    (
+        "peak_mmh",
+        "mm/h",
+        "peak intensity of the hyetograph (5-min for a frequency storm)",
+    ),
+    ("interval_min", "min", "hyetograph time step"),
+    ("pattern", "-", "temporal pattern"),
+    ("control", "-", "control specifications"),
+    ("flags", "-", "extrap_short / extrap_long / extrap_T: DDF extrapolated"),
+]
+RESULT_FIELDS = [
+    ("run", "-", "simulation run"),
+    ("element", "-", "element"),
+    ("kind", "-", "element type"),
+    ("peak_m3s", "m3/s", "peak outflow"),
+    ("peak_time", "-", "time of the peak (storm starts 01Jan2000 00:00)"),
+    ("volume_m3", "m3", "outflow volume"),
+    ("depth_mm", "mm", "outflow depth over the drainage area"),
+    ("precip_mm", "mm", "precipitation total (sub-basins)"),
+]
+
+
+def _v(v):
+    if v is None:
+        return ""
+    if isinstance(v, float):
+        if not math.isfinite(v):
+            return ""
+        return f"{v:.6g}" if abs(v) < 1e5 else f"{v:.1f}"
+    if isinstance(v, (list, tuple)):
+        return ";".join(str(x) for x in v)
+    return v
+
+
+def method_labels(r: ProjectResult) -> dict:
+    s = r.settings
+    routes = sorted({e.params.get("method") for e in r.network.of("Reach")} - {None})
+    names = {
+        ROUTE_MUSKINGUM: "Muskingum",
+        ROUTE_LAG: "Lag",
+        ROUTE_MC: "Muskingum-Cunge",
+    }
+    return {
+        "loss": f"SCS curve number, Ia = {s.lambda_ia:g} S",
+        "transform": (
+            f"Clark unit hydrograph, R/(Tc+R) = {s.clark_ratio:g}"
+            if s.transform == TRANSFORM_CLARK
+            else "SCS unit hydrograph, lag = 0.6 Tc"
+        ),
+        "routing": ", ".join(names.get(m, m) for m in routes) or "-",
+        "cn": (
+            f"runoff-equivalent CN at {s.cn_design_depth_mm:g} mm"
+            if s.cn_method == "runoff"
+            else "area-weighted mean CN"
+        ),
+    }
+
+
+def subbasin_rows(r: ProjectResult) -> list[dict]:
+    rows = []
+    for e in r.network.of("Subbasin"):
+        d = {"name": e.name, "downstream": e.downstream, "flags": e.flags}
+        d.update(e.params)
+        rows.append(d)
+    return rows
+
+
+def reach_rows(r: ProjectResult) -> list[dict]:
+    rows = []
+    for e in r.network.of("Reach"):
+        d = {"name": e.name, "downstream": e.downstream, "flags": e.flags}
+        d.update(e.params)
+        rows.append(d)
+    return rows
+
+
+def storm_rows(r: ProjectResult) -> list[dict]:
+    rows = []
+    for run in r.runs:
+        st = run.storm
+        rows.append(
+            {
+                "run": run.name,
+                "source": SOURCE_LABELS.get(st.source, st.source),
+                "ari_years": st.ari,
+                "duration": duration_label(st.duration_min),
+                "total_mm": st.total_mm,
+                "peak_mmh": st.peak_intensity_mmh,
+                "interval_min": st.interval_min,
+                "pattern": st.pattern,
+                "control": run.control.name,
+                "flags": st.flags,
+            }
+        )
+    return rows
+
+
+def write_csv(
+    path: str, r: ProjectResult, inputs: list, results: list | None = None
+) -> str:
+    m = method_labels(r)
+    s = r.settings
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+
+        def section(title):
+            w.writerow([])
+            w.writerow([f"## {title}"])
+
+        w.writerow(["# Prepare HEC-HMS project - model set-up"])
+        section("Project")
+        for k, v in [
+            ("HEC-HMS project", s.project_name),
+            ("Project folder", r.folder),
+            ("Basin model", s.basin_name),
+            ("HEC-HMS version", s.hms_version),
+            ("Coordinate system", r.crs_name),
+            ("Loss method", m["loss"]),
+            ("Curve number", m["cn"]),
+            ("Transform", m["transform"]),
+            ("Routing", m["routing"]),
+            ("Time step (min)", r.dt_min),
+            ("Simulation after the storm (h)", r.tail_h),
+            ("Storm start", s.start.strftime("%d %b %Y %H:%M")),
+            ("Sub-basins", len(r.network.of("Subbasin"))),
+            ("Reaches", len(r.network.of("Reach"))),
+            ("Junctions", len(r.network.of("Junction"))),
+            ("Sinks", len(r.network.of("Sink"))),
+            ("Simulation runs", len(r.runs)),
+            ("Ensemble analyses", len(r.ensembles)),
+        ]:
+            w.writerow([k, _v(v)])
+        section("Inputs")
+        for k, v in inputs:
+            w.writerow([k, _v(v)])
+        for title, fields, rows in (
+            ("Sub-basins", SUBBASIN_FIELDS, subbasin_rows(r)),
+            ("Reaches", REACH_FIELDS, reach_rows(r)),
+            ("Design storms and runs", STORM_FIELDS, storm_rows(r)),
+        ):
+            section(title)
+            w.writerow([f[0] for f in fields])
+            for row in rows:
+                w.writerow([_v(row.get(f[0])) for f in fields])
+        section("Junctions and sinks")
+        w.writerow(["name", "kind", "downstream", "x", "y"])
+        for e in r.network.elements:
+            if e.kind in ("Junction", "Sink"):
+                w.writerow([e.name, e.kind, e.downstream or "", _v(e.x), _v(e.y)])
+        section("Control specifications")
+        w.writerow(["name", "start", "end", "time_step_min"])
+        for c in r.controls:
+            w.writerow(
+                [
+                    c.name,
+                    c.start.strftime("%d %b %Y %H:%M"),
+                    c.end.strftime("%d %b %Y %H:%M"),
+                    _v(c.dt_min),
+                ]
+            )
+        if r.ensembles:
+            section("Ensemble analyses (HEC-HMS)")
+            w.writerow(ENSEMBLE_HEADER + ["member_runs"])
+            members = {
+                e.name: "; ".join(run.name for run in e.runs) for e in r.ensembles
+            }
+            for row in ensemble_rows(r, results):
+                w.writerow([_v(v) for v in row] + [members[row[0]]])
+        if results:
+            section("Computed peak flows (HEC-HMS)")
+            w.writerow([f[0] for f in RESULT_FIELDS])
+            for x in results:
+                w.writerow([_v(getattr(x, f[0])) for f in RESULT_FIELDS])
+        section("Warnings")
+        for msg in r.warnings or ["None"]:
+            w.writerow([msg])
+        section("Field definitions")
+        w.writerow(["section", "field", "unit", "description"])
+        for title, fields in (
+            ("Sub-basins", SUBBASIN_FIELDS),
+            ("Reaches", REACH_FIELDS),
+            ("Design storms and runs", STORM_FIELDS),
+            ("Computed peak flows", RESULT_FIELDS),
+        ):
+            for name, unit, desc in fields:
+                w.writerow([title, name, unit, desc])
+    return path
+
+
+def peak_table(r: ProjectResult, results: list) -> tuple[list[str], list[list]]:
+    """Header and rows: one row per outlet / junction, one column per run
+    (peak m3/s)."""
+    runs = [run.name for run in r.runs]
+    keep = [e.name for e in r.network.elements if e.kind in ("Sink", "Junction")]
+    peaks = {(x.run, x.element): x.peak_m3s for x in results}
+    rows = []
+    for el in keep:
+        rows.append([el] + [peaks.get((rn, el)) for rn in runs])
+    return ["Element"] + runs, rows
+
+
+def ensemble_rows(r: ProjectResult, results: list | None = None) -> list[list]:
+    """[ensemble, method, return period, members, outlet, peak m3/s, critical
+    run]: one row per ensemble and outlet (sink) with the largest computed
+    peak of its members, or one row per ensemble without results."""
+    from .core import ENSEMBLE_METHOD_NAMES
+
+    peaks = {(x.run, x.element): x.peak_m3s for x in results or []}
+    sinks = [e.name for e in r.network.of("Sink")]
+    rows = []
+    for ens in r.ensembles:
+        head = [
+            ens.name,
+            ENSEMBLE_METHOD_NAMES.get(ens.source, ens.source),
+            ari_label(ens.ari),
+            len(ens.runs),
+        ]
+        if not results:
+            rows.append(head + ["", None, ""])
+            continue
+        for el in sinks:
+            vals = [
+                (peaks[(run.name, el)], run.name)
+                for run in ens.runs
+                if peaks.get((run.name, el)) is not None
+            ]
+            if vals:
+                v, rn = max(vals)
+                rows.append(head + [el, v, rn])
+    return rows
+
+
+ENSEMBLE_HEADER = [
+    "ensemble",
+    "method",
+    "return_period",
+    "members",
+    "outlet",
+    "max_peak_m3s",
+    "critical_run",
+]
+
+
+def storm_label(st) -> str:
+    return f"{ari_label(st.ari)} {duration_label(st.duration_min)}"
