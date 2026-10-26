@@ -46,9 +46,6 @@ def _duration_axis(ax, durations, ticks=DURATION_TICKS, rotate=True):
     ax.xaxis.set_minor_locator(NullLocator())
     ax.xaxis.set_minor_formatter(NullFormatter())
     ax.set_xlim(lo / 1.15, hi * 1.15)
-    # no minor x gridlines here: draw the x grid after the y grid, so the light
-    # minor horizontal gridlines do not cut through the vertical major ones
-    ax.xaxis.set_zorder(0.6)
     if rotate:
         for label in ax.get_xticklabels():
             label.set_rotation(45)
