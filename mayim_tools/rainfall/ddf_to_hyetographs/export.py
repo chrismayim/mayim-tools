@@ -54,6 +54,7 @@ def _write_wide(
     path: str | Path,
     decimals: int,
     allow_short_duration_extrapolation: bool = False,
+    arf_model=None,
 ) -> int:
     """Shared writer for all three value types. return_periods_and_durations:
     list of (return_period_years, target_duration_min) pairs, in the
@@ -88,6 +89,11 @@ def _write_wide(
         pct = f"{int(ratio * 100)}%"
         for step in range(1, max_steps + 1):
             header.append(f"{pct}_{_format_time_label(step * timestep_min)}")
+    # areal hyetographs say so, so the HEC-HMS / SWMM tools do not reduce them
+    # again (ArfMethod is read by Prepare HEC-HMS / SWMM project)
+    areal = arf_model is not None and not arf_model.is_unity
+    if areal:
+        header += ["ArfMethod", "ArfAreaKm2"]
 
     n_rows = 0
     with open(path, "w", newline="", encoding="utf-8-sig") as f:
@@ -100,6 +106,7 @@ def _write_wide(
                 timestep_min,
                 tables[rt],
                 allow_short_duration_extrapolation,
+                (lambda t, rt=rt: arf_model.factor(t, rt)) if areal else None,
             )
             row = [rt, target_duration]
             for ratio in PEAK_RATIOS:
@@ -108,6 +115,8 @@ def _write_wide(
                     max_steps - len(values)
                 )
                 row.extend(padded)
+            if areal:
+                row += [arf_model.label(), round(arf_model.area_km2 or 0.0, 4) or ""]
             w.writerow(row)
             n_rows += 1
 
@@ -120,6 +129,7 @@ def write_incremental_depth(
     tables,
     path,
     allow_short_duration_extrapolation: bool = False,
+    arf_model=None,
 ) -> int:
     return _write_wide(
         return_periods_and_durations,
@@ -129,6 +139,7 @@ def write_incremental_depth(
         path,
         decimals=4,
         allow_short_duration_extrapolation=allow_short_duration_extrapolation,
+        arf_model=arf_model,
     )
 
 
@@ -138,6 +149,7 @@ def write_cumulative_depth(
     tables,
     path,
     allow_short_duration_extrapolation: bool = False,
+    arf_model=None,
 ) -> int:
     return _write_wide(
         return_periods_and_durations,
@@ -147,6 +159,7 @@ def write_cumulative_depth(
         path,
         decimals=4,
         allow_short_duration_extrapolation=allow_short_duration_extrapolation,
+        arf_model=arf_model,
     )
 
 
@@ -156,6 +169,7 @@ def write_incremental_intensity(
     tables,
     path,
     allow_short_duration_extrapolation: bool = False,
+    arf_model=None,
 ) -> int:
     return _write_wide(
         return_periods_and_durations,
@@ -165,4 +179,5 @@ def write_incremental_intensity(
         path,
         decimals=3,
         allow_short_duration_extrapolation=allow_short_duration_extrapolation,
+        arf_model=arf_model,
     )

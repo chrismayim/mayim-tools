@@ -264,3 +264,26 @@ def test_title_page_missing_details_show_dash(tmp_path):
     assert details["Project number"] == "-"
     assert details["Project / site"] == "-"  # several sites, no project name
     assert details["Software"] == "-"
+
+
+def test_csv_is_utf8_with_bom_and_still_reads_as_ddf(tmp_path):
+    """Mayim output standard: the depth table CSV is UTF-8 with a BOM; the
+    DDF readers of the other tools (Adjust to DDF, HEC-HMS / SWMM project)
+    still read it."""
+    from mayim_tools.data.hec_hms_project import storms as stm
+    from mayim_tools.rainfall._common.ddf import read_ddf_csv
+    from mayim_tools.rainfall.design_rainfall.report import write_csv, write_csv_multi
+
+    path = tmp_path / "ddf.csv"
+    write_csv(make_estimate(), path, stations=make_stations())
+    assert path.read_bytes().startswith(b"\xef\xbb\xbf")
+    assert path.read_text(encoding="utf-8-sig").startswith("Latitude,")
+    ddf = read_ddf_csv(str(path))
+    assert ddf is not None
+    curves = stm.DdfCurves.from_csv(str(path))
+    assert curves is not None
+
+    multi = tmp_path / "multi.csv"
+    write_csv_multi({"A": make_estimate(), "B": make_estimate(1.1)}, multi)
+    assert multi.read_bytes().startswith(b"\xef\xbb\xbf")
+    assert multi.read_text(encoding="utf-8-sig").startswith("Site,")

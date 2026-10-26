@@ -15,11 +15,13 @@ from pathlib import Path
 
 import pandas as pd
 from qgis.core import (
+    Qgis,
     QgsProcessingAlgorithm,
     QgsProcessingContext,
     QgsProcessingException,
     QgsProcessingFeedback,
     QgsProcessingParameterBoolean,
+    QgsProcessingParameterEnum,
     QgsProcessingParameterFile,
     QgsProcessingParameterFolderDestination,
     QgsProcessingParameterNumber,
@@ -33,6 +35,7 @@ from mayim_tools._common.output_files import (
     OutputSpec,
     clean_name_part,
 )
+from mayim_tools.rainfall._common import arf as arfm
 
 from .core import PEAK_RATIOS, parse_idf_table
 from .export import (
@@ -41,7 +44,7 @@ from .export import (
     write_incremental_intensity,
 )
 
-TOOL_VERSION = "0.4.0"
+TOOL_VERSION = "0.5.0"
 
 # Selectable outputs: key, dialog label, file-name description, folder
 # kind, ticked by default. All three share the CSV folder.
@@ -69,14 +72,22 @@ WRITERS = {
 }
 
 
-class DdfToHyetographsAlgorithm(QgsProcessingAlgorithm):
+AB_NONE_LABEL = "None (point hyetographs; the model tools apply the ARF)"
+AB_METHODS = [arfm.METHOD_NONE] + [k for k, _ in arfm.METHODS if k != arfm.METHOD_NONE]
 
+
+class DdfToHyetographsAlgorithm(QgsProcessingAlgorithm):
     INPUT_CSV = "INPUT_CSV"
     DURATION_COL = "DURATION_COL"
     TARGET_DURATIONS = "TARGET_DURATIONS"
     TIMESTEP_MIN = "TIMESTEP_MIN"
     ALLOW_SHORT_DURATION_EXTRAPOLATION = "ALLOW_SHORT_DURATION_EXTRAPOLATION"
     PROJECT_NUMBER = "PROJECT_NUMBER"
+    ARF_METHOD = "ARF_METHOD"
+    ARF_AREA = "ARF_AREA"
+    ARF_REGION = "ARF_REGION"
+    ARF_TABLE = "ARF_TABLE"
+    ARF = "ARF"
 
     def icon(self):
         logo = Path(__file__).resolve().parents[2] / "icons" / "mayim_logo.png"
@@ -170,6 +181,17 @@ class DdfToHyetographsAlgorithm(QgsProcessingAlgorithm):
             "  Timestep: the hyetograph's block width in minutes.\n"
             "  Allow short-duration extrapolation: off by default - see "
             "BACKGROUND above.\n"
+            "  Areal reduction factor: None by default - the hyetographs stay "
+            "point rainfall and Prepare HEC-HMS / SWMM project apply the ARF for "
+            "the catchment. Choose a method (SANRAL DM Eq 3.10, Pietersen et al. "
+            "2024 for D >= 24 h, UK FEH, a user table or a constant) and the "
+            "catchment area to write areal hyetographs for use elsewhere (e.g. "
+            "rain-on-grid). Each cumulative depth (the k largest blocks = the DDF "
+            "depth for k steps) is multiplied by the ARF of its own duration, so "
+            "the peak block is reduced most and the total by ARF(D); the CSVs "
+            "then carry ArfMethod / ArfAreaKm2 columns and the model tools do not "
+            "reduce them again. Advanced: Pietersen region (1 - 5), user ARF "
+            "table (CSV: DurationMin, ARF[, AreaKm2]), constant ARF.\n"
             "\n"
             "OUTPUTS:\tTick the outputs wanted (all three by default) and "
             "choose the CSV output folder. Files are named <project "
@@ -219,6 +241,49 @@ class DdfToHyetographsAlgorithm(QgsProcessingAlgorithm):
                 defaultValue=False,
             )
         )
+        self.addParameter(
+            QgsProcessingParameterEnum(
+                self.ARF_METHOD,
+                "Areal reduction factor",
+                options=[AB_NONE_LABEL]
+                + [lbl for k, lbl in arfm.METHODS if k != arfm.METHOD_NONE],
+                defaultValue=0,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterNumber(
+                self.ARF_AREA,
+                "Catchment area for the ARF (km2)",
+                type=QgsProcessingParameterNumber.Type.Double,
+                defaultValue=0.0,
+                minValue=0.0,
+            )
+        )
+        adv = [
+            QgsProcessingParameterEnum(
+                self.ARF_REGION,
+                "Pietersen et al. (2024) ARF region (South Africa)",
+                options=["Not set"] + [f"Region {r}" for r in range(1, 6)],
+                defaultValue=0,
+            ),
+            QgsProcessingParameterFile(
+                self.ARF_TABLE,
+                "User ARF table (CSV: DurationMin, ARF[, AreaKm2])",
+                extension="csv",
+                optional=True,
+            ),
+            QgsProcessingParameterNumber(
+                self.ARF,
+                "Constant ARF (method 'Constant factor')",
+                type=QgsProcessingParameterNumber.Type.Double,
+                defaultValue=1.0,
+                minValue=0.1,
+                maxValue=1.0,
+            ),
+        ]
+        for p in adv:
+            p.setFlags(p.flags() | Qgis.ProcessingParameterFlag.Advanced)
+            self.addParameter(p)
         self.addParameter(
             QgsProcessingParameterString(
                 self.PROJECT_NUMBER,
@@ -340,6 +405,33 @@ class DdfToHyetographsAlgorithm(QgsProcessingAlgorithm):
                 f"data or a recognized short-duration formula instead if available."
             )
 
+        method = AB_METHODS[self.parameterAsEnum(parameters, self.ARF_METHOD, context)]
+        arf_model = None
+        if method != arfm.METHOD_NONE:
+            table = None
+            if method == arfm.METHOD_TABLE:
+                tpath = self.parameterAsFile(parameters, self.ARF_TABLE, context)
+                if not tpath:
+                    raise QgsProcessingException("Give the user ARF table (CSV).")
+                try:
+                    table = arfm.ArfTable.from_csv(tpath)
+                except (arfm.ArfError, OSError) as e:
+                    raise QgsProcessingException(f"ARF table: {e}") from e
+            area = self.parameterAsDouble(parameters, self.ARF_AREA, context)
+            try:
+                arf_model = arfm.ArfModel(
+                    method=method,
+                    area_km2=area or None,
+                    constant=self.parameterAsDouble(parameters, self.ARF, context),
+                    region=self.parameterAsEnum(parameters, self.ARF_REGION, context)
+                    or None,
+                    table=table,
+                    area_note="given",
+                )
+            except arfm.ArfError as e:
+                raise QgsProcessingException(str(e)) from e
+            feedback.pushInfo(f"Areal reduction: {arf_model.label()}")
+
         outputs = {
             name: folders[kind]
             for kind, (name, _) in FOLDER_PARAMS.items()
@@ -371,6 +463,7 @@ class DdfToHyetographsAlgorithm(QgsProcessingAlgorithm):
                     tables,
                     path,
                     allow_short_duration_extrapolation,
+                    arf_model,
                 )
             except ValueError as e:
                 raise QgsProcessingException(str(e)) from e
@@ -389,5 +482,8 @@ class DdfToHyetographsAlgorithm(QgsProcessingAlgorithm):
         )
         for label, path in written:
             feedback.pushInfo(f"{label}: {path}")
+        if arf_model is not None:
+            for note in arf_model.notes():
+                feedback.pushWarning(note)
 
         return outputs

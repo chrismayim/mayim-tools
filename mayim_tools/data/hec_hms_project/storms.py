@@ -90,6 +90,25 @@ class Storm:
     increments: list[float] | None = None
     pattern: str = ""
     flags: list[str] = field(default_factory=list)
+    # areal reduction: {duration min: ARF} as applied (empty: none)
+    arf_values: dict[float, float] = field(default_factory=dict)
+    # burst check: [(duration min, max depth in storm, areal DDF depth, %)]
+    burst: list = field(default_factory=list)
+
+    @property
+    def arf_total(self) -> float:
+        """ARF at the storm duration (1 without reduction)."""
+        if not self.arf_values:
+            return 1.0
+        k = min(self.arf_values, key=lambda d: abs(d - self.duration_min))
+        return self.arf_values[k]
+
+    @property
+    def arf_peak(self) -> float:
+        """ARF at the shortest reduced duration (the peak burst)."""
+        if not self.arf_values:
+            return 1.0
+        return self.arf_values[min(self.arf_values)]
 
     @property
     def total_mm(self) -> float:
@@ -159,6 +178,28 @@ def parse_duration_list(text: str | None) -> list[float]:
         except ValueError as e:
             raise StormError(f"'{part}' is not a duration.") from e
     return out
+
+
+def arf_function(arf):
+    """``arf`` as a function (duration_min, ari) -> factor: a number (the
+    same factor for every depth), an ArfModel, or any callable."""
+    if callable(arf):
+        return arf
+    value = 1.0 if arf is None else float(arf)
+    return lambda _d, _t=None: value
+
+
+def _arf_text(values: dict[float, float]) -> str:
+    """', ARF 0.912' or ', ARF 0.912 (6h) - 0.781 (5min)' for descriptions."""
+    if not values or all(abs(v - 1.0) < 1e-12 for v in values.values()):
+        return ""
+    lo, hi = min(values), max(values)
+    if abs(values[lo] - values[hi]) < 5e-4:
+        return f", ARF {values[hi]:.3f}"
+    return (
+        f", ARF {values[hi]:.3f} ({duration_label(hi)}) - "
+        f"{values[lo]:.3f} ({duration_label(lo)})"
+    )
 
 
 def _close(a: float, b: float, tol: float = 1e-6) -> bool:
@@ -234,10 +275,14 @@ def frequency_storm(
     ari: float,
     duration_min: float,
     peak_pct: float,
-    arf: float = 1.0,
+    arf=1.0,
 ) -> Storm:
     """HEC-HMS frequency storm: depths at the HMS durations up to the storm
-    duration (which must be one of them)."""
+    duration (which must be one of them). ``arf`` (a number or an ArfModel)
+    reduces every nested depth by the ARF of its own duration, so the storm
+    follows the areal DDF curve."""
+    f_arf = arf_function(arf)
+    arfs: dict[float, float] = {}
     if not any(_close(duration_min, d) for d in HMS_FREQ_DURATIONS):
         raise StormError(
             f"A frequency storm duration must be one of the HEC-HMS durations "
@@ -250,7 +295,8 @@ def frequency_storm(
         if d > duration_min + 1e-9:
             break
         v, f = curves.depth(d, ari)
-        depths[d] = v * arf
+        arfs[float(d)] = float(f_arf(d, ari))
+        depths[d] = v * arfs[float(d)]
         flags.extend(f)
     # a depth-duration curve must not decrease
     running = 0.0
@@ -267,13 +313,13 @@ def frequency_storm(
         name=name,
         description=(
             f"HEC-HMS frequency storm from the DDF table, {ari_label(ari)} year, "
-            f"{duration_label(duration_min)}, peak at {peak_pct:g} %"
-            + (f", ARF {arf:g}" if arf != 1.0 else "")
+            f"{duration_label(duration_min)}, peak at {peak_pct:g} %" + _arf_text(arfs)
         ),
         peak_pct=float(peak_pct),
         depths=depths,
         pattern=f"Nested, peak {peak_pct:g} %",
         flags=sorted(set(flags)),
+        arf_values=arfs if any(abs(v - 1) > 1e-12 for v in arfs.values()) else {},
     )
 
 
@@ -350,6 +396,8 @@ def read_alternating_block_csv(path: str) -> list[dict]:
     interval = first[0][1]
     if "intensity" in " ".join(low):
         raise StormError("Give the incremental depth CSV, not the intensity CSV.")
+    # rows reduced by the Alternating Block tool carry ArfMethod / ArfAreaKm2
+    i_m = low.index("arfmethod") if "arfmethod" in low else None
     out = []
     for r in rows[1:]:
         r = r + [""] * (len(header) - len(r))
@@ -363,7 +411,13 @@ def read_alternating_block_csv(path: str) -> list[dict]:
             if vals:
                 pats[key] = vals
         out.append(
-            {"ari": t, "duration_min": dur, "interval_min": interval, "patterns": pats}
+            {
+                "ari": t,
+                "duration_min": dur,
+                "interval_min": interval,
+                "patterns": pats,
+                "arf_method": r[i_m].strip() if i_m is not None else "",
+            }
         )
     if not out:
         raise StormError("The Alternating Block CSV has no data rows.")
@@ -468,11 +522,14 @@ def alternating_block_storms(
     aris: list[float],
     durations: list[float],
     peak_pct,
-    arf: float = 1.0,
+    arf=1.0,
 ) -> tuple[list[Storm], list[str]]:
     """Storms from the Alternating Block CSV rows for the chosen peak
     position(s) (one value or a list); empty ``aris`` / ``durations`` take
-    every row."""
+    every row. ``arf`` (a number or an ArfModel) is applied per cumulative
+    duration (see ``areal_alternating_block``); rows the Alternating Block
+    tool already reduced (ARF columns) are used as they are."""
+    f_arf = arf_function(arf)
     peaks = list(peak_pct) if isinstance(peak_pct, (list, tuple)) else [peak_pct]
     keys = [AB_PEAK_LABEL.get(int(round(p)), f"{p:g}") for p in peaks]
     warnings = []
@@ -492,7 +549,15 @@ def alternating_block_storms(
                     f"{duration_label(r['duration_min'])}: no {key} % peak column."
                 )
                 continue
-            vals = [v * arf for v in vals[: max(n, 1)]]
+            vals = vals[: max(n, 1)]
+            if r.get("arf_method"):
+                arfs = {}
+                note = f", areal ({r['arf_method']}) in the CSV"
+            else:
+                vals, arfs = areal_alternating_block(
+                    vals, r["interval_min"], lambda d, t=r["ari"]: f_arf(d, t)
+                )
+                note = _arf_text(arfs)
             out.append(
                 Storm(
                     source=SOURCE_AB,
@@ -504,13 +569,13 @@ def alternating_block_storms(
                     ),
                     description=(
                         f"Alternating Block hyetograph, {ari_label(r['ari'])} year, "
-                        f"{duration_label(r['duration_min'])}, peak at {key} %"
-                        + (f", ARF {arf:g}" if arf != 1.0 else "")
+                        f"{duration_label(r['duration_min'])}, peak at {key} %" + note
                     ),
                     peak_pct=float(key),
                     interval_min=r["interval_min"],
                     increments=vals,
                     pattern=f"Alternating block, peak {key} %",
+                    arf_values=arfs,
                 )
             )
     if (aris or durations) and not out:
@@ -518,6 +583,36 @@ def alternating_block_storms(
             "No Alternating Block rows match the return periods / durations."
         )
     return out, warnings
+
+
+def areal_alternating_block(
+    increments: list[float], interval_min: float, arf
+) -> tuple[list[float], dict[float, float]]:
+    """Alternating block hyetograph reduced to areal rainfall.
+
+    The k largest blocks of an alternating block storm add up to the point
+    DDF depth for k x step. Each of those cumulative depths is multiplied by
+    the ARF of its own duration, ``arf(k x step)``, the reduced curve is
+    differenced back into blocks, and block k goes back to the position of
+    the k-th largest original block (the peak position is kept). Returns
+    (increments, {duration: ARF}); a constant ARF scales every block."""
+    vals = [max(0.0, float(v)) for v in increments]
+    n = len(vals)
+    if n == 0:
+        return vals, {}
+    order = sorted(range(n), key=lambda i: -vals[i])
+    arfs = {
+        (k + 1) * interval_min: float(arf((k + 1) * interval_min)) for k in range(n)
+    }
+    if all(abs(v - 1.0) < 1e-12 for v in arfs.values()):
+        return vals, {}
+    cum, out, prev = 0.0, [0.0] * n, 0.0
+    for k, i in enumerate(order):
+        cum += vals[i]
+        reduced = cum * arfs[(k + 1) * interval_min]
+        out[i] = max(0.0, reduced - prev)
+        prev = max(prev, reduced)
+    return out, arfs
 
 
 def huff_quartile_for(duration_min: float) -> int:
@@ -547,9 +642,11 @@ def huff_storms(
     interval_min: float,
     quartile: int | None,
     stat: str,
-    arf: float = 1.0,
+    arf=1.0,
 ) -> tuple[list[Storm], list[str]]:
-    """Huff mass curve x DDF depth; ``quartile`` None picks it by duration."""
+    """Huff mass curve x DDF depth x ARF at the storm duration; ``quartile``
+    None picks it by duration."""
+    f_arf = arf_function(arf)
     _check_interval(interval_min, "Huff storm time step")
     out, warnings = [], []
     for d in durations:
@@ -571,7 +668,9 @@ def huff_storms(
         frac = _pattern_increments(curve[0], curve[1], n)
         for t in aris:
             depth, flags = curves.depth(d, t)
-            depth *= arf
+            a = float(f_arf(d, t))
+            depth *= a
+            arfs = {float(d): a} if abs(a - 1.0) > 1e-12 else {}
             out.append(
                 Storm(
                     source=SOURCE_HUFF,
@@ -581,12 +680,13 @@ def huff_storms(
                     description=(
                         f"Huff quartile {q} {stat} curve x DDF depth "
                         f"{depth:.1f} mm, {ari_label(t)} year, {duration_label(d)}"
-                        + (f", ARF {arf:g}" if arf != 1.0 else "")
+                        + _arf_text(arfs)
                     ),
                     interval_min=interval_min,
                     increments=list(frac * depth),
                     pattern=f"Huff Q{q} {stat}",
                     flags=flags,
+                    arf_values=arfs,
                 )
             )
     return out, warnings
@@ -604,10 +704,11 @@ def ensemble_storms(
     aris: list[float],
     durations: list[float],
     shapes: list[str],
-    arf: float = 1.0,
+    arf=1.0,
 ) -> tuple[list[Storm], list[str]]:
     """Ensemble pattern (percent increments) for the return period's AEP band
-    and each chosen shape x DDF depth."""
+    and each chosen shape x DDF depth x ARF at the storm duration."""
+    f_arf = arf_function(arf)
     out, warnings = [], []
     for d in durations:
         for t in aris:
@@ -634,7 +735,9 @@ def ensemble_storms(
                 if pct.sum() <= 0:
                     continue
                 depth, flags = curves.depth(d, t)
-                depth *= arf
+                a = float(f_arf(d, t))
+                depth *= a
+                arfs = {float(d): a} if abs(a - 1.0) > 1e-12 else {}
                 out.append(
                     Storm(
                         source=SOURCE_ENSEMBLE,
@@ -644,13 +747,47 @@ def ensemble_storms(
                         description=(
                             f"Design storm ensemble pattern ({band} AEP band, {shape}) "
                             f"x DDF depth {depth:.1f} mm, {ari_label(t)} year, "
-                            f"{duration_label(d)}"
-                            + (f", ARF {arf:g}" if arf != 1.0 else "")
+                            f"{duration_label(d)}" + _arf_text(arfs)
                         ),
                         interval_min=row["interval_min"],
                         increments=list(pct / pct.sum() * depth),
                         pattern=f"Ensemble {band} {shape}",
                         flags=flags,
+                        arf_values=arfs,
                     )
                 )
     return out, warnings
+
+
+# ---------------------------------------------------------------- burst check
+
+BURST_DURATIONS = [15, 30, 60, 120, 180, 360, 720, 1440, 2880, 4320]
+
+
+def add_burst_checks(storms: list[Storm], curves: DdfCurves | None, arf=1.0) -> None:
+    """Fill ``storm.burst`` for every hyetograph: the largest 15 min, 30 min,
+    1 h ... depth inside the storm as a % of the areal DDF depth (point DDF
+    x ARF) for that duration. Near 100 %: the pattern is as intense as the
+    DDF for this catchment; well below: the pattern is smoother (typical of
+    gridded rainfall such as ERA5 on a small catchment). Frequency storms
+    follow the areal DDF by construction (100 %)."""
+    if curves is None:
+        return
+    from mayim_tools.rainfall._common.arf import burst_check
+
+    f_arf = arf_function(arf)
+    for st in storms:
+        if not st.is_hyetograph or not st.interval_min:
+            continue
+        ari = st.ari
+        try:
+            st.burst = burst_check(
+                st.increments,
+                st.interval_min,
+                lambda d, t: curves.depth(d, t)[0],
+                f_arf,
+                ari,
+                BURST_DURATIONS,
+            )
+        except StormError:
+            st.burst = []

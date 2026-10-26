@@ -14,7 +14,7 @@ from datetime import datetime
 from mayim_tools._common.docx_report import Doc
 
 from ..hec_hms_project.core import ENSEMBLE_METHOD_NAMES
-from ..hec_hms_project.report import _schematic
+from ..hec_hms_project.report import _schematic, add_arf_sections, arf_references
 from ..hec_hms_project.storms import ari_label, duration_label
 from .core import TOOL_NAME, TOOL_VERSION, XS_TRANSECT, SwmmModel
 from .export import critical_rows, outlets
@@ -173,6 +173,14 @@ def write_report(
         "storms as their hyetographs. The rain gage is CUMULATIVE, as Storm and "
         "Sanitary Analysis writes it."
     )
+    add_arf_sections(
+        d,
+        [ser.storm for ser in m.series],
+        m.hms.arf,
+        [(ser.run_name, ser.storm) for ser in m.series],
+        level=2,
+        hms=False,
+    )
 
     d.heading("Subcatchment parameters", 1)
     d.caption("Table", "Subcatchment parameters")
@@ -317,7 +325,7 @@ def write_report(
     ] + list(context.get("warnings") or [])[:20]:
         d.bullet(txt)
     d.heading("References", 1)
-    for ref in REFERENCES:
+    for ref in REFERENCES + arf_references(m.hms.arf):
         d.para(ref)
     d.doc.save(path)
     return notes

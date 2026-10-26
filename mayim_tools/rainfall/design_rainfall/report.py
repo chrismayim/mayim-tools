@@ -78,7 +78,7 @@ def write_csv(estimate: PointEstimate, output_path: str | Path, stations=None) -
     return_periods = _sorted_return_periods(estimate.results)
     lookup = {(r.duration_label, r.return_period): r for r in estimate.results}
 
-    with open(output_path, "w", newline="") as f:
+    with open(output_path, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.writer(f)
         writer.writerow(
             ["Latitude", "Longitude", "MAP (mm)", "Altitude (m)", "Cluster"]
@@ -145,7 +145,7 @@ def write_csv_multi(
     all_results = [r for est in estimates.values() for r in est.results]
     return_periods = _sorted_return_periods(all_results)
 
-    with open(output_path, "w", newline="") as f:
+    with open(output_path, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.writer(f)
         header = [
             "Site",

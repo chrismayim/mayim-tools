@@ -213,6 +213,7 @@ def compute_incremental_blocks(
     timestep_min: float,
     table_pairs: list,
     allow_short_duration_extrapolation: bool = False,
+    arf=None,
 ) -> list:
     """Divides target_duration_min into equal-width timestep_min
     blocks and returns each block's INCREMENTAL depth (mm), derived
@@ -241,6 +242,15 @@ def compute_incremental_blocks(
         interpolate_cumulative_depth(t, table_pairs, allow_short_duration_extrapolation)
         for t in step_ends
     ]
+    if arf is not None:
+        # areal hyetograph: the k largest blocks add up to the DDF depth for
+        # k steps, so each cumulative depth takes the ARF of its own duration
+        # (the peak block is reduced most, the total by ARF(D))
+        cumulative = [
+            c * float(arf(t)) for c, t in zip(cumulative, step_ends, strict=True)
+        ]
+        for i in range(1, len(cumulative)):
+            cumulative[i] = max(cumulative[i], cumulative[i - 1])
     incremental = [cumulative[0]] + [
         cumulative[i] - cumulative[i - 1] for i in range(1, len(cumulative))
     ]
@@ -289,16 +299,19 @@ def build_hyetograph(
     timestep_min: float,
     table_pairs: list,
     allow_short_duration_extrapolation: bool = False,
+    arf=None,
 ) -> dict:
     """For one (return period already selected via table_pairs, target
     duration) combination: returns {peak_ratio: {'incremental': [...],
     'cumulative': [...], 'intensity_mmhr': [...], 'times_min': [...]}}
-    for every ratio in PEAK_RATIOS."""
+    for every ratio in PEAK_RATIOS. ``arf`` (duration_min -> factor)
+    reduces the point depths to areal depths per cumulative duration."""
     incremental = compute_incremental_blocks(
         target_duration_min,
         timestep_min,
         table_pairs,
         allow_short_duration_extrapolation,
+        arf,
     )
     n = len(incremental)
     times_min = [min((i + 1) * timestep_min, target_duration_min) for i in range(n)]

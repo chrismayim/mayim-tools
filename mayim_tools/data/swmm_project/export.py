@@ -9,6 +9,7 @@ from __future__ import annotations
 import csv
 
 from ..hec_hms_project.core import ENSEMBLE_METHOD_NAMES, make_ensembles
+from ..hec_hms_project.export import arf_label, burst_min, write_arf_sections
 from ..hec_hms_project.storms import ari_label, duration_label
 from .core import SwmmModel
 
@@ -116,6 +117,8 @@ def write_csv(path: str, m: SwmmModel, inputs: list, results=None) -> str:
             ("Conduits", len(m.conduits)),
             ("Design storms (time series)", len(m.series)),
             ("Rain gage time series in the file", m.series[0].name),
+            ("Areal reduction", arf_label(m.hms.arf)),
+            ("ARF area", getattr(m.hms.arf, "area_note", "") or "-"),
         ]:
             w.writerow([k, _v(v)])
         section("Inputs")
@@ -222,6 +225,10 @@ def write_csv(path: str, m: SwmmModel, inputs: list, results=None) -> str:
                 "peak_pct",
                 "depth_mm",
                 "pattern",
+                "arf_storm",
+                "arf_peak",
+                "burst_min_pct",
+                "burst_min_at",
             ]
         )
         for ser in m.series:
@@ -236,8 +243,19 @@ def write_csv(path: str, m: SwmmModel, inputs: list, results=None) -> str:
                     _v(st.peak_pct),
                     _v(ser.cumulative_mm[-1], 2),
                     st.pattern,
+                    _v(st.arf_total if st.arf_values else None),
+                    _v(st.arf_peak if len(st.arf_values) > 1 else None),
+                    _v(burst_min(st)[0], 3),
+                    burst_min(st)[1],
                 ]
             )
+        write_arf_sections(
+            w,
+            section,
+            [ser.storm for ser in m.series],
+            m.hms.arf,
+            [(ser.run_name, ser.storm) for ser in m.series],
+        )
         if results:
             section("Critical storm per method and return period (SWMM)")
             w.writerow(

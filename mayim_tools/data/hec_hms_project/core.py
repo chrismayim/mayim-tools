@@ -33,7 +33,7 @@ from datetime import datetime, timedelta
 import numpy as np
 
 TOOL_NAME = "Prepare HEC-HMS project"
-TOOL_VERSION = "0.3.0"
+TOOL_VERSION = "0.4.0"
 HMS_VERSION = "4.14"  # default; 4.13 is also supported
 HMS_VERSIONS = ["4.14", "4.13"]
 
@@ -569,6 +569,23 @@ def _order(net: Network) -> None:
     )
 
 
+def system_areas(
+    subs: list[SubIn], reaches: list[ReachIn], nodes: list[NodeIn], s: Settings
+) -> dict[str, float]:
+    """Total sub-catchment area (km2) draining to each outlet (sink), largest
+    first - the area for the areal reduction factor."""
+    net = build_network(subs, reaches, nodes, s)
+    by = net.by_name()
+    by_sub = {x.name: x for x in subs}
+    out: dict[str, float] = {}
+    for e in net.of("Subbasin"):
+        cur = e
+        while cur.downstream is not None:
+            cur = by[cur.downstream]
+        out[cur.name] = out.get(cur.name, 0.0) + by_sub[e.source].area_km2
+    return dict(sorted(out.items(), key=lambda kv: -kv[1]))
+
+
 # ---------------------------------------------------------------- parameters
 
 
@@ -763,6 +780,7 @@ class ProjectResult:
     warnings: list[str] = field(default_factory=list)
     crs_name: str = ""
     ensembles: list[Ensemble] = field(default_factory=list)
+    arf: object = None  # rainfall._common.arf.ArfModel used for the storms
 
 
 ENSEMBLE_METHOD_NAMES = {

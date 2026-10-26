@@ -65,6 +65,18 @@ STORM_FIELDS = [
     ("interval_min", "min", "hyetograph time step"),
     ("pattern", "-", "temporal pattern"),
     ("control", "-", "control specifications"),
+    ("arf_storm", "-", "areal reduction factor at the storm duration"),
+    (
+        "arf_peak",
+        "-",
+        "ARF at the shortest reduced duration (nested / alternating block peak burst)",
+    ),
+    (
+        "burst_min_pct",
+        "%",
+        "burst check: lowest ratio of a burst inside the storm to the areal DDF depth",
+    ),
+    ("burst_min_at", "-", "duration of that lowest ratio"),
     ("flags", "-", "extrap_short / extrap_long / extrap_T: DDF extrapolated"),
 ]
 RESULT_FIELDS = [
@@ -148,10 +160,66 @@ def storm_rows(r: ProjectResult) -> list[dict]:
                 "interval_min": st.interval_min,
                 "pattern": st.pattern,
                 "control": run.control.name,
+                "arf_storm": st.arf_total if st.arf_values else None,
+                "arf_peak": st.arf_peak if len(st.arf_values) > 1 else None,
+                "burst_min_pct": burst_min(st)[0],
+                "burst_min_at": burst_min(st)[1],
                 "flags": st.flags,
             }
         )
     return rows
+
+
+def burst_min(st) -> tuple[float | None, str]:
+    """(lowest burst ratio %, its duration label) or (None, '')."""
+    vals = [(b[3], b[0]) for b in getattr(st, "burst", []) or [] if math.isfinite(b[3])]
+    if not vals:
+        return None, ""
+    v, d = min(vals)
+    return v, duration_label(d)
+
+
+def arf_label(arf) -> str:
+    return arf.label() if arf is not None else "None"
+
+
+def arf_table(storms: list, arf) -> tuple[list[str], list[list]]:
+    """ARF by duration (rows) and return period (columns) for the durations
+    the storms use: the HEC-HMS nested durations up to the longest storm and
+    every storm duration."""
+    if arf is None or arf.is_unity:
+        return [], []
+    from .storms import HMS_FREQ_DURATIONS
+
+    longest = max(float(st.duration_min) for st in storms)
+    durs = sorted(
+        {float(d) for d in HMS_FREQ_DURATIONS if d <= longest + 1e-9}
+        | {float(st.duration_min) for st in storms}
+    )
+    aris = sorted({float(st.ari) for st in storms})
+    rows = [
+        [duration_label(d)] + [round(arf.factor(d, t), 4) for t in aris] for d in durs
+    ]
+    return ["duration"] + [ari_label(t) for t in aris], rows
+
+
+def burst_table(named_storms: list) -> tuple[list[str], list[list]]:
+    """Burst check per hyetograph storm: [name, pattern, ratio % at each
+    duration]. ``named_storms`` = [(run name, Storm)]."""
+    durs = sorted(
+        {b[0] for _, st in named_storms for b in getattr(st, "burst", []) or []}
+    )
+    if not durs:
+        return [], []
+    rows = []
+    for name, st in named_storms:
+        if not getattr(st, "burst", None):
+            continue
+        by = {b[0]: b[3] for b in st.burst}
+        rows.append(
+            [name, st.pattern] + [round(by[d], 1) if d in by else None for d in durs]
+        )
+    return ["run", "pattern"] + [duration_label(d) for d in durs], rows
 
 
 def write_csv(
@@ -181,6 +249,8 @@ def write_csv(
             ("Time step (min)", r.dt_min),
             ("Simulation after the storm (h)", r.tail_h),
             ("Storm start", s.start.strftime("%d %b %Y %H:%M")),
+            ("Areal reduction", arf_label(r.arf)),
+            ("ARF area", getattr(r.arf, "area_note", "") or "-"),
             ("Sub-basins", len(r.network.of("Subbasin"))),
             ("Reaches", len(r.network.of("Reach"))),
             ("Junctions", len(r.network.of("Junction"))),
@@ -201,6 +271,9 @@ def write_csv(
             w.writerow([f[0] for f in fields])
             for row in rows:
                 w.writerow([_v(row.get(f[0])) for f in fields])
+        write_arf_sections(
+            w, section, r.storms, r.arf, [(run.name, run.storm) for run in r.runs]
+        )
         section("Junctions and sinks")
         w.writerow(["name", "kind", "downstream", "x", "y"])
         for e in r.network.elements:
@@ -244,6 +317,30 @@ def write_csv(
             for name, unit, desc in fields:
                 w.writerow([title, name, unit, desc])
     return path
+
+
+def write_arf_sections(w, section, storms, arf, named_storms) -> None:
+    """'Areal reduction factors' and 'Burst check' CSV sections."""
+    head, rows = arf_table(storms, arf)
+    if rows:
+        section("Areal reduction factors (ARF by duration and return period)")
+        w.writerow([f"# {arf_label(arf)}"])
+        w.writerow(head)
+        for row in rows:
+            w.writerow([_v(v) for v in row])
+    head, rows = burst_table(named_storms)
+    if rows:
+        section("Burst check (largest burst in the storm / areal DDF depth, %)")
+        w.writerow(
+            [
+                "# near 100 %: the pattern is as intense as the areal DDF; well "
+                "below: smoother than the DDF for this catchment (typical of "
+                "gridded rainfall such as ERA5 on a small catchment)"
+            ]
+        )
+        w.writerow(head)
+        for row in rows:
+            w.writerow([_v(v) for v in row])
 
 
 def peak_table(r: ProjectResult, results: list) -> tuple[list[str], list[list]]:

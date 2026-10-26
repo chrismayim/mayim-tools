@@ -45,6 +45,7 @@ from mayim_tools._common.output_files import (
     OutputSpec,
     clean_name_part,
 )
+from mayim_tools.rainfall._common import arf as arfm
 
 from . import core
 from . import storms as stm
@@ -91,6 +92,58 @@ FOLDER_PARAMS = {
     CSV: ("FOLDER_CSV", "Output folder for CSV files"),
     WORD: ("FOLDER_WORD", "Output folder for Word reports"),
 }
+
+
+ARF_REGIONS = ["Not set"] + [f"Region {r}" for r in range(1, 6)]
+
+
+def arf_parameters(alg):
+    """(main, advanced) areal reduction parameters, shared with Prepare SWMM
+    project."""
+    from qgis.core import (
+        QgsProcessingParameterEnum,
+        QgsProcessingParameterFile,
+        QgsProcessingParameterNumber,
+    )
+
+    main = [
+        QgsProcessingParameterEnum(
+            alg.ARF_METHOD,
+            "Areal reduction factor (point DDF -> catchment rainfall)",
+            options=[label for _, label in arfm.METHODS],
+            defaultValue=0,
+        )
+    ]
+    adv = [
+        QgsProcessingParameterNumber(
+            alg.ARF_AREA,
+            "ARF area (km2; 0 = total area draining to the outlet)",
+            QgsProcessingParameterNumber.Double,
+            defaultValue=0.0,
+            minValue=0.0,
+        ),
+        QgsProcessingParameterEnum(
+            alg.ARF_REGION,
+            "Pietersen et al. (2024) ARF region (South Africa)",
+            options=ARF_REGIONS,
+            defaultValue=0,
+        ),
+        QgsProcessingParameterFile(
+            alg.ARF_TABLE,
+            "User ARF table (CSV: DurationMin, ARF[, AreaKm2])",
+            extension="csv",
+            optional=True,
+        ),
+        QgsProcessingParameterNumber(
+            alg.ARF,
+            "Constant ARF (method 'Constant factor')",
+            QgsProcessingParameterNumber.Double,
+            defaultValue=1.0,
+            minValue=0.1,
+            maxValue=1.0,
+        ),
+    ]
+    return main, adv
 
 
 def _advanced(param):
@@ -192,6 +245,10 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
     ENSEMBLES = "ENSEMBLES"
     HYETO_STEP = "HYETO_STEP"
     ARF = "ARF"
+    ARF_METHOD = "ARF_METHOD"
+    ARF_AREA = "ARF_AREA"
+    ARF_REGION = "ARF_REGION"
+    ARF_TABLE = "ARF_TABLE"
     DT = "DT"
     TAIL_H = "TAIL_H"
     HMS_NAME = "HMS_NAME"
@@ -276,6 +333,7 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
             "ensemble CSV -> their temporal pattern x the DDF depth. Hyetographs are "
             "written as precipitation gages in a DSS file (needs the hecdss "
             "package: python -m pip install hecdss).\n"
+            "Areal reduction: the DDF depths are point rainfall (also Design Rainfall SA, which is gridded but holds point values, and gridded rainfall adjusted to a point DDF) and are reduced to catchment rainfall: SANRAL Drainage Manual Eq 3.10 (default), Pietersen et al. (2024) regional ARFs for 24 h - 7 days (South Africa; Eq 3.10 below 24 h), the UK Flood Estimation Handbook ARF (Keers and Wescott 1977), a user ARF table, a constant, or none (DDF already areal, e.g. unadjusted gridded rainfall). Nested frequency storms and alternating block storms are reduced per duration (each nested / cumulative depth with the ARF of its own duration, so they follow the areal DDF curve); Huff and ensemble storms with the ARF of the storm duration. The ARF area is the total area draining to the outlet (the largest system if there are several) unless given. Alternating Block CSVs already reduced by that tool (ArfMethod column) are not reduced again. The CSV and report list the ARF per duration and a burst check: the largest 15 min ... depth inside each hyetograph as a % of the areal DDF depth (well below 100 %: the pattern is smoother than the DDF, typical of ERA5 patterns on a small catchment).\n"
             "Ensemble analyses: one per storm method and return period (e.g. "
             "'Frequency 1in50'), with every duration and peak position / pattern "
             "of it as members and every element's outflow as an analysis point. "
@@ -316,6 +374,7 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
             "table / hyetograph CSV). Durations: e.g. '1h, 3h, 6h, 12h, 24h' (DDF "
             "frequency storms need HEC-HMS durations: 5, 10, 15, 30 min, 1, 2, 3, 6, "
             "12, 24 h, 2, 3, 4, 7, 10 days).\n"
+            "Areal reduction factor: method (advanced: ARF area in km2, 0 = automatic; Pietersen region 1 - 5; user table CSV with DurationMin, ARF and optionally AreaKm2; constant).\n"
             "HEC-HMS version: 4.14 (default) or 4.13; the two read the same file "
             "layouts and differ only in the version written into the files.\n"
             "Compute in HEC-HMS: runs HEC-HMS.cmd from the HEC-HMS folder (blank: "
@@ -498,6 +557,8 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
                 optional=True,
             )
         )
+        for p in arf_parameters(self)[0]:
+            self.addParameter(p)
         self.addParameter(
             QgsProcessingParameterString(
                 self.ARIS,
@@ -665,14 +726,6 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
                 defaultValue=5.0,
                 minValue=1.0,
             ),
-            QgsProcessingParameterNumber(
-                self.ARF,
-                "Areal reduction factor (applied to all depths)",
-                QgsProcessingParameterNumber.Double,
-                defaultValue=1.0,
-                minValue=0.1,
-                maxValue=1.0,
-            ),
             QgsProcessingParameterEnum(
                 self.DT,
                 "Model time step",
@@ -711,7 +764,7 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
                 optional=True,
             ),
         ]
-        for p in adv:
+        for p in arf_parameters(self)[1] + adv:
             self.addParameter(_advanced(p))
         for spec in OUTPUT_SPECS:
             self.addParameter(
@@ -884,7 +937,52 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
             out.append(core.NodeIn(nm, p.x(), p.y()))
         return source, out
 
-    def _storms(self, parameters, context, feedback):
+    def _arf_model(self, parameters, context, feedback, subs, reaches, nodes):
+        """The ARF model: method, area (default: the largest outlet system)."""
+        method = arfm.METHODS[
+            self.parameterAsEnum(parameters, self.ARF_METHOD, context)
+        ][0]
+        area = self.parameterAsDouble(parameters, self.ARF_AREA, context)
+        note = "given"
+        if not area:
+            try:
+                areas = core.system_areas(subs, reaches, nodes, core.Settings())
+            except core.HmsProjectError:
+                areas = {"all": sum(x.area_km2 for x in subs)}
+            area = next(iter(areas.values()))
+            note = "total area draining to the outlet"
+            if len(areas) > 1:
+                note = f"largest of {len(areas)} outlet systems ({next(iter(areas))})"
+                feedback.pushWarning(
+                    f"ARF: {len(areas)} outlet systems; the largest "
+                    f"({area:.4g} km2) is used for all. Give the ARF area to "
+                    "change it."
+                )
+        region_i = self.parameterAsEnum(parameters, self.ARF_REGION, context)
+        table = None
+        if method == arfm.METHOD_TABLE:
+            path = self.parameterAsFile(parameters, self.ARF_TABLE, context)
+            if not path:
+                raise QgsProcessingException("Give the user ARF table (CSV).")
+            try:
+                table = arfm.ArfTable.from_csv(path)
+            except (arfm.ArfError, OSError) as e:
+                raise QgsProcessingException(f"ARF table: {e}") from e
+        try:
+            model = arfm.ArfModel(
+                method=method,
+                area_km2=area,
+                constant=self.parameterAsDouble(parameters, self.ARF, context),
+                region=region_i or None,
+                table=table,
+                area_note=note,
+            )
+        except arfm.ArfError as e:
+            raise QgsProcessingException(str(e)) from e
+        feedback.pushInfo(f"Areal reduction: {model.label()} ({note})")
+        return model
+
+    def _storms(self, parameters, context, feedback, arf_model=None):
         chosen = [
             SOURCES[i][0]
             for i in self.parameterAsEnums(parameters, self.RAIN_SOURCES, context)
@@ -901,7 +999,7 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
             stm.PEAK_POSITIONS[i]
             for i in sorted(set(self.parameterAsEnums(parameters, self.PEAK, context)))
         ] or [50]
-        arf = self.parameterAsDouble(parameters, self.ARF, context)
+        arf = arf_model if arf_model is not None else 1.0
         ddf_path = self.parameterAsFile(parameters, self.DDF_CSV, context)
         curves = None
         if any(
@@ -975,6 +1073,9 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
             )
             storms += s
             warnings += w
+        stm.add_burst_checks(storms, curves, arf)
+        if arf_model is not None:
+            warnings += arf_model.notes()
         flagged = sorted({f for st in storms for f in st.flags})
         if "extrap_short" in flagged:
             warnings.append(
@@ -1086,8 +1187,11 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
         ssrc, reaches, lines = self._read_streams(parameters, context, feedback, crs)
         nsrc, nodes = self._read_nodes(parameters, context, crs)
 
+        arf_model = self._arf_model(parameters, context, feedback, subs, reaches, nodes)
         try:
-            storms, storm_warnings, chosen = self._storms(parameters, context, feedback)
+            storms, storm_warnings, chosen = self._storms(
+                parameters, context, feedback, arf_model
+            )
         except (stm.StormError, ValueError) as e:
             raise QgsProcessingException(str(e)) from e
 
@@ -1138,6 +1242,7 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
             r = core.assemble(subs, reaches, nodes, storms, s)
         except (core.HmsProjectError, stm.StormError) as e:
             raise QgsProcessingException(str(e)) from e
+        r.arf = arf_model
         r.warnings = storm_warnings + r.warnings
         r.crs_name = f"{crs.authid()} - {crs.description()}"
         for e in r.network.of("Subbasin"):

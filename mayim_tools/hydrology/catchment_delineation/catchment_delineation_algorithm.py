@@ -89,7 +89,7 @@ from .qgis_outputs import (
 from .report import write_report_docx
 from .subcatchments import delineate_network_subcatchments
 
-TOOL_VERSION = "0.9.0"
+TOOL_VERSION = "0.9.1"
 
 MODE_OPTIONS = [
     "Total (full catchment per outlet; nested catchments overlap)",
@@ -995,12 +995,31 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
                     fatalError=False,
                 )
 
+        def write_csv_output(key, writer):
+            path = paths[key]
+            try:
+                writer(path)
+            except Exception as e:
+                feedback.reportError(
+                    f"{SPEC_BY_KEY[key].label}: {Path(path).name} could not be "
+                    f"written ({e}). If it is open in QGIS or Excel, close it and "
+                    "run again.",
+                    fatalError=False,
+                )
+                return
+            done(key, path)
+
         if self.OUTPUT_REPORT in want:
-            write_parameters_csv(paths[self.OUTPUT_REPORT], result.catchments)
-            done(self.OUTPUT_REPORT, paths[self.OUTPUT_REPORT])
+            param_key = {name: desc for name, _, desc in CATCHMENT_FIELDS}
+            write_csv_output(
+                self.OUTPUT_REPORT,
+                lambda p: write_parameters_csv(p, result.catchments, key=param_key),
+            )
         if self.OUTPUT_HYPSO in want:
-            write_hypsometric_csv(paths[self.OUTPUT_HYPSO], result.catchments)
-            done(self.OUTPUT_HYPSO, paths[self.OUTPUT_HYPSO])
+            write_csv_output(
+                self.OUTPUT_HYPSO,
+                lambda p: write_hypsometric_csv(p, result.catchments),
+            )
 
         if network is not None and want_streams:
             net_context = {
@@ -1018,8 +1037,10 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
                 "min_final_reach_pct": min_final_pct,
             }
             if self.OUTPUT_STREAM_CSV in want:
-                write_sectioned_csv(paths[self.OUTPUT_STREAM_CSV], network, net_context)
-                done(self.OUTPUT_STREAM_CSV, paths[self.OUTPUT_STREAM_CSV])
+                write_csv_output(
+                    self.OUTPUT_STREAM_CSV,
+                    lambda p: write_sectioned_csv(p, network, net_context),
+                )
             if self.OUTPUT_STREAM_DOCX in want:
                 path = paths[self.OUTPUT_STREAM_DOCX]
                 net_context["outputs"] = [

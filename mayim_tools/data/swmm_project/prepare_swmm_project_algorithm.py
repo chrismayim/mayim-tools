@@ -41,6 +41,7 @@ from ..hec_hms_project.prepare_hec_hms_project_algorithm import (
     _num,
     _software_version,
     _wkt1,
+    arf_parameters,
 )
 from . import core
 
@@ -141,6 +142,7 @@ class PrepareSwmmProjectAlgorithm(PrepareHecHmsProjectAlgorithm):
             "chosen peak position, Alternating Block, Huff, ensembles) as a CUMULATIVE "
             "time series in mm on a common step; the rain gage RG1 uses the first storm - "
             "select another time series for the gage to run another storm.\n"
+            "Areal reduction: the DDF depths are point rainfall (also Design Rainfall SA, which is gridded but holds point values, and gridded rainfall adjusted to a point DDF) and are reduced to catchment rainfall: SANRAL Drainage Manual Eq 3.10 (default), Pietersen et al. (2024) regional ARFs for 24 h - 7 days (South Africa; Eq 3.10 below 24 h), the UK Flood Estimation Handbook ARF (Keers and Wescott 1977), a user ARF table, a constant, or none (DDF already areal, e.g. unadjusted gridded rainfall). Nested frequency storms and alternating block storms are reduced per duration (each nested / cumulative depth with the ARF of its own duration, so they follow the areal DDF curve); Huff and ensemble storms with the ARF of the storm duration. The ARF area is the total area draining to the outlet (the largest system if there are several) unless given. Alternating Block CSVs already reduced by that tool (ArfMethod column) are not reduced again. The CSV and report list the ARF per duration and a burst check: the largest 15 min ... depth inside each hyetograph as a % of the areal DDF depth (well below 100 %: the pattern is smoother than the DDF, typical of ERA5 patterns on a small catchment).\n"
             "Run-out: 2 x the HEC-HMS run-out (5 x lag + routing), at least 6 h, unless set.\n"
             "\n"
             "BACKGROUND\n"
@@ -159,6 +161,7 @@ class PrepareSwmmProjectAlgorithm(PrepareHecHmsProjectAlgorithm):
             "Peak positions, return periods, durations: as in Prepare HEC-HMS project.\n"
             "Compute in SWMM: needs swmm-toolkit in QGIS's Python "
             "(python -m pip install swmm-toolkit).\n"
+            "Areal reduction factor: method (advanced: ARF area in km2, 0 = automatic; Pietersen region 1 - 5; user table CSV with DurationMin, ARF and optionally AreaKm2; constant).\n"
             "Outputs: <project number>_<SWMM name>.inp in the SWMM folder, plus the "
             "ticked CSV and Word report named <project number>_<description>.\n"
         )
@@ -346,6 +349,8 @@ class PrepareSwmmProjectAlgorithm(PrepareHecHmsProjectAlgorithm):
                 optional=True,
             )
         )
+        for p in arf_parameters(self)[0]:
+            P(p)
         P(
             QgsProcessingParameterString(
                 self.ARIS,
@@ -423,13 +428,12 @@ class PrepareSwmmProjectAlgorithm(PrepareHecHmsProjectAlgorithm):
             QgsProcessingParameterEnum(self.ENS_SHAPES, "Ensemble storm shapes", options=stm.SHAPES, allowMultiple=True, defaultValue=[0, 1, 2]),
             QgsProcessingParameterNumber(self.HYETO_STEP, "Huff hyetograph time step (min)", D, defaultValue=5.0, minValue=1.0),
             QgsProcessingParameterNumber(self.FREQ_STEP, "Frequency storm time step (min)", D, defaultValue=5.0, minValue=1.0),
-            QgsProcessingParameterNumber(self.ARF, "Areal reduction factor (applied to all depths)", D, defaultValue=1.0, minValue=0.1, maxValue=1.0),
             QgsProcessingParameterNumber(self.SWMM_TAIL, "Simulation time after the longest storm (h; 0 = automatic)", D, defaultValue=0.0, minValue=0.0),
             QgsProcessingParameterString(self.REACH_PREFIX, "Conduit name prefix", defaultValue="R-", optional=True),
             QgsProcessingParameterString(self.JUNCTION_PREFIX, "Junction name prefix", defaultValue="J-", optional=True),
             QgsProcessingParameterString(self.SINK_PREFIX, "Outfall name prefix", defaultValue="Outlet-", optional=True),
         ]  # fmt: skip
-        for p in adv:
+        for p in arf_parameters(self)[1] + adv:
             P(_advanced(p))
         for spec in OUTPUT_SPECS:
             P(
@@ -538,8 +542,11 @@ class PrepareSwmmProjectAlgorithm(PrepareHecHmsProjectAlgorithm):
         feedback.setProgressText("Reading the streams and nodes")
         ssrc, reaches, lines = self._read_streams(parameters, context, feedback, crs)
         nsrc, nodes = self._read_nodes(parameters, context, crs)
+        arf_model = self._arf_model(parameters, context, feedback, subs, reaches, nodes)
         try:
-            storms, storm_warnings, chosen = self._storms(parameters, context, feedback)
+            storms, storm_warnings, chosen = self._storms(
+                parameters, context, feedback, arf_model
+            )
         except (stm.StormError, ValueError) as e:
             raise QgsProcessingException(str(e)) from e
 
@@ -561,6 +568,7 @@ class PrepareSwmmProjectAlgorithm(PrepareHecHmsProjectAlgorithm):
             r = hms.assemble(subs, reaches, nodes, storms, hs)
         except (hms.HmsProjectError, stm.StormError) as e:
             raise QgsProcessingException(str(e)) from e
+        r.arf = arf_model
 
         tail = self.parameterAsDouble(parameters, self.SWMM_TAIL, context)
         s = core.SwmmSettings(

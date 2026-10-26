@@ -587,12 +587,24 @@ def test_csv_exports(tmp_path):
     )
     report = tmp_path / "report.csv"
     hypso = tmp_path / "hypso.csv"
-    write_parameters_csv(str(report), res.catchments)
+    write_parameters_csv(
+        str(report), res.catchments, key={"outlet_id": "outlet name", "x": "unused"}
+    )
     write_hypsometric_csv(str(hypso), res.catchments)
-    rows = list(csv.DictReader(report.open()))
+
+    def read(path):
+        assert path.read_bytes().startswith(b"\xef\xbb\xbf")  # UTF-8 BOM
+        lines = path.read_text(encoding="utf-8-sig").splitlines()
+        assert lines[0] == "# Column key"
+        return lines, list(csv.DictReader(ln for ln in lines if not ln.startswith("#")))
+
+    lines, rows = read(report)
+    assert "# outlet_id: outlet name" in lines
+    assert not any(ln.startswith("# x:") for ln in lines)  # only present fields
     assert rows[0]["outlet_id"] == "A"
     assert math.isclose(float(rows[0]["area_km2"]), 0.2)
-    h = list(csv.DictReader(hypso.open()))
+    lines, h = read(hypso)
+    assert any(ln.startswith("# rel_area:") for ln in lines)
     assert len(h) == 21 and h[0]["rel_area"] == "1.0"
 
 

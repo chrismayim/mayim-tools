@@ -47,6 +47,109 @@ REFERENCES = [
     "SANRAL (2013). Drainage Manual, 6th edition. South African National Roads "
     "Agency SOC Ltd, Pretoria.",
 ]
+ARF_REFERENCES = {
+    "eq310": [
+        "SANRAL (2013). Drainage Manual, 6th edition, Eq 3.10 / 3.19 (areal "
+        "reduction factor after Alexander, from NERC 1975 Flood Studies Report).",
+    ],
+    "pietersen": [
+        "Pietersen, J.P.J. et al. (2024). Estimation of areal reduction factors in "
+        "South Africa, Parts 1 and 2. Journal of the South African Institution of "
+        "Civil Engineering 66(4).",
+    ],
+    "feh": [
+        "NERC (1975). Flood Studies Report, Vol II. Natural Environment Research "
+        "Council, London.",
+        "Keers, J.F. and Wescott, P. (1977). A computer-based model for design "
+        "rainfall in the United Kingdom. Meteorological Office Scientific Paper 36.",
+        "Institute of Hydrology (1999). Flood Estimation Handbook, Vol 2: Rainfall "
+        "frequency estimation. Wallingford.",
+    ],
+}
+
+
+def arf_references(arf) -> list[str]:
+    if arf is None:
+        return []
+    refs = list(ARF_REFERENCES.get(arf.method, []))
+    if arf.method == "pietersen":
+        refs = ARF_REFERENCES["eq310"] + refs
+    return refs
+
+
+def add_arf_sections(
+    d, storms: list, arf, named_storms: list, level: int = 2, hms: bool = True
+) -> None:
+    """Methods text, ARF table and burst check for the HEC-HMS and SWMM
+    reports. ``named_storms`` = [(run name, Storm)]."""
+    from .export import arf_table, burst_table
+
+    d.heading("Areal reduction", level)
+    if arf is None or arf.is_unity:
+        d.para(
+            "No areal reduction was applied: the storm depths are the DDF depths "
+            + (
+                "(the DDF was taken as already areal)."
+                if arf is not None and arf.method == "none"
+                else "(point rainfall)."
+            )
+        )
+    else:
+        d.para(
+            "The DDF depths (Design Rainfall estimation, Precipitation data to DDF, "
+            "or gridded rainfall adjusted to a point DDF) are point rainfall and "
+            f"were reduced to catchment rainfall with: {arf.label()} "
+            f"({arf.area_note or 'given area'}). "
+            + (
+                "The ARF depends on the duration, so each nested depth of a "
+                "frequency storm and each cumulative depth of an alternating block "
+                "storm (the k largest blocks) is reduced with the ARF of its own "
+                "duration: the short, intense bursts are reduced more than the "
+                "storm total, and the storms follow the areal DDF curve. Huff and "
+                "ensemble storms carry one DDF depth (the storm duration) and are "
+                "scaled with the ARF of that duration; their temporal pattern is "
+                "unchanged."
+                if arf.varies_with_duration
+                else "The same factor scales every depth."
+            )
+            + (" HEC-HMS's own depth-area reduction is not used." if hms else ""),
+        )
+        if len(storms) and any(st.arf_values for st in storms):
+            head, rows = arf_table(storms, arf)
+            if rows:
+                d.caption(
+                    "Table", "Areal reduction factor by duration and return period"
+                )
+                d.table(head, [[r[0]] + [f"{v:.3f}" for v in r[1:]] for r in rows])
+    head, rows = burst_table(named_storms)
+    if rows:
+        tmax = max(st.ari for _, st in named_storms if st.burst)
+        keep = {name for name, st in named_storms if st.burst and st.ari == tmax}
+        rows_t = [r for r in rows if r[0] in keep]
+        d.heading("Burst check", level + 1)
+        d.para(
+            "For each hyetograph storm, the largest 15 min, 30 min, 1 h ... depth "
+            "inside the storm is compared with the areal DDF depth for that "
+            "duration (point DDF x ARF). Near 100 %, the temporal pattern is as "
+            "intense as the DDF for this catchment; well below 100 %, the pattern "
+            "is smoother than the DDF, which is typical of patterns from gridded "
+            "rainfall (e.g. ERA5, hourly averages over about 30 km cells) applied "
+            "to a small catchment, and the peak flows of those storms may then be "
+            "low. Frequency storms follow the areal DDF by construction (100 %). "
+            f"The table lists the {ari_label(tmax)} year storms; every storm is in "
+            "the CSV output (section 'Burst check')."
+        )
+        d.caption(
+            "Table",
+            f"Burst check, {ari_label(tmax)} year storms (% of the areal DDF depth)",
+        )
+        d.table(
+            head,
+            [
+                [r[0], r[1]] + ["-" if v is None else f"{v:.0f}" for v in r[2:]]
+                for r in rows_t
+            ],
+        )
 
 
 def _f(v, nd=2) -> str:
@@ -205,6 +308,7 @@ def write_report(
         ["Transform", m["transform"]],
         ["Routing", m["routing"]],
         ["Time step / simulation after the storm", f"{r.dt_min:g} min / {r.tail_h:g} h"],
+        ["Areal reduction", r.arf.label() if r.arf is not None else "None"],
         ["Simulation runs", str(len(r.runs))],
         ["Ensemble analyses", str(len(r.ensembles)) if r.ensembles else "-"],
     ]  # fmt: skip
@@ -316,7 +420,8 @@ def write_report(
     if SOURCE_AB in sources:
         d.para(
             "The incremental depths of the Alternating Block design hyetographs "
-            "are used as written, for each chosen peak position ("
+            "are used for each chosen peak position (with the areal reduction "
+            "below, unless the Alternating Block tool already applied one) ("
             + _peak_list(r, SOURCE_AB)
             + ").",
             bold_lead="Alternating Block.",
@@ -337,9 +442,10 @@ def write_report(
         )
     d.para(
         "Hyetograph storms are written as precipitation gages in a HEC-DSS file and "
-        "applied uniformly over the sub-basins (Specified Average). No areal "
-        "reduction is applied by HEC-HMS; a constant areal reduction factor, if "
-        "given, scales the depths."
+        "applied uniformly over the sub-basins (Specified Average)."
+    )
+    add_arf_sections(
+        d, r.storms, r.arf, [(run.name, run.storm) for run in r.runs], level=2
     )
 
     # ------------------------------------------------------------ parameters
@@ -525,8 +631,14 @@ def write_report(
     for txt in [
         "The parameters are first estimates from GIS data; calibrate or verify "
         "them against observed floods or regional methods where possible.",
-        "The design storms are point rainfall unless an areal reduction factor was "
-        "given; for larger catchments apply an areal reduction.",
+        (
+            "The design storms are point rainfall (no areal reduction); for larger "
+            "catchments apply an areal reduction."
+            if r.arf is None or r.arf.is_unity
+            else "One areal reduction factor area applies to the whole model, so "
+            "peaks at internal junctions with a much smaller upstream area are "
+            "slightly underestimated."
+        ),
         "Baseflow, canopy and surface storage are not modelled (event model).",
         "Check the HEC-HMS run logs for warnings, in particular the time step "
         "against the shortest lag and the Muskingum stability.",
@@ -534,7 +646,7 @@ def write_report(
         d.bullet(txt)
 
     d.heading("References", 1)
-    for ref in REFERENCES:
+    for ref in REFERENCES + arf_references(r.arf):
         d.para(ref)
     d.doc.save(path)
     return notes

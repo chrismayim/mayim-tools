@@ -73,7 +73,7 @@ from .qgis_outputs import (
 )
 from .report import REPORT_TITLE, write_csv, write_csv_multi, write_report_docx
 
-TOOL_VERSION = "1.2"
+TOOL_VERSION = "1.2.1"
 
 WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
 
