@@ -299,6 +299,10 @@ def nested_cumulative(depths: dict, duration_min: float, peak_pct: float):
 def _read_rows(path: str) -> list[list[str]]:
     with open(path, encoding="utf-8-sig", newline="") as f:
         text = f.read()
+    # column-key lines ('# column: meaning') above the header are skipped
+    text = "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith("#")
+    )
     try:
         dialect = csv.Sniffer().sniff(text[:4096], delimiters=",;\t")
     except csv.Error:

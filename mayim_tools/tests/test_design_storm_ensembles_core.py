@@ -379,3 +379,54 @@ def test_engine_run_raises_when_no_events_identified(tmp_path):
     engine = DesignStormEngine(mc_sims=10)
     with pytest.raises(ValueError, match="(?i)no storm events"):
         engine.run(str(ts_path), str(ddf_path))
+
+
+# ----------------------------------------------------------------------
+# CSV outputs (Mayim output standard)
+# ----------------------------------------------------------------------
+
+
+def test_csvs_follow_the_output_standard(synthetic_engine_result, tmp_path):
+    from mayim_tools.data.hec_hms_project import storms as stm
+    from mayim_tools.rainfall.design_storm_ensembles import report
+
+    res = synthetic_engine_result
+    files = {
+        "ens": (report.write_ensemble_csv, res["ensemble_rows"], "Duration"),
+        "cat": (report.write_catalogue_csv, res["catalogue_rows"], "duration_minutes"),
+        "bin": (report.write_bin_summary_csv, res["bin_summary_rows"], "Duration"),
+    }
+    for name, (writer, rows, first_col) in files.items():
+        path = tmp_path / f"{name}.csv"
+        writer(rows, str(path))
+        raw = path.read_bytes()
+        assert raw.startswith(b"\xef\xbb\xbf"), name  # UTF-8 BOM
+        lines = raw.decode("utf-8-sig").splitlines()
+        assert lines[0] == "# Column key"
+        header = next(line for line in lines if not line.startswith("#"))
+        assert header.split(",")[0] == first_col
+        keyed = {line[2:].split(":")[0] for line in lines if line.startswith("# ")}
+        for col in header.split(","):
+            if not col.startswith("Increment_"):
+                assert col in keyed, (name, col)
+        df = pd.read_csv(path, comment="#")
+        assert len(df) == len(rows)
+
+    # the bin summary never joins durations with a comma (no thousands look)
+    for r in res["bin_summary_rows"]:
+        assert "," not in str(r["pooled_from_durations"])
+
+    # Prepare HEC-HMS / SWMM project read the ensemble CSV with its key
+    ens = stm.read_ensemble_csv(str(tmp_path / "ens.csv"))
+    assert len(ens) == len(res["ensemble_rows"])
+    assert ens[0]["band"] in ("frequent", "intermediate", "rare")
+
+
+def test_empty_catalogue_still_writes_key_and_header(tmp_path):
+    from mayim_tools.rainfall.design_storm_ensembles import report
+
+    path = tmp_path / "cat.csv"
+    report.write_catalogue_csv([], str(path))
+    lines = path.read_text(encoding="utf-8-sig").splitlines()
+    assert lines[0] == "# Column key"
+    assert lines[-1] == ",".join(report.CATALOGUE_COLUMNS)

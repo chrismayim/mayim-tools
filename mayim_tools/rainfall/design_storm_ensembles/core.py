@@ -493,7 +493,7 @@ class DesignStormEngine:
                                 shape,
                                 len(pooled_windows),
                                 "direct_from_data_pooled",
-                                pooled_from=",".join(str(d) for d in pooled_from),
+                                pooled_from="; ".join(str(d) for d in pooled_from),
                                 n_native=n,
                             )
                         )
@@ -506,7 +506,7 @@ class DesignStormEngine:
                                 shape,
                                 len(pooled_windows),
                                 "insufficient_data_even_pooled",
-                                pooled_from=",".join(str(d) for d in pooled_from),
+                                pooled_from="; ".join(str(d) for d in pooled_from),
                                 n_native=n,
                             )
                         )

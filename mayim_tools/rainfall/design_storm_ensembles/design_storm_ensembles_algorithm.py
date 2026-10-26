@@ -3,23 +3,57 @@
 Thin wrapper - all real logic lives in core.py / report.py (zero QGIS
 dependency, independently testable; see
 tests/test_design_storm_ensembles_core.py). QGIS4/Qt6-safe: this
-algorithm only uses File/Number/String/Boolean/FileDestination
+algorithm only uses File/Number/String/Boolean/FolderDestination
 Processing parameters (no vector/raster geometry enums).
+
+Outputs follow the Mayim output standard: a tick box per output, one
+CSV folder, files named <project number>_<description>.csv.
 """
 
+import os
 from pathlib import Path
 
 from qgis.core import (
     QgsProcessingAlgorithm,
+    QgsProcessingException,
     QgsProcessingParameterBoolean,
     QgsProcessingParameterFile,
-    QgsProcessingParameterFileDestination,
+    QgsProcessingParameterFolderDestination,
     QgsProcessingParameterNumber,
     QgsProcessingParameterString,
 )
 from qgis.PyQt.QtGui import QIcon
 
+from mayim_tools._common.output_files import (
+    CSV,
+    EXTENSIONS,
+    OutputSpec,
+    clean_name_part,
+)
+
 from . import core, report
+
+TOOL_NAME = "Design Storm Ensembles"
+TOOL_VERSION = "1.0.0"
+
+# Selectable outputs: key, dialog label, file-name description, folder
+# kind, ticked by default. All three share the CSV folder.
+OUTPUT_SPECS = [
+    OutputSpec(
+        "OUTPUT_ENSEMBLE_CSV", "Design storm ensemble (CSV)",
+        "Design Storm Ensemble", CSV,
+    ),
+    OutputSpec(
+        "OUTPUT_CATALOGUE_CSV", "Storm catalogue (CSV, diagnostic)",
+        "Storm Catalogue", CSV,
+    ),
+    OutputSpec(
+        "OUTPUT_BIN_SUMMARY_CSV", "Bin summary (CSV, diagnostic)",
+        "Storm Bin Summary", CSV,
+    ),
+]  # fmt: skip
+SPEC_BY_KEY = {spec.key: spec for spec in OUTPUT_SPECS}
+FOLDER_PARAMS = {CSV: ("FOLDER_CSV", "Output folder for CSV files")}
 
 
 class DesignStormEnsembleAlgorithm(QgsProcessingAlgorithm):
@@ -34,6 +68,7 @@ class DesignStormEnsembleAlgorithm(QgsProcessingAlgorithm):
     MC_ALPHA = "MC_ALPHA"
     RANDOM_SEED = "RANDOM_SEED"
     POOL_SPARSE_BINS = "POOL_SPARSE_BINS"
+    PROJECT_NUMBER = "PROJECT_NUMBER"
     OUTPUT_ENSEMBLE_CSV = "OUTPUT_ENSEMBLE_CSV"
     OUTPUT_CATALOGUE_CSV = "OUTPUT_CATALOGUE_CSV"
     OUTPUT_BIN_SUMMARY_CSV = "OUTPUT_BIN_SUMMARY_CSV"
@@ -58,7 +93,13 @@ class DesignStormEnsembleAlgorithm(QgsProcessingAlgorithm):
         return "rainfall_tools"
 
     def shortHelpString(self):
+        files = "\n".join(
+            f"  {spec.label}: <project number>_"
+            f"{clean_name_part(spec.description)}{EXTENSIONS[spec.kind]}"
+            for spec in OUTPUT_SPECS
+        )
         return (
+            f"{TOOL_NAME} (version {TOOL_VERSION})\n\n"
             "PURPOSE\n"
             "Builds an ensemble of representative temporal storm patterns "
             "(Huff/ARR-style) for a fixed set of design durations and AEP "
@@ -133,7 +174,19 @@ class DesignStormEnsembleAlgorithm(QgsProcessingAlgorithm):
             "control the sub-native-resolution disaggregation (default "
             "500 sims, seed 42 for reproducibility, alpha 3.0 - lower "
             "alpha gives peakier/more variable synthesized "
-            "sub-structure)."
+            "sub-structure).\n"
+            "Project number: optional prefix for the output file names.\n\n"
+            "OUTPUTS\n"
+            "Tick the outputs wanted (all three by default) and choose the "
+            "CSV output folder. Files are named <project number>_<description> "
+            "with underscores (just <description> without a project number) "
+            "and replace files of the same name; a file that is open in Excel "
+            "or QGIS cannot be replaced - close it and run again (the other "
+            "outputs are still written). The CSVs are UTF-8 with a byte-order "
+            "mark, so Excel opens them cleanly, and each starts with a column "
+            "key ('#' lines) explaining the headings. The ensemble CSV can be "
+            "read directly by Prepare HEC-HMS project and Prepare SWMM "
+            "project.\n" + files
         )
 
     def initAlgorithm(self, config=None):
@@ -231,30 +284,22 @@ class DesignStormEnsembleAlgorithm(QgsProcessingAlgorithm):
         self.addParameter(seed_param)
 
         self.addParameter(
-            QgsProcessingParameterFileDestination(
-                self.OUTPUT_ENSEMBLE_CSV,
-                "Design storm ensemble CSV",
-                fileFilter="CSV files (*.csv)",
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterFileDestination(
-                self.OUTPUT_CATALOGUE_CSV,
-                "Storm catalogue CSV (diagnostic)",
-                fileFilter="CSV files (*.csv)",
+            QgsProcessingParameterString(
+                self.PROJECT_NUMBER,
+                "Project number (file name prefix, optional)",
                 optional=True,
-                createByDefault=True,
             )
         )
-        self.addParameter(
-            QgsProcessingParameterFileDestination(
-                self.OUTPUT_BIN_SUMMARY_CSV,
-                "Bin summary CSV (diagnostic)",
-                fileFilter="CSV files (*.csv)",
-                optional=True,
-                createByDefault=True,
+        for spec in OUTPUT_SPECS:
+            self.addParameter(
+                QgsProcessingParameterBoolean(
+                    spec.key, f"Output: {spec.label}", defaultValue=spec.default
+                )
             )
-        )
+        for name, label in FOLDER_PARAMS.values():
+            self.addParameter(
+                QgsProcessingParameterFolderDestination(name, label, optional=True)
+            )
 
     def processAlgorithm(self, parameters, context, feedback):
         ts_path = self.parameterAsFile(parameters, self.INPUT_TIMESERIES, context)
@@ -276,15 +321,26 @@ class DesignStormEnsembleAlgorithm(QgsProcessingAlgorithm):
         mc_sims = self.parameterAsInt(parameters, self.MC_SIMS, context)
         mc_alpha = self.parameterAsDouble(parameters, self.MC_ALPHA, context)
         random_seed = self.parameterAsInt(parameters, self.RANDOM_SEED, context)
-        out_ensemble = self.parameterAsFileOutput(
-            parameters, self.OUTPUT_ENSEMBLE_CSV, context
-        )
-        out_catalogue = self.parameterAsFileOutput(
-            parameters, self.OUTPUT_CATALOGUE_CSV, context
-        )
-        out_bin_summary = self.parameterAsFileOutput(
-            parameters, self.OUTPUT_BIN_SUMMARY_CSV, context
-        )
+        project_number = (
+            self.parameterAsString(parameters, self.PROJECT_NUMBER, context) or ""
+        ).strip()
+
+        selected = [
+            spec
+            for spec in OUTPUT_SPECS
+            if self.parameterAsBoolean(parameters, spec.key, context)
+        ]
+        if not selected:
+            raise QgsProcessingException("Tick at least one output.")
+        folders = {}
+        for kind in {spec.kind for spec in selected}:
+            name, label = FOLDER_PARAMS[kind]
+            folder = self.parameterAsFileOutput(parameters, name, context)
+            if not folder:
+                raise QgsProcessingException(f"Choose the {label.lower()}.")
+            os.makedirs(folder, exist_ok=True)
+            folders[kind] = folder
+        paths = {spec.key: spec.path(folders, project_number) for spec in selected}
 
         feedback.pushInfo(
             "Loading time series and DDF table, extracting storm events..."
@@ -310,22 +366,54 @@ class DesignStormEnsembleAlgorithm(QgsProcessingAlgorithm):
         for w in result["warnings"]:
             feedback.pushWarning(w)
 
-        report.write_ensemble_csv(result["ensemble_rows"], out_ensemble)
-        outputs = {self.OUTPUT_ENSEMBLE_CSV: out_ensemble}
-
-        if out_catalogue:
-            report.write_catalogue_csv(result["catalogue_rows"], out_catalogue)
-            outputs[self.OUTPUT_CATALOGUE_CSV] = out_catalogue
-        if out_bin_summary:
-            report.write_bin_summary_csv(result["bin_summary_rows"], out_bin_summary)
-            outputs[self.OUTPUT_BIN_SUMMARY_CSV] = out_bin_summary
+        outputs = {
+            name: folders[kind]
+            for kind, (name, _) in FOLDER_PARAMS.items()
+            if kind in folders
+        }
+        writers = {
+            self.OUTPUT_ENSEMBLE_CSV: (
+                report.write_ensemble_csv,
+                result["ensemble_rows"],
+            ),
+            self.OUTPUT_CATALOGUE_CSV: (
+                report.write_catalogue_csv,
+                result["catalogue_rows"],
+            ),
+            self.OUTPUT_BIN_SUMMARY_CSV: (
+                report.write_bin_summary_csv,
+                result["bin_summary_rows"],
+            ),
+        }
+        written = []
+        for key, (writer, rows) in writers.items():
+            if key not in paths:
+                continue
+            path = paths[key]
+            try:
+                writer(rows, path)
+            except Exception as e:
+                feedback.reportError(
+                    f"{SPEC_BY_KEY[key].label}: {Path(path).name} could not be "
+                    f"written ({e}). If it is open in QGIS or Excel, close it and "
+                    "run again.",
+                    fatalError=False,
+                )
+                continue
+            outputs[key] = path
+            written.append(path)
+            feedback.pushInfo(f"Written: {path}")
+        if not written:
+            raise QgsProcessingException(
+                "No output could be written - see the errors above."
+            )
 
         n_blank = sum(1 for r in result["ensemble_rows"] if not r["Increments"])
         if n_blank:
             feedback.pushWarning(
                 f"{n_blank} of {len(result['ensemble_rows'])} Duration x AEP x Shape "
-                f"bins had too few storms and were left blank - see the bin "
-                f"summary CSV."
+                "bins had too few storms and were left blank - see the bin "
+                "summary CSV."
             )
 
         return outputs
