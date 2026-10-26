@@ -37,7 +37,7 @@ from . import neh630, scs_sa
 from . import probability as prob_mod
 
 TOOL_NAME = "Hydrological Soil Groups (HSG)"
-TOOL_VERSION = "0.3.0"
+TOOL_VERSION = "0.4.0"
 
 LAYERS = ("0-30cm", "30-60cm", "60-100cm")
 TAGS = ("P05", "P50", "P95")
@@ -103,6 +103,20 @@ def colours_for(method: str) -> dict:
 # ----------------------------------------------------------------------
 
 
+# Output keys for RunSettings.outputs. The per-method keys map to
+# {method: path}; the others to a path. Without the map the legacy fixed
+# names in out_dir are used.
+OUT_RECOMMENDED = "recommended"
+OUT_BY_KSAT = "by_ksat"
+OUT_PROBABILITY = "probability"
+OUT_CONDITIONS = "conditions"
+OUT_ZONES = "zones_csv"
+OUT_METADATA = "metadata_csv"
+OUT_REPORT = "report"
+PER_METHOD = (OUT_RECOMMENDED, OUT_BY_KSAT, OUT_PROBABILITY)
+CSV_ENCODING = "utf-8-sig"
+
+
 @dataclass
 class RunSettings:
     regional_folder: str
@@ -120,6 +134,30 @@ class RunSettings:
     sa_adjust_water: bool = True
     zones: list = field(default_factory=list)  # [(name, wkt)]
     write_report: bool = True
+    outputs: dict = field(default_factory=dict)  # see OUT_*; empty = legacy
+    # report title page and outputs: project_number, project_name, software,
+    # labels {OUT_*: label}
+    report_context: dict = field(default_factory=dict)
+
+    def path(self, key: str, method: str | None = None) -> str | None:
+        """Path for an output (per method for the per-method keys), or None
+        when it is not wanted."""
+        if self.outputs:
+            value = self.outputs.get(key)
+            return value.get(method) if isinstance(value, dict) else value
+        if key == OUT_REPORT and not self.write_report:
+            return None
+        short = METHOD_SHORT.get(method, "")
+        legacy = {
+            OUT_RECOMMENDED: f"hsg_{short}_recommended.tif",
+            OUT_BY_KSAT: f"hsg_{short}_by_ksat.tif",
+            OUT_PROBABILITY: f"hsg_{short}_probability.tif",
+            OUT_CONDITIONS: "hsg_conditions.tif",
+            OUT_ZONES: "hsg_zone_summary.csv",
+            OUT_METADATA: "hsg_metadata.csv",
+            OUT_REPORT: "hydrologic_soil_groups_report.docx",
+        }
+        return os.path.join(self.out_dir, legacy[key])
 
 
 @dataclass
@@ -155,6 +193,7 @@ class RunResult:
     warnings: list = field(default_factory=list)
     files: list = field(default_factory=list)
     report_path: str = ""
+    failed: list = field(default_factory=list)  # [(path, reason)]
     run_time_utc: str = ""
     seconds: float = 0.0
 
@@ -629,7 +668,8 @@ def run(
     unknown = [m for m in settings.methods if m not in METHODS]
     if unknown:
         raise SoilDataError(f"Unknown method(s): {', '.join(unknown)}")
-    os.makedirs(settings.out_dir, exist_ok=True)
+    if settings.out_dir:
+        os.makedirs(settings.out_dir, exist_ok=True)
 
     grid, ksat, texture, meta = read_regional(settings.regional_folder)
     files = meta.pop("_files", {})
@@ -750,17 +790,20 @@ def run(
     if write_fn is not None:
         _write_rasters(result, write_fn)
     _write_tables(result)
-    if settings.write_report:
+    report_path = settings.path(OUT_REPORT)
+    if report_path:
         try:
             from . import report
 
-            result.report_path = report.write_report(result)
+            result.report_path = report.write_report(result, report_path)
             result.files.append(result.report_path)
         except ImportError as exc:
             result.warnings.append(
                 f"Word report not written ({exc}); install python-docx and "
                 "matplotlib in QGIS's Python."
             )
+        except OSError as exc:
+            result.failed.append((report_path, str(exc)))
         except Exception as exc:  # noqa: BLE001 - the report must not fail a run
             result.warnings.append(f"Word report failed: {exc}")
     result.seconds = time.time() - t0
@@ -865,47 +908,45 @@ def output_layers(result: RunResult) -> list[dict]:
     """Rasters written, for loading and the layer file:
     {path, name, main, classes (value, label, colour) or []}."""
     out = []
-    folder = result.settings.out_dir
+    s = result.settings
     for m in result.methods:
-        short = METHOD_SHORT[m]
         cls = [(c, lab, colours_for(m)[c]) for c, lab in labels_for(m).items()]
+        for key, name, main, classes in (
+            (OUT_RECOMMENDED, f"HSG {m} recommended", True, cls),
+            (OUT_BY_KSAT, f"HSG {m} at Ksat P05 (more runoff)", False, cls),
+            (OUT_PROBABILITY, f"HSG {m} probabilities", False, []),
+        ):
+            path = s.path(key, m)
+            if path:
+                out.append(
+                    {"path": path, "name": name, "main": main, "classes": classes}
+                )
+    path = s.path(OUT_CONDITIONS)
+    if path:
         out.append(
             {
-                "path": os.path.join(folder, f"hsg_{short}_recommended.tif"),
-                "name": f"HSG {m} recommended",
-                "main": True,
-                "classes": cls,
-            }
-        )
-        out.append(
-            {
-                "path": os.path.join(folder, f"hsg_{short}_by_ksat.tif"),
-                "name": f"HSG {m} at Ksat P05 (more runoff)",
-                "main": False,
-                "classes": cls,
-            }
-        )
-        out.append(
-            {
-                "path": os.path.join(folder, f"hsg_{short}_probability.tif"),
-                "name": f"HSG {m} probabilities",
+                "path": path,
+                "name": "HSG conditions (depths, Ksat, case)",
                 "main": False,
                 "classes": [],
             }
         )
-    out.append(
-        {
-            "path": os.path.join(folder, "hsg_conditions.tif"),
-            "name": "HSG conditions (depths, Ksat, case)",
-            "main": False,
-            "classes": [],
-        }
-    )
     return out
 
 
+def _guarded(result: RunResult, path: str, writer) -> None:
+    """Runs writer(path); a failure (file open elsewhere) is recorded in
+    result.failed and the other outputs are still written."""
+    try:
+        writer(path)
+    except (OSError, RuntimeError) as exc:
+        result.failed.append((path, str(exc)))
+        return
+    result.files.append(path)
+
+
 def _write_rasters(result: RunResult, write_fn) -> None:
-    folder = result.settings.out_dir
+    s = result.settings
     src = f"{TOOL_NAME} (mayim_tools) v{TOOL_VERSION}"
     g = result.grid
 
@@ -918,47 +959,44 @@ def _write_rasters(result: RunResult, write_fn) -> None:
 
     for m, mr in result.methods.items():
         short = METHOD_SHORT[m]
-        path = os.path.join(folder, f"hsg_{short}_recommended.tif")
-        write_fn(
-            path,
-            g,
-            [
-                (f"hsg_{short}_recommended (code)", codes(mr.recommended)),
-                (f"hsg_{short}_confidence (%)", f32(mr.confidence)),
-                (f"hsg_{short}_confidence_class (code)", codes(mr.conf_class)),
-            ],
-            "code / %",
-            src,
-            TOOL_VERSION,
-        )
-        result.files.append(path)
-        path = os.path.join(folder, f"hsg_{short}_by_ksat.tif")
-        write_fn(
-            path,
-            g,
-            [
-                (f"hsg_{short}_at_ksat_P05 (code)", codes(mr.at["P05"])),
-                (f"hsg_{short}_at_ksat_P50 (code)", codes(mr.at["P50"])),
-                (f"hsg_{short}_at_ksat_P95 (code)", codes(mr.at["P95"])),
-            ],
-            "code",
-            src,
-            TOOL_VERSION,
-        )
-        result.files.append(path)
-        path = os.path.join(folder, f"hsg_{short}_probability.tif")
-        write_fn(
-            path,
-            g,
-            [
-                (f"hsg_{short}_probability_{lab} (%)", f32(100.0 * mr.prob[i]))
-                for i, lab in enumerate("ABCD")
-            ],
-            "%",
-            src,
-            TOOL_VERSION,
-        )
-        result.files.append(path)
+        bands = {
+            OUT_RECOMMENDED: (
+                [
+                    (f"hsg_{short}_recommended (code)", codes(mr.recommended)),
+                    (f"hsg_{short}_confidence (%)", f32(mr.confidence)),
+                    (f"hsg_{short}_confidence_class (code)", codes(mr.conf_class)),
+                ],
+                "code / %",
+            ),
+            OUT_BY_KSAT: (
+                [
+                    (f"hsg_{short}_at_ksat_P05 (code)", codes(mr.at["P05"])),
+                    (f"hsg_{short}_at_ksat_P50 (code)", codes(mr.at["P50"])),
+                    (f"hsg_{short}_at_ksat_P95 (code)", codes(mr.at["P95"])),
+                ],
+                "code",
+            ),
+            OUT_PROBABILITY: (
+                [
+                    (f"hsg_{short}_probability_{lab} (%)", f32(100.0 * mr.prob[i]))
+                    for i, lab in enumerate("ABCD")
+                ],
+                "%",
+            ),
+        }
+        for key, (band_list, units) in bands.items():
+            path = s.path(key, m)
+            if path:
+                _guarded(
+                    result,
+                    path,
+                    lambda p, b=band_list, u=units: write_fn(
+                        p, g, b, u, src, TOOL_VERSION
+                    ),
+                )
+    path = s.path(OUT_CONDITIONS)
+    if not path:
+        return
     q = {
         rng: neh630.least_transmissive(result.ksat["P50"], rng)
         for rng in ("0-50cm", "0-100cm")
@@ -992,9 +1030,11 @@ def _write_rasters(result: RunResult, write_fn) -> None:
     ]
     if result.texture is not None:
         bands.append(("neh630_texture_group_0-30cm (code)", codes(result.texture)))
-    path = os.path.join(folder, "hsg_conditions.tif")
-    write_fn(path, g, bands, "cm / code / mm/h", src, TOOL_VERSION)
-    result.files.append(path)
+    _guarded(
+        result,
+        path,
+        lambda p: write_fn(p, g, bands, "cm / code / mm/h", src, TOOL_VERSION),
+    )
 
 
 def _fmt(v, nd=2):
@@ -1008,19 +1048,24 @@ def _fmt(v, nd=2):
 
 
 def _write_tables(result: RunResult) -> None:
-    path = os.path.join(result.settings.out_dir, "hsg_zone_summary.csv")
+    path = result.settings.path(OUT_ZONES)
+    if not path:
+        return
     rows = result.zone_rows
     header = []
     for r in rows:
         for k in r:
             if k not in header:
                 header.append(k)
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
-        w.writerow(header)
-        for r in rows:
-            w.writerow([_fmt(r.get(h, "")) for h in header])
-    result.files.append(path)
+
+    def write(p):
+        with open(p, "w", newline="", encoding=CSV_ENCODING) as f:
+            w = csv.writer(f)
+            w.writerow(header)
+            for r in rows:
+                w.writerow([_fmt(r.get(h, "")) for h in header])
+
+    _guarded(result, path, write)
 
 
 def _write_metadata(result: RunResult) -> None:
@@ -1077,12 +1122,17 @@ def _write_metadata(result: RunResult) -> None:
         (
             "Outputs",
             ["File"],
-            [[os.path.basename(p)] for p in result.files] + [["hsg_metadata.csv"]],
+            [[os.path.basename(p)] for p in result.files]
+            + [[os.path.basename(s.path(OUT_METADATA) or "")]],
         )
     )
     sections.append(
         ("Warnings", ["Warning"], [[w] for w in result.warnings] or [["none"]])
     )
-    path = os.path.join(s.out_dir, "hsg_metadata.csv")
-    write_metadata_csv(sections, path)
-    result.files.append(path)
+    path = s.path(OUT_METADATA)
+    if path:
+        _guarded(
+            result,
+            path,
+            lambda p: write_metadata_csv(sections, p, encoding=CSV_ENCODING),
+        )

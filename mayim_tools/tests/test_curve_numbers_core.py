@@ -468,3 +468,66 @@ def test_sanlc_end_to_end(tmp_path):
         out / "cn_table_scs_sa.csv"
     ).exists()
     assert not any("Built-up land covers" in w for w in r.warnings)
+
+
+def test_output_standard_paths_and_report(tmp_path):
+    """Mayim output standard: outputs go to the given paths (an unticked
+    output is not written), CSVs are UTF-8 with BOM, the groups-at-Ksat
+    raster is found beside a project-numbered HSG raster, and the report
+    follows the house structure."""
+    pytest.importorskip("docx")
+    pytest.importorskip("matplotlib")
+    import re
+    import shutil
+
+    from docx import Document
+
+    lcp, rec, zones = _make_inputs(tmp_path)
+    new_rec = tmp_path / "MC2025_014_HSG_SCSSA_Recommended.tif"
+    shutil.copy(rec, new_rec)
+    shutil.copy(
+        tmp_path / "hsg_scssa_by_ksat.tif",
+        tmp_path / "MC2025_014_HSG_SCSSA_By_Ksat.tif",
+    )
+    out = tmp_path / "out"
+    out.mkdir()
+    paths = {
+        core.OUT_ZONES: str(out / "MC2025_014_CN_Zone_Summary.csv"),
+        core.OUT_LOOKUP: str(out / "MC2025_014_CN_Lookup_Used.csv"),
+        core.OUT_METADATA: str(out / "MC2025_014_CN_Metadata.csv"),
+        core.OUT_REPORT: str(out / "MC2025_014_CN_Report.docx"),
+    }  # raster not ticked
+    s = core.RunSettings(
+        lcp,
+        str(new_rec),
+        "",
+        zones=zones,
+        outputs=paths,
+        report_context={"project_number": "MC2025_014", "project_name": "Site X"},
+    )
+    r = core.run(s)
+    assert r.hsg.by_ksat_path.endswith("MC2025_014_HSG_SCSSA_By_Ksat.tif")
+    core.write_outputs(r, "test")
+    assert not r.failed
+    assert sorted(os.listdir(out)) == sorted(
+        os.path.basename(p) for p in paths.values()
+    )
+    for key in (core.OUT_ZONES, core.OUT_LOOKUP, core.OUT_METADATA):
+        assert open(paths[key], "rb").read(3) == b"\xef\xbb\xbf", key
+    back = lk.read_lookup_csv(paths[core.OUT_LOOKUP])  # custom lookup re-read
+    assert back.classes
+    doc = Document(paths[core.OUT_REPORT])
+    heads = [p.text for p in doc.paragraphs if p.style.name == "Heading 1"]
+    assert heads == [
+        "Summary",
+        "Tool and method",
+        "Inputs and settings",
+        "Parameters and calculations",
+        "Results",
+        "Outputs",
+        "Notes and limitations",
+        "References",
+    ]
+    cells = "\n".join(c.text for t in doc.tables for row in t.rows for c in row.cells)
+    assert "MC2025_014" in cells
+    assert not re.search(r"\d,\d{3}", cells)

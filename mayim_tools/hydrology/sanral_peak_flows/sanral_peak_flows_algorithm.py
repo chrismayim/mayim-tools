@@ -2,21 +2,25 @@
 output or any layer with the same attributes) + design rainfall DDF + runoff
 coefficient CSV in -> design peak flows by the SANRAL Drainage Manual
 Chapter 3 methods and DWS CAPA out (catchment layer, sectioned CSV,
-results.json and an optional Word annexure).
+results.json and a Word annexure).
+
+Outputs follow the Mayim output standard: a tick box per output, shapefile,
+CSV and Word folders, files named <project number>_<description>.
 
 Thin wrapper - all real logic lives in core.py / methods.py (zero QGIS
 dependency; see tests/test_sanral_peak_flows_core.py).
 """
 
+import os
 from datetime import datetime
 from pathlib import Path
 
 from qgis.core import (
     Qgis,
     QgsFeature,
-    QgsFeatureSink,
     QgsField,
     QgsFields,
+    QgsMemoryProviderUtils,
     QgsProcessing,
     QgsProcessingAlgorithm,
     QgsProcessingContext,
@@ -24,15 +28,29 @@ from qgis.core import (
     QgsProcessingFeedback,
     QgsProcessingParameterBoolean,
     QgsProcessingParameterEnum,
-    QgsProcessingParameterFeatureSink,
     QgsProcessingParameterFeatureSource,
     QgsProcessingParameterField,
     QgsProcessingParameterFile,
-    QgsProcessingParameterFileDestination,
+    QgsProcessingParameterFolderDestination,
     QgsProcessingParameterNumber,
+    QgsProcessingParameterString,
 )
 from qgis.PyQt.QtCore import QMetaType
 from qgis.PyQt.QtGui import QIcon
+
+from mayim_tools._common.output_files import (
+    CSV,
+    EXTENSIONS,
+    SHAPEFILE,
+    WORD,
+    OutputSpec,
+    clean_name_part,
+)
+from mayim_tools.hydrology.catchment_delineation.qgis_outputs import (
+    STYLE_CATCHMENTS,
+    load_on_completion,
+    save_shapefile,
+)
 
 from . import tables as tb
 from .core import TOOL_VERSION, CatchmentInput, Settings, field_names, run
@@ -66,6 +84,48 @@ ARF_METHOD_OPTIONS = [
 ARF_METHOD_KEYS = ["eq310", "pietersen"]
 ARF_REGION_OPTIONS = [NOT_SET] + [f"ARF region {r}" for r in range(1, 6)]
 ARF_REGION_KEYS = [None, 1, 2, 3, 4, 5]
+
+# Selectable outputs: key, dialog label, file-name description, folder kind,
+# ticked by default. results.json is written to the CSV folder.
+OUTPUT_SPECS = [
+    OutputSpec(
+        "OUTPUT", "Catchments with design peak flows (shapefile)",
+        "Peak Flow Catchments", SHAPEFILE,
+    ),
+    OutputSpec("OUTPUT_CSV", "Peak flow calculations (CSV)", "Peak Flow Calculations", CSV),
+    OutputSpec("OUTPUT_DOCX", "Peak flow annexure (Word)", "Peak Flow Annexure", WORD),
+    OutputSpec(
+        "OUTPUT_JSON", "Results for the report compiler (results.json)",
+        "Peak Flow Results", CSV, False,
+    ),
+]  # fmt: skip
+SPEC_BY_KEY = {spec.key: spec for spec in OUTPUT_SPECS}
+FOLDER_PARAMS = {
+    SHAPEFILE: ("FOLDER_SHP", "Output folder for vector layers (shapefiles)"),
+    CSV: ("FOLDER_CSV", "Output folder for CSV files (and results.json)"),
+    WORD: ("FOLDER_WORD", "Output folder for Word reports"),
+}
+
+
+def output_path(spec, folders, project_number):
+    path = spec.path(folders, project_number)
+    if spec.key == "OUTPUT_JSON":
+        path = str(Path(path).with_suffix(".json"))
+    return path
+
+
+def _software_version() -> str:
+    parts = []
+    metadata = Path(__file__).resolve().parents[2] / "metadata.txt"
+    try:
+        for line in metadata.read_text(encoding="utf-8").splitlines():
+            if line.startswith("version="):
+                parts.append(f"Mayim Tools {line.split('=', 1)[1].strip()}")
+                break
+    except OSError:
+        pass
+    parts.append(f"QGIS {Qgis.version()}")
+    return ", ".join(parts)
 
 
 def _advanced(param):
@@ -127,6 +187,8 @@ class SanralPeakFlowsAlgorithm(QgsProcessingAlgorithm):
     OUTPUT_CSV = "OUTPUT_CSV"
     OUTPUT_JSON = "OUTPUT_JSON"
     OUTPUT_DOCX = "OUTPUT_DOCX"
+    PROJECT_NUMBER = "PROJECT_NUMBER"
+    PROJECT_NAME = "PROJECT_NAME"
 
     def icon(self):
         return QIcon(
@@ -150,6 +212,11 @@ class SanralPeakFlowsAlgorithm(QgsProcessingAlgorithm):
 
     def shortHelpString(self):
         methods = "\n".join(f"  {v[0]}: {v[1]}" for v in METHODS.values())
+        files = "\n".join(
+            f"  {s.label}: <project number>_{clean_name_part(s.description)}"
+            f"{'.json' if s.key == 'OUTPUT_JSON' else EXTENSIONS[s.kind]}"
+            for s in OUTPUT_SPECS
+        )
         notes = "\n".join(f"  - {n}" for n in tb.SOURCE_NOTES)
         return (
             f"SANRAL Deterministic Peak Flows (version {TOOL_VERSION})\n"
@@ -191,10 +258,16 @@ class SanralPeakFlowsAlgorithm(QgsProcessingAlgorithm):
             "and flagged in the notes field; missing inputs skip only that "
             "method.\n"
             "\n"
-            "OUTPUTS:\tThe catchments with one Q field per method and return "
-            "period, a sectioned CSV, results.json (schema mayim.results/1, for "
-            "the report compiler) and an optional Word annexure (needs "
-            "python-docx and matplotlib).\n"
+            "OUTPUTS:\tTick the outputs wanted and choose the folders. The "
+            "catchments shapefile has one Q field per method and return period "
+            "(loaded with the catchment style); the sectioned CSV (UTF-8 with a "
+            "byte-order mark) starts with the abbreviations; the Word annexure "
+            "follows the Mayim report standard (needs python-docx and "
+            "matplotlib); results.json (schema mayim.results/1, for the report "
+            "compiler, not ticked by default) goes to the CSV folder. Files are "
+            "named <project number>_<description> and replace files of the same "
+            "name; a file that is open cannot be replaced and is reported, and "
+            "the other outputs are still written.\n" + files + "\n"
             "\n"
             "FIELD CODES:\n" + methods + "\n\nSOURCE NOTES:\n" + notes
         )
@@ -395,35 +468,29 @@ class SanralPeakFlowsAlgorithm(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
-            QgsProcessingParameterFeatureSink(
-                self.OUTPUT,
-                "Catchments with design peak flows",
-                type=QgsProcessing.SourceType.TypeVectorPolygon,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterFileDestination(
-                self.OUTPUT_CSV,
-                "Peak flow calculations (CSV)",
-                fileFilter="CSV files (*.csv)",
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterFileDestination(
-                self.OUTPUT_JSON,
-                "Results file for the report compiler (results.json)",
-                fileFilter="JSON files (*.json)",
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterFileDestination(
-                self.OUTPUT_DOCX,
-                "Peak flow annexure (Word)",
-                fileFilter="Word documents (*.docx)",
+            QgsProcessingParameterString(
+                self.PROJECT_NUMBER,
+                "Project number (file name prefix, optional)",
                 optional=True,
-                createByDefault=False,
             )
         )
+        self.addParameter(
+            QgsProcessingParameterString(
+                self.PROJECT_NAME,
+                "Project name (report title page, optional)",
+                optional=True,
+            )
+        )
+        for spec in OUTPUT_SPECS:
+            self.addParameter(
+                QgsProcessingParameterBoolean(
+                    spec.key, f"Output: {spec.label}", defaultValue=spec.default
+                )
+            )
+        for name, label in FOLDER_PARAMS.values():
+            self.addParameter(
+                QgsProcessingParameterFolderDestination(name, label, optional=True)
+            )
 
     # ------------------------------------------------------------------
     def _optional_number(self, parameters, key, context):
@@ -446,6 +513,30 @@ class SanralPeakFlowsAlgorithm(QgsProcessingAlgorithm):
         source = self.parameterAsSource(parameters, self.CATCHMENTS, context)
         if source is None:
             raise QgsProcessingException("No catchment layer.")
+        project_number = (
+            self.parameterAsString(parameters, self.PROJECT_NUMBER, context) or ""
+        ).strip()
+        project_name = (
+            self.parameterAsString(parameters, self.PROJECT_NAME, context) or ""
+        ).strip()
+        selected = [
+            spec
+            for spec in OUTPUT_SPECS
+            if self.parameterAsBoolean(parameters, spec.key, context)
+        ]
+        if not selected:
+            raise QgsProcessingException("Tick at least one output.")
+        folders = {}
+        for kind in {spec.kind for spec in selected}:
+            name, label = FOLDER_PARAMS[kind]
+            folder = self.parameterAsFileOutput(parameters, name, context)
+            if not folder:
+                raise QgsProcessingException(
+                    f"Choose the {label[0].lower() + label[1:]}."
+                )
+            os.makedirs(folder, exist_ok=True)
+            folders[kind] = folder
+        paths = {s.key: output_path(s, folders, project_number) for s in selected}
         fields = source.fields()
         f = {
             k: self._field(parameters, k, context, fields)
@@ -597,12 +688,10 @@ class SanralPeakFlowsAlgorithm(QgsProcessingAlgorithm):
         for n in names:
             out_fields.append(QgsField(n, QMetaType.Type.Double))
         out_fields.append(QgsField("notes", QMetaType.Type.QString))
-        sink, dest_id = self.parameterAsSink(
-            parameters, self.OUTPUT, context, out_fields, source.wkbType(),
-            source.sourceCrs(),
-        )  # fmt: skip
-        if sink is None:
-            raise QgsProcessingException("Could not create the output layer.")
+        layer = QgsMemoryProviderUtils.createMemoryLayer(
+            "Peak flow catchments", out_fields, source.wkbType(), source.sourceCrs()
+        )
+        feats = []
         for feat, item in zip(features, result.items, strict=True):
             out = QgsFeature(out_fields)
             out.setGeometry(feat.geometry())
@@ -615,7 +704,9 @@ class SanralPeakFlowsAlgorithm(QgsProcessingAlgorithm):
                 v = q.get(n)
                 out[n] = None if v is None else round(v, 3)
             out["notes"] = item.notes_text()
-            sink.addFeature(out, QgsFeatureSink.Flag.FastInsert)
+            feats.append(out)
+        layer.dataProvider().addFeatures(feats)
+        layer.updateExtents()
 
         run_info = {
             "tool": self.displayName(),
@@ -626,46 +717,96 @@ class SanralPeakFlowsAlgorithm(QgsProcessingAlgorithm):
             "C CSV": c_path or "",
             "TR102 CSV": tr_path or "",
         }
-        outputs = {self.OUTPUT: dest_id}
-        csv_path = self.parameterAsFileOutput(parameters, self.OUTPUT_CSV, context)
-        write_csv(csv_path, result, run_info)
-        outputs[self.OUTPUT_CSV] = csv_path
-        json_path = self.parameterAsFileOutput(parameters, self.OUTPUT_JSON, context)
-        write_results_json(
-            json_path,
-            result,
-            {"id": self.name(), "name": self.displayName(), "version": TOOL_VERSION,
-             "run_time": run_info["run_time"]},
-            {"files": {"catchments": source.sourceName(), "ddf": ddf_path or None,
-                       "c_csv": c_path or None, "tr102_csv": tr_path or None},
-             "parameters": {"methods": list(settings.methods),
-                            "return_periods": list(settings.return_periods),
-                            "tc_floor": settings.tc_floor,
-                            "apply_arf": settings.apply_arf,
-                            "arf_method": settings.arf_method,
-                            "k_custom": settings.k_custom,
-                            "r_days": settings.r_days,
-                            "field_definitions": {n: field_definition(n) for n in names}}},
-        )  # fmt: skip
-        outputs[self.OUTPUT_JSON] = json_path
+        outputs = {
+            name: folders[kind]
+            for kind, (name, _) in FOLDER_PARAMS.items()
+            if kind in folders
+        }
+        written = []
+        self._post_processors = []
 
-        docx_path = self.parameterAsFileOutput(parameters, self.OUTPUT_DOCX, context)
-        if docx_path:
-            feedback.setProgressText("Writing the Word annexure")
+        def save(key, writer):
+            path = paths[key]
             try:
+                writer(path)
+            except ImportError as e:
+                feedback.pushWarning(
+                    f"{SPEC_BY_KEY[key].label}: not written - needs python-docx "
+                    f"and matplotlib in QGIS's Python ({e})."
+                )
+                return
+            except Exception as e:
+                feedback.reportError(
+                    f"{SPEC_BY_KEY[key].label}: {Path(path).name} could not be "
+                    f"written ({e}). If it is open in QGIS, Excel or Word, close it "
+                    "and run again.",
+                    fatalError=False,
+                )
+                return
+            outputs[key] = path
+            written.append((SPEC_BY_KEY[key].label, path))
+            feedback.pushInfo(f"Written: {path}")
+
+        if self.OUTPUT in paths:
+
+            def write_layer(p):
+                save_shapefile(layer, p, context.transformContext())
+                load_on_completion(
+                    context, p, Path(p).stem, STYLE_CATCHMENTS, self._post_processors
+                )
+
+            save(self.OUTPUT, write_layer)
+        if self.OUTPUT_CSV in paths:
+            save(self.OUTPUT_CSV, lambda p: write_csv(p, result, run_info))
+        if self.OUTPUT_JSON in paths:
+            save(
+                self.OUTPUT_JSON,
+                lambda p: write_results_json(
+                    p,
+                    result,
+                    {"id": self.name(), "name": self.displayName(),
+                     "version": TOOL_VERSION, "run_time": run_info["run_time"]},
+                    {"files": {"catchments": source.sourceName(),
+                               "ddf": ddf_path or None, "c_csv": c_path or None,
+                               "tr102_csv": tr_path or None},
+                     "parameters": {"methods": list(settings.methods),
+                                    "return_periods": list(settings.return_periods),
+                                    "tc_floor": settings.tc_floor,
+                                    "apply_arf": settings.apply_arf,
+                                    "arf_method": settings.arf_method,
+                                    "k_custom": settings.k_custom,
+                                    "r_days": settings.r_days,
+                                    "field_definitions": {
+                                        n: field_definition(n) for n in names}}},
+                ),
+            )  # fmt: skip
+        if self.OUTPUT_DOCX in paths:
+            feedback.setProgressText("Writing the Word annexure")
+            docx_path = paths[self.OUTPUT_DOCX]
+
+            def write_docx(p):
                 from .report import write_report
 
-                write_report(docx_path, result, run_info)
-                outputs[self.OUTPUT_DOCX] = docx_path
-            except ImportError:
-                feedback.pushWarning(
-                    "The Word annexure needs python-docx and matplotlib in QGIS's "
-                    "Python (python -m pip install python-docx). All other outputs "
-                    "were written."
+                notes = write_report(
+                    p,
+                    result,
+                    run_info,
+                    context={
+                        "project_number": project_number,
+                        "project_name": project_name,
+                        "software": _software_version(),
+                        "outputs": written + [("This report", docx_path)],
+                    },
                 )
-            except Exception as e:  # a report failure must not lose the results
-                feedback.pushWarning(f"The Word annexure could not be written: {e}")
+                for note in notes:
+                    feedback.pushInfo(note)
 
+            save(self.OUTPUT_DOCX, write_docx)
+
+        if not written:
+            raise QgsProcessingException(
+                "No output could be written - see the errors above."
+            )
         for item in result.items:
             q = item.by_field()
             shown = ", ".join(

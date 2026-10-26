@@ -42,9 +42,26 @@ from . import lookup as lk
 from . import tables as tb
 
 TOOL_NAME = "SCS Curve Numbers"
-TOOL_VERSION = "0.2.0"
+TOOL_VERSION = "0.3.0"
 NODATA_OUT = -9999.0
 OUT_FILE = "curve_numbers.tif"
+# Output keys for RunSettings.outputs ({key: path}); without that map the
+# legacy fixed names in out_dir are used.
+OUT_RASTER = "raster"
+OUT_ZONES = "zones_csv"
+OUT_LOOKUP = "lookup_csv"
+OUT_TABLES = "tables_csv"  # one file per reference table: <stem>_<table>.csv
+OUT_METADATA = "metadata_csv"
+OUT_REPORT = "report"
+LEGACY_NAMES = {
+    OUT_RASTER: OUT_FILE,
+    OUT_ZONES: "cn_zone_summary.csv",
+    OUT_LOOKUP: "cn_lookup_used.csv",
+    OUT_TABLES: "cn_table.csv",
+    OUT_METADATA: "cn_metadata.csv",
+    OUT_REPORT: "curve_numbers_report.docx",
+}
+CSV_ENCODING = "utf-8-sig"
 BLOCK_ROWS = 1024
 PREVIEW_MAX = 1200  # cells along the longer side of the report maps
 
@@ -112,6 +129,18 @@ class RunSettings:
     zones: list = field(default_factory=list)  # [(name, wkt in the land-cover CRS)]
     write_report: bool = True
     block_rows: int = BLOCK_ROWS
+    outputs: dict = field(default_factory=dict)  # {OUT_*: path}; empty = legacy
+    # report title page and outputs: project_number, project_name, software,
+    # outputs [(label, path)]
+    report_context: dict = field(default_factory=dict)
+
+    def path(self, key: str) -> str | None:
+        """Path for an output, or None when it is not wanted."""
+        if self.outputs:
+            return self.outputs.get(key)
+        if key == OUT_REPORT and not self.write_report:
+            return None
+        return os.path.join(self.out_dir, LEGACY_NAMES[key])
 
 
 @dataclass
@@ -171,6 +200,8 @@ class RunResult:
     report_path: str = ""
     run_time_utc: str = ""
     seconds: float = 0.0
+    failed: list = field(default_factory=list)  # [(path, reason)]
+    written: dict = field(default_factory=dict)  # OUT_* -> [paths]
 
 
 # ----------------------------------------------------------------------
@@ -367,11 +398,12 @@ def inspect_hsg(path: str, use_ksat_range: bool = True) -> HsgInput:
             "1-4 = A-D (11-13 = A/D, B/D, C/D; 21-23 = A/B, B/C, C/D) are expected."
         )
     base = os.path.basename(path)
-    if use_ksat_range and "_recommended" in base:
-        sib = os.path.join(
-            os.path.dirname(path), base.replace("_recommended", "_by_ksat")
-        )
-        if os.path.exists(sib):
+    sibs = []
+    for old, new in (("_recommended", "_by_ksat"), ("_Recommended", "_By_Ksat")):
+        if old in base:
+            sibs.append(os.path.join(os.path.dirname(path), base.replace(old, new)))
+    for sib in sibs if use_ksat_range else []:
+        if os.path.exists(sib) and not h.by_ksat_path:
             sd = _descriptions(sib)
             p05 = next((i for i, d in enumerate(sd, 1) if "p05" in d.lower()), 0)
             p95 = next((i for i, d in enumerate(sd, 1) if "p95" in d.lower()), 0)
@@ -379,7 +411,8 @@ def inspect_hsg(path: str, use_ksat_range: bool = True) -> HsgInput:
                 h.by_ksat_path, h.p05_band, h.p95_band = sib, p05, p95
     if use_ksat_range and not h.by_ksat_path:
         h.notes.append(
-            "No matching hsg_<method>_by_ksat.tif beside the soil-group raster: "
+            "No matching groups-at-Ksat raster (hsg_<method>_by_ksat.tif or "
+            "<project number>_HSG_<method>_By_Ksat.tif) beside the soil-group raster: "
             "the CN range covers the land-cover condition only, not the soil."
         )
     return h
@@ -454,21 +487,38 @@ def run(
     for note in hsg.notes + lookup.notes:
         _warn(r, log_fn, note)
     _method_checks(r, log_fn)
-    os.makedirs(s.out_dir, exist_ok=True)
+    if s.out_dir:
+        os.makedirs(s.out_dir, exist_ok=True)
 
     src = gdal.Open(s.landcover_path)
     lc_band = src.GetRasterBand(1)
     lc_nd = lc_band.GetNoDataValue()
     w, h = grid.width, grid.height
-    out_path = os.path.join(s.out_dir, OUT_FILE)
-    dst = gdal.GetDriverByName("GTiff").Create(
-        out_path,
-        w,
-        h,
-        len(BANDS),
-        gdal.GDT_Float32,
-        options=["COMPRESS=DEFLATE", "PREDICTOR=3", "TILED=YES", "BIGTIFF=IF_SAFER"],
-    )
+    out_path = s.path(OUT_RASTER)
+    dst = None
+    if out_path:
+        try:
+            dst = gdal.GetDriverByName("GTiff").Create(
+                out_path,
+                w,
+                h,
+                len(BANDS),
+                gdal.GDT_Float32,
+                options=[
+                    "COMPRESS=DEFLATE",
+                    "PREDICTOR=3",
+                    "TILED=YES",
+                    "BIGTIFF=IF_SAFER",
+                ],
+            )
+        except RuntimeError as exc:
+            dst = None
+            r.failed.append((out_path, str(exc)))
+        if dst is None and not any(p == out_path for p, _ in r.failed):
+            r.failed.append((out_path, "could not be created (open in QGIS?)"))
+    if dst is None:  # not wanted or locked: statistics only, in memory
+        out_path = ""
+        dst = gdal.GetDriverByName("MEM").Create("", w, h, len(BANDS), gdal.GDT_Float32)
     dst.SetGeoTransform(grid.geotransform)
     dst.SetProjection(grid.crs_wkt)
     dst.SetMetadataItem("SOURCE", f"{TOOL_NAME} (mayim_tools) v{TOOL_VERSION}")
@@ -568,7 +618,9 @@ def run(
         dst.FlushCache()
         dst = None
         src = None
-    r.files.append(out_path)
+    if out_path:
+        r.files.append(out_path)
+        r.written[OUT_RASTER] = [out_path]
     r.preview = {k: np.vstack(v) if v else np.zeros((0, 0)) for k, v in prev.items()}
     _finish(r, log_fn)
     r.seconds = (datetime.now(UTC) - t0).total_seconds()
@@ -738,29 +790,49 @@ def _fmt(v, nd=2):
     return v
 
 
+def _guarded(r: RunResult, key: str, path: str, writer) -> bool:
+    """Runs writer(path); a failure (file open elsewhere) is recorded in
+    r.failed and the other outputs are still written."""
+    try:
+        writer(path)
+    except OSError as exc:
+        r.failed.append((path, str(exc)))
+        return False
+    r.files.append(path)
+    r.written.setdefault(key, []).append(path)
+    return True
+
+
 def write_tables(r: RunResult) -> dict:
     import csv
 
     paths = {}
-    d = r.settings.out_dir
-    path = os.path.join(d, "cn_zone_summary.csv")
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
-        w.writerow(list(r.zone_rows[0]))
-        for row in r.zone_rows:
-            w.writerow([_fmt(v) for v in row.values()])
-    paths["zones"] = path
-    path = os.path.join(d, "cn_lookup_used.csv")
-    lk.write_lookup_csv(r.lookup, path)
-    paths["lookup"] = path
+    s = r.settings
+
+    def zones(path):
+        with open(path, "w", newline="", encoding=CSV_ENCODING) as f:
+            w = csv.writer(f)
+            w.writerow(list(r.zone_rows[0]))
+            for row in r.zone_rows:
+                w.writerow([_fmt(v) for v in row.values()])
+
+    path = s.path(OUT_ZONES)
+    if path and _guarded(r, OUT_ZONES, path, zones):
+        paths["zones"] = path
+    path = s.path(OUT_LOOKUP)
+    if path and _guarded(
+        r, OUT_LOOKUP, path, lambda p: lk.write_lookup_csv(r.lookup, p)
+    ):
+        paths["lookup"] = path
     tables = [r.lookup.table] if r.lookup.table in tb.TABLES else []
-    if r.settings.lookup_key.startswith("sanlc"):
+    if s.lookup_key.startswith("sanlc"):
         tables.append("wrc2747")
-    for t in tables:
-        path = os.path.join(d, f"cn_table_{t}.csv")
-        lk.write_reference_table(t, path)
-        paths[f"table_{t}"] = path
-    r.files.extend(paths.values())
+    base = s.path(OUT_TABLES)
+    for t in tables if base else []:
+        stem, ext = os.path.splitext(base)
+        path = f"{stem}_{t.upper() if s.outputs else t}{ext}"
+        if _guarded(r, OUT_TABLES, path, lambda p, t=t: lk.write_reference_table(t, p)):
+            paths[f"table_{t}"] = path
     return paths
 
 
@@ -862,25 +934,39 @@ def build_metadata(r: RunResult, gdal_version_text: str = "") -> list:
 def write_outputs(
     r: RunResult, gdal_version_text: str = "", log_fn: Callable = _noop
 ) -> None:
-    """Tables, metadata CSV and (optionally) the Word report."""
+    """Tables, the Word report and the metadata CSV, each only when wanted
+    (RunSettings.path); a file that cannot be written is recorded in
+    r.failed and the rest are still written."""
     from mayim_tools.soil._common.export import write_metadata_csv
 
+    s = r.settings
     write_tables(r)
-    meta = os.path.join(r.settings.out_dir, "cn_metadata.csv")
-    write_metadata_csv(build_metadata(r, gdal_version_text), meta)
-    r.files.append(meta)
-    if r.settings.write_report:
+    report = s.path(OUT_REPORT)
+    if report:
         try:
             from .report import write_report
 
-            r.report_path = write_report(r)
+            r.report_path = write_report(r, report)
             r.files.append(r.report_path)
+            r.written[OUT_REPORT] = [r.report_path]
         except ImportError as exc:
             _warn(
                 r,
                 log_fn,
                 f"Word report not written (python-docx or matplotlib missing: {exc}).",
             )
+        except OSError as exc:
+            r.failed.append((report, str(exc)))
+    meta = s.path(OUT_METADATA)
+    if meta:
+        _guarded(
+            r,
+            OUT_METADATA,
+            meta,
+            lambda p: write_metadata_csv(
+                build_metadata(r, gdal_version_text), p, encoding=CSV_ENCODING
+            ),
+        )
 
 
 CN_RAMP = [

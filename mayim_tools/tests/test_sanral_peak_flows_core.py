@@ -447,11 +447,39 @@ def test_results_json(tmp_path):
 def test_word_report(tmp_path):
     pytest.importorskip("docx")
     pytest.importorskip("matplotlib")
+    import re
+
+    from docx import Document
+
     from mayim_tools.hydrology.sanral_peak_flows.report import num, write_report
 
-    assert num(1234.5, 1) == "1234,5"
+    assert num(1234.5, 1) == "1234.5"  # decimal point, no thousands separator
     p = tmp_path / "annex.docx"
     write_report(
-        p, _full_run(), {"tool": "SANRAL Deterministic Peak Flows", "version": "0.1.0"}
+        p,
+        _full_run(),
+        {"tool": "SANRAL Deterministic Peak Flows", "version": "0.1.0"},
+        context={
+            "project_number": "MC2025_014",
+            "project_name": "Riverside Estate",
+            "outputs": [("Peak flow calculations (CSV)", "D:/p/x.csv")],
+        },
     )
     assert p.stat().st_size > 10000
+    doc = Document(str(p))
+    heads = [x.text for x in doc.paragraphs if x.style.name == "Heading 1"]
+    assert heads == [
+        "Summary",
+        "Tool and method",
+        "Inputs and settings",
+        "Parameters and calculations",
+        "Results",
+        "Outputs",
+        "Notes and limitations",
+        "References",
+    ]
+    text = "\n".join(x.text for x in doc.paragraphs)
+    cells = "\n".join(c.text for t in doc.tables for r in t.rows for c in r.cells)
+    assert "MC2025_014" in cells and "Table 1:" in text
+    assert not re.search(r"\d,\d{3}", cells)  # no thousands separators
+    assert not re.search(r"\d,\d", cells)  # no decimal commas

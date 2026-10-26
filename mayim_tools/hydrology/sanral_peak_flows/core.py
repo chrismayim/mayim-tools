@@ -24,7 +24,7 @@ from .methods import (
 )
 from .rainfall import TR102Station, basin_station
 
-TOOL_VERSION = "0.1.0"
+TOOL_VERSION = "0.2.0"
 
 
 @dataclass

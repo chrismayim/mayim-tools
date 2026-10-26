@@ -5,11 +5,16 @@ or any group raster) + a land-cover-to-CN lookup -> a curve-number raster
 (design, P05, P95, range, soil share of the uncertainty), zone summary with
 runoff-equivalent curve numbers, metadata and a Word report. Thin wrapper -
 the logic is in core.py (see tests/test_curve_numbers_core.py).
+
+Outputs follow the Mayim output standard: a tick box per output, raster,
+CSV and Word folders, files named <project number>_<description>.
 """
 
+import os
 from pathlib import Path
 
 from qgis.core import (
+    Qgis,
     QgsCoordinateReferenceSystem,
     QgsCoordinateTransform,
     QgsProcessing,
@@ -25,9 +30,18 @@ from qgis.core import (
     QgsProcessingParameterFolderDestination,
     QgsProcessingParameterNumber,
     QgsProcessingParameterRasterLayer,
+    QgsProcessingParameterString,
 )
 from qgis.PyQt.QtGui import QIcon
 
+from mayim_tools._common.output_files import (
+    CSV,
+    EXTENSIONS,
+    RASTER,
+    WORD,
+    OutputSpec,
+    clean_name_part,
+)
 from mayim_tools.soil._common import qgis_ui
 from mayim_tools.soil._common.errors import SoilDataError
 
@@ -43,6 +57,52 @@ LOOKUP_OPTIONS = [
     ("custom", "Custom lookup CSV (below)"),
 ]
 AMC_CODES = list(core.AMC_OPTIONS)
+
+# Selectable outputs: core output key, dialog label, file-name description,
+# folder kind, ticked by default. The full reference table(s) get the table
+# name appended (<project number>_CN_Table_<table>.csv).
+OUTPUT_SPECS = [
+    OutputSpec(
+        core.OUT_RASTER, "Curve-number raster (design, P05, P95, range, soil share)",
+        "Curve Numbers", RASTER,
+    ),
+    OutputSpec(core.OUT_ZONES, "Zone summary (CSV)", "CN Zone Summary", CSV),
+    OutputSpec(
+        core.OUT_LOOKUP, "Lookup used (CSV; edit it for a custom lookup)",
+        "CN Lookup Used", CSV,
+    ),
+    OutputSpec(core.OUT_METADATA, "Run metadata (CSV)", "CN Metadata", CSV),
+    OutputSpec(core.OUT_REPORT, "Word report", "CN Report", WORD),
+    OutputSpec(
+        core.OUT_TABLES, "Full curve-number table(s) (CSV)", "CN Table", CSV, False
+    ),
+]  # fmt: skip
+SPEC_BY_KEY = {spec.key: spec for spec in OUTPUT_SPECS}
+FOLDER_PARAMS = {
+    RASTER: ("FOLDER_RASTER", "Output folder for rasters (GeoTIFF)"),
+    CSV: ("FOLDER_CSV", "Output folder for CSV files"),
+    WORD: ("FOLDER_WORD", "Output folder for Word reports"),
+}
+
+
+def output_param(key: str) -> str:
+    return f"OUTPUT_{key.upper()}"
+
+
+def _software_version() -> str:
+    parts = []
+    metadata = Path(__file__).resolve().parents[2] / "metadata.txt"
+    try:
+        for line in metadata.read_text(encoding="utf-8").splitlines():
+            if line.startswith("version="):
+                parts.append(f"Mayim Tools {line.split('=', 1)[1].strip()}")
+                break
+    except OSError:
+        pass
+    parts.append(f"QGIS {Qgis.version()}")
+    return ", ".join(parts)
+
+
 DUAL_OPTIONS = [
     ("undrained", "Undrained: use D"),
     ("drained", "Drained: use the first letter"),
@@ -62,9 +122,9 @@ class CurveNumbersAlgorithm(QgsProcessingAlgorithm):
     USE_KSAT_RANGE = "USE_KSAT_RANGE"
     DUAL = "DUAL"
     IA_RATIO = "IA_RATIO"
-    REPORT = "REPORT"
     LOAD_LAYERS = "LOAD_LAYERS"
-    OUTPUT_FOLDER = "OUTPUT_FOLDER"
+    PROJECT_NUMBER = "PROJECT_NUMBER"
+    PROJECT_NAME = "PROJECT_NAME"
 
     def __init__(self):
         super().__init__()
@@ -91,6 +151,11 @@ class CurveNumbersAlgorithm(QgsProcessingAlgorithm):
         return "land_cover_tools"
 
     def shortHelpString(self):
+        files = "\n".join(
+            f"  {s.label}: <project number>_{clean_name_part(s.description)}"
+            f"{'_<table>' if s.key == core.OUT_TABLES else ''}{EXTENSIONS[s.kind]}"
+            for s in OUTPUT_SPECS
+        )
         return (
             f"SCS Curve Numbers (version {core.TOOL_VERSION})\n"
             "\n"
@@ -100,9 +165,10 @@ class CurveNumbersAlgorithm(QgsProcessingAlgorithm):
             "\n"
             "INPUTS:\tLand cover: e.g. worldcover_2021_map.tif from Extract: Land "
             "cover (or any class raster with a custom lookup). Soil groups: "
-            "hsg_scssa_recommended.tif or hsg_neh630_recommended.tif from "
-            "Hydrological Soil Groups (HSG); the matching hsg_*_by_ksat.tif beside it is "
-            "found automatically and adds the soil uncertainty. Any raster with "
+            "the recommended-groups raster of Hydrological Soil Groups (HSG); the "
+            "matching groups-at-Ksat raster beside it (..._By_Ksat.tif, or the "
+            "older hsg_*_by_ksat.tif) is found automatically and adds the soil "
+            "uncertainty. Any raster with "
             "codes 1-4 = A-D also works.\n"
             "\n"
             "LOOKUP:\tBuilt in: ESA WorldCover with SCS-SA Table 5.1 (Schulze, "
@@ -114,7 +180,7 @@ class CurveNumbersAlgorithm(QgsProcessingAlgorithm):
             "and SCS-SA Table 5.1 for other classes. Each class has a design "
             "row and a low / high "
             "row (e.g. veld fair; good and poor). Every run writes "
-            "cn_lookup_used.csv: edit it and choose 'Custom lookup CSV' to use your "
+            "the lookup used (..._CN_Lookup_Used.csv): edit it and choose 'Custom lookup CSV' to use your "
             "own rows (also for SANLC 2013/14 or a hand-made land-cover map). Wetlands and "
             "mangroves are set to group D.\n"
             "\n"
@@ -131,11 +197,15 @@ class CurveNumbersAlgorithm(QgsProcessingAlgorithm):
             "Ch. 10); Sobhani wet (SCS-SA Eq. 4); SCS-SA Median Condition (Eq. 3) "
             "with the change in storage for the catchment.\n"
             "\n"
-            "OUTPUTS:\tcurve_numbers.tif (bands: design, P05, P95, range, soil "
-            "share of the uncertainty %), cn_zone_summary.csv, cn_lookup_used.csv, "
-            "cn_table_<table>.csv (the full table, for custom lookups), "
-            "cn_metadata.csv, cn_layers.qlr and curve_numbers_report.docx. The "
-            "output grid is the land-cover grid.\n"
+            "OUTPUTS:\tTick the outputs wanted and choose the raster, CSV and "
+            "Word folders. The raster has the bands design, P05, P95, range and "
+            "soil share of the uncertainty (%), on the land-cover grid, with a "
+            "<project number>_CN_Layers.qlr layer file beside it. The CSVs are "
+            "UTF-8 with a byte-order mark. Files are named <project number>_"
+            "<description> and replace files of the same name; a file that is "
+            "open cannot be replaced and is reported, and the other outputs are "
+            "still written. The Word report follows the Mayim report standard.\n"
+            + files
         )
 
     def initAlgorithm(self, config=None):
@@ -147,8 +217,8 @@ class CurveNumbersAlgorithm(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterRasterLayer(
                 self.HSG,
-                "Hydrological Soil Groups (HSG) raster (hsg_scssa_recommended.tif or "
-                "hsg_neh630_recommended.tif)",
+                "Hydrological Soil Groups (HSG) raster (..._HSG_SCSSA_Recommended.tif "
+                "or ..._HSG_NEH630_Recommended.tif)",
             )
         )
         self.addParameter(
@@ -212,7 +282,7 @@ class CurveNumbersAlgorithm(QgsProcessingAlgorithm):
             qgis_ui.advanced(
                 QgsProcessingParameterBoolean(
                     self.USE_KSAT_RANGE,
-                    "Use the soil-group range (hsg_*_by_ksat.tif) when present",
+                    "Use the soil-group range (the HSG By Ksat raster) when present",
                     defaultValue=True,
                 )
             )
@@ -241,11 +311,6 @@ class CurveNumbersAlgorithm(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
-            QgsProcessingParameterBoolean(
-                self.REPORT, "Write the Word report", defaultValue=True
-            )
-        )
-        self.addParameter(
             QgsProcessingParameterEnum(
                 self.LOAD_LAYERS,
                 "Load outputs into the project",
@@ -254,8 +319,31 @@ class CurveNumbersAlgorithm(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
-            QgsProcessingParameterFolderDestination(self.OUTPUT_FOLDER, "Output folder")
+            QgsProcessingParameterString(
+                self.PROJECT_NUMBER,
+                "Project number (file name prefix, optional)",
+                optional=True,
+            )
         )
+        self.addParameter(
+            QgsProcessingParameterString(
+                self.PROJECT_NAME,
+                "Project name (report title page, optional)",
+                optional=True,
+            )
+        )
+        for spec in OUTPUT_SPECS:
+            self.addParameter(
+                QgsProcessingParameterBoolean(
+                    output_param(spec.key),
+                    f"Output: {spec.label}",
+                    defaultValue=spec.default,
+                )
+            )
+        for name, label in FOLDER_PARAMS.values():
+            self.addParameter(
+                QgsProcessingParameterFolderDestination(name, label, optional=True)
+            )
 
     # ------------------------------------------------------------------
 
@@ -293,13 +381,36 @@ class CurveNumbersAlgorithm(QgsProcessingAlgorithm):
         self, parameters, context: QgsProcessingContext, feedback: QgsProcessingFeedback
     ):
         self._post_processors = []
-        out_dir = self.parameterAsString(parameters, self.OUTPUT_FOLDER, context)
-        Path(out_dir).mkdir(parents=True, exist_ok=True)
+        project_number = (
+            self.parameterAsString(parameters, self.PROJECT_NUMBER, context) or ""
+        ).strip()
+        project_name = (
+            self.parameterAsString(parameters, self.PROJECT_NAME, context) or ""
+        ).strip()
+        selected = [
+            spec
+            for spec in OUTPUT_SPECS
+            if self.parameterAsBoolean(parameters, output_param(spec.key), context)
+        ]
+        if not selected:
+            raise QgsProcessingException("Tick at least one output.")
+        folders = {}
+        for kind in {spec.kind for spec in selected}:
+            name, label = FOLDER_PARAMS[kind]
+            folder = self.parameterAsFileOutput(parameters, name, context)
+            if not folder:
+                raise QgsProcessingException(
+                    f"Choose the {label[0].lower() + label[1:]}."
+                )
+            os.makedirs(folder, exist_ok=True)
+            folders[kind] = folder
+        paths = {s.key: s.path(folders, project_number) for s in selected}
+        labels = {s.key: s.label for s in selected}
         ia = self.parameterAsDouble(parameters, self.IA_RATIO, context)
         settings = core.RunSettings(
             landcover_path=self._raster_path(parameters, self.LANDCOVER, context),
             hsg_path=self._raster_path(parameters, self.HSG, context),
-            out_dir=out_dir,
+            out_dir="",
             lookup_key=LOOKUP_OPTIONS[
                 self.parameterAsEnum(parameters, self.LOOKUP, context)
             ][0],
@@ -314,7 +425,8 @@ class CurveNumbersAlgorithm(QgsProcessingAlgorithm):
                 parameters, self.DESIGN_DEPTH, context
             ),
             ia_ratio=ia if ia > 0 else None,
-            write_report=self.parameterAsBoolean(parameters, self.REPORT, context),
+            write_report=core.OUT_REPORT in paths,
+            outputs=paths,
         )
         if settings.amc == "median" and settings.delta_s_mm == 0:
             feedback.pushWarning(
@@ -343,6 +455,12 @@ class CurveNumbersAlgorithm(QgsProcessingAlgorithm):
                 log_fn=feedback.pushWarning,
                 cancel_fn=feedback.isCanceled,
             )
+            settings.report_context = {
+                "project_number": project_number,
+                "project_name": project_name,
+                "software": _software_version(),
+                "labels": labels,
+            }
             core.write_outputs(result, gdal_version(), feedback.pushWarning)
         except SoilDataError as exc:
             raise QgsProcessingException(str(exc)) from exc
@@ -360,20 +478,38 @@ class CurveNumbersAlgorithm(QgsProcessingAlgorithm):
                 f"{r['Runoff-equivalent CN P05']:.1f}, P95 {r['Runoff-equivalent CN P95']:.1f}); "
                 f"mean CN {r['Mean CN design']:.1f}; confidence {r['Confidence']}."
             )
-        feedback.pushInfo(f"Finished in {result.seconds:.0f} s; outputs in {out_dir}")
-        if result.report_path:
-            feedback.pushInfo(f"Report: {result.report_path}")
-        outputs = [
-            qgis_ui.OutputLayer(
-                path=str(Path(out_dir) / core.OUT_FILE),
-                name="SCS Curve Numbers",
-                main=True,
-                ramp=core.CN_RAMP,
+        for path, reason in result.failed:
+            feedback.reportError(
+                f"{Path(path).name} could not be written ({reason}). If it is open "
+                "in QGIS, Excel or Word, close it and run again.",
+                fatalError=False,
             )
-        ]
-        qlr = str(Path(out_dir) / "cn_layers.qlr")
-        if qgis_ui.write_layer_file(outputs, qlr, feedback):
-            feedback.pushInfo(f"Layer file (reloads the output, styled): {qlr}")
-        choice = self.parameterAsEnum(parameters, self.LOAD_LAYERS, context)
-        qgis_ui.load_outputs(context, outputs, choice, self._post_processors)
-        return {self.OUTPUT_FOLDER: out_dir}
+        for path in result.files:
+            feedback.pushInfo(f"Written: {path}")
+        feedback.pushInfo(f"Finished in {result.seconds:.0f} s.")
+        if not result.files:
+            raise QgsProcessingException(
+                "No output could be written - see the errors above."
+            )
+        raster = result.written.get(core.OUT_RASTER, [])
+        if raster:
+            outputs = [
+                qgis_ui.OutputLayer(
+                    path=raster[0],
+                    name=Path(raster[0]).stem,
+                    main=True,
+                    ramp=core.CN_RAMP,
+                )
+            ]
+            stem = f"{clean_name_part(project_number)}_" if project_number else ""
+            qlr = str(Path(raster[0]).parent / f"{stem}CN_Layers.qlr")
+            if qgis_ui.write_layer_file(outputs, qlr, feedback):
+                feedback.pushInfo(f"Layer file (reloads the output, styled): {qlr}")
+            choice = self.parameterAsEnum(parameters, self.LOAD_LAYERS, context)
+            qgis_ui.load_outputs(context, outputs, choice, self._post_processors)
+        out = {name: folders[kind] for kind, (name, _) in FOLDER_PARAMS.items()
+               if kind in folders}  # fmt: skip
+        for key in (core.OUT_REPORT,):
+            if result.written.get(key):
+                out[output_param(key)] = result.written[key][0]
+        return out

@@ -198,7 +198,7 @@ def read_lookup_csv(path: str) -> Lookup:
 
 
 def write_lookup_csv(lookup: Lookup, path: str) -> None:
-    with open(path, "w", newline="", encoding="utf-8") as f:
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f)
         w.writerow(
             [
@@ -231,7 +231,7 @@ def write_reference_table(table: str, path: str) -> None:
     rows = {"scs_sa": tb.SCS_SA_ROWS, "tr55": tb.TR55_ROWS, "wrc2747": tb.WRC_ROWS}[
         table
     ]
-    with open(path, "w", newline="", encoding="utf-8") as f:
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f)
         w.writerow([f"# {tb.TABLES[table][1]}"])
         w.writerow(["Table row", "Land cover", "Description", *tb.GROUPS])

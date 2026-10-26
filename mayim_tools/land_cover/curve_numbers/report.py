@@ -13,7 +13,6 @@ from .core import (
     AMC_OPTIONS,
     CONF_LABELS,
     CONF_TEXT,
-    OUT_FILE,
     TOOL_NAME,
     TOOL_VERSION,
 )
@@ -205,11 +204,19 @@ def _recommendations(result) -> list[str]:
     return out
 
 
-def write_report(result) -> str:
+TITLE = "SCS Curve Numbers"
+
+
+def write_report(result, path: str | None = None) -> str:
+    """Writes the report (Mayim report standard) to ``path`` (default: the
+    legacy name in out_dir) and returns the path."""
+    import datetime as _dt
+
     from . import figures
 
-    d = Doc()
+    d = Doc(house_style=True)
     s = result.settings
+    ctx = s.report_context or {}
     notes = []
     rows = result.zone_rows
     eq_key = _eq_key(rows[0])
@@ -219,114 +226,116 @@ def write_report(result) -> str:
         result.hsg.method, "user-supplied"
     )
 
-    d.heading("Curve Numbers", 1)
+    def picture(fn, caption):
+        try:
+            d.picture(fn(), caption)
+        except Exception as exc:  # noqa: BLE001 - the report must not fail
+            notes.append(f"Figure not drawn: {caption} ({exc}).")
 
-    # 1. Summary ---------------------------------------------------------
-    d.heading("1. Summary", 2)
-    d.para(
-        f"This report gives curve numbers for {_f(rows[0]['Area with CN (km2)'], 2)} "
-        f"km2 from the land cover ({os.path.basename(s.landcover_path)}), the "
-        f"{method} hydrologic soil groups and the {result.lookup.name} lookup. "
-        f"Antecedent moisture: {AMC_OPTIONS[s.amc]}. Zone values are given as the "
-        f"runoff-equivalent curve number for a design rainfall of {p:g} mm."
+    d.title_page(
+        TITLE,
+        "This report maps SCS curve numbers from the land cover and the "
+        "hydrologic soil groups through a published curve-number table, with "
+        "the range the inputs allow, and gives runoff-equivalent zone values "
+        "for lumped design-flood models.",
+        [
+            ("Project number", ctx.get("project_number") or "-"),
+            ("Project / site", ctx.get("project_name") or "-"),
+            ("Prepared by", "Mayim Consulting"),
+            ("Tool and version", f"{TOOL_NAME}, version {TOOL_VERSION}"),
+            ("Software", ctx.get("software") or "-"),
+            ("Report date", _dt.date.today().isoformat()),
+            ("Document status", "Draft"),
+        ],
+        subtitle=ctx.get("project_name") or None,
     )
-    for r in rows:
-        d.bullet(
-            f"{r['Zone']}: runoff-equivalent CN {_f(r[eq_key])} (P05 "
-            f"{_f(r['Runoff-equivalent CN P05'])}, P95 {_f(r['Runoff-equivalent CN P95'])}); "
-            f"area-weighted mean {_f(r['Mean CN design'])}; confidence {r['Confidence']}; "
-            f"main uncertainty from the {r['Main uncertainty source']}; mostly "
-            f"{r['Dominant land cover'].lower()} ({_f(r['Dominant land cover share (%)'], 0)} %) "
-            f"on group {r['Dominant soil group']} ({_f(r['Dominant soil group share (%)'], 0)} %)."
-        )
 
-    # 2. Purpose ---------------------------------------------------------
-    d.heading("2. Purpose and scope", 2)
+    # Summary --------------------------------------------------------------
+    d.heading("Summary", 1)
+    d.para(
+        f"Curve numbers were mapped for {_f(rows[0]['Area with CN (km2)'], 2)} km² "
+        f"from the land cover ({os.path.basename(s.landcover_path)}), the {method} "
+        f"hydrologic soil groups and the {result.lookup.name} lookup. Antecedent "
+        f"moisture: {AMC_OPTIONS[s.amc]}. Zone values are runoff-equivalent curve "
+        f"numbers for a design rainfall of {p:g} mm."
+    )
+    d.caption("Table", f"Summary of zone curve numbers (P = {p:g} mm)")
+    d.table(
+        ["Zone", "Runoff-equivalent CN (P05 to P95)", "Mean CN", "Confidence",
+         "Main uncertainty", "Dominant cover and group"],
+        [
+            [
+                r["Zone"],
+                f"{_f(r[eq_key])} ({_f(r['Runoff-equivalent CN P05'])} to "
+                f"{_f(r['Runoff-equivalent CN P95'])})",
+                _f(r["Mean CN design"]),
+                r["Confidence"],
+                r["Main uncertainty source"],
+                f"{r['Dominant land cover']} "
+                f"({_f(r['Dominant land cover share (%)'], 0)} %), group "
+                f"{r['Dominant soil group']} "
+                f"({_f(r['Dominant soil group share (%)'], 0)} %)",
+            ]
+            for r in rows
+        ],
+        widths_cm=[2.6, 3.3, 1.6, 2.0, 2.6, 4.4],
+    )  # fmt: skip
+
+    # Tool and method --------------------------------------------------------
+    d.heading("Tool and method", 1)
     d.para(
         "The SCS curve-number method turns rainfall into stormflow depth with a "
         "single index of the catchment's runoff potential, the curve number (CN), "
         "set by the hydrologic soil group, the land cover and its treatment or "
-        "condition. This tool maps the CN cell by cell from a land-cover raster "
-        "and a soil-group raster through a lookup of a published curve-number "
-        "table, with the range the inputs allow, and summarises it per zone."
+        "condition. The tool works cell by cell on the land-cover grid:"
     )
-    d.heading("How confidence is judged", 3)
-    d.para(plain_confidence_text())
-
-    # 3. Data ------------------------------------------------------------
-    d.heading("3. Data", 2)
-    inp = [
-        ["Land cover", s.landcover_path],
-        ["Soil groups", f"{s.hsg_path} ({method})"],
-        [
-            "Soil range",
-            result.hsg.by_ksat_path or "none (land-cover condition range only)",
-        ],
-        ["Lookup", f"{result.lookup.name}; {result.lookup.source}"],
-        ["Curve-number table", table_name],
-        [
-            "Output grid",
-            f"{result.grid.width} x {result.grid.height} cells of {result.grid.res:g} (land-cover grid)",
-        ],
-    ]
-    d.caption("Table", "Inputs")
-    d.table(["Item", "Value"], inp, widths_cm=[4.0, 12.0])
-    try:
-        d.picture(figures.landcover_map(result, _class_colours(result)), "Land cover")
-    except Exception as exc:  # noqa: BLE001
-        notes.append(f"Land-cover map not drawn ({exc}).")
-
-    # 4. Methods ---------------------------------------------------------
-    d.heading("4. Methods", 2)
-    d.heading("4.1 Curve-number table and lookup", 3)
     if result.lookup.table == "scs_sa":
-        d.para(
-            "Curve numbers come from Table 5.1 of the Visual SCS-SA User Manual "
-            "(Schulze, Schmidt & Smithers, 2004), which gives initial curve numbers "
-            "(CN-II) for the groups A, A/B, B, B/C, C, C/D and D. The manual notes "
-            "that the values derive from US experience, that southern African covers "
-            "may need interpolation between rows, and that values below about 50 "
-            "call for caution."
+        table_text = (
+            "Curve-number table: Table 5.1 of the Visual SCS-SA User Manual "
+            "(Schulze, Schmidt and Smithers 2004), initial curve numbers (CN-II) "
+            "for the groups A, A/B, B, B/C, C, C/D and D. The values derive from US "
+            "experience; southern African covers may need interpolation between "
+            "rows, and values below about 50 call for caution."
         )
-        if result.settings.lookup_key.startswith("sanlc"):
-            d.para(
-                "For the South African National Land Cover (SANLC 2018 / 2020 / 2022, 73 "
-                "classes) the lookup is a composite. Urban, plantation and natural "
-                "vegetation classes take the preliminary calibrated curve numbers "
-                "of WRC Report 2747/1/20 (Loots & Smithers, 2020, Table 9.7), which "
-                "were derived for the DEA 2013/14 land-use types in two Tshwane "
-                "catchments; the 2018 / 2020 classes are crosswalked to those types. "
-                "Other classes use the nearest Table 5.1 row. Four misprints in "
-                "Table 9.7 are corrected (woods B/C 72, township C, village D). "
-                "Open water is 100 and bare rock 98. Herbaceous wetlands are set to "
-                "group D (saturated soils)."
+        if s.lookup_key.startswith("sanlc"):
+            table_text += (
+                " For the South African National Land Cover (SANLC 2018 / 2020 / "
+                "2022, 73 classes) the lookup is a composite: urban, plantation and "
+                "natural vegetation classes take the preliminary calibrated curve "
+                "numbers of WRC Report 2747/1/20 (Loots and Smithers 2020, Table "
+                "9.7), derived for the DEA 2013/14 land-use types in two Tshwane "
+                "catchments and crosswalked to the 2018 / 2020 classes; other "
+                "classes use the nearest Table 5.1 row. Four misprints in Table 9.7 "
+                "are corrected (woods B/C 72, township C, village D). Open water is "
+                "100 and bare rock 98; herbaceous wetlands are set to group D."
             )
     elif result.lookup.table == "tr55":
-        d.para(
-            "Curve numbers come from TR-55 (USDA-SCS, 1986) Tables 2-2a to 2-2d, the "
-            "same values as NEH 630 Chapter 9, for the groups A to D. Intermediate "
-            "groups, where present, take the mean of the neighbouring columns."
+        table_text = (
+            "Curve-number table: TR-55 (USDA-SCS 1986) Tables 2-2a to 2-2d, the "
+            "same values as NEH 630 Chapter 9, for the groups A to D; intermediate "
+            "groups take the mean of the neighbouring columns."
         )
     else:
-        d.para(f"Curve numbers come from the user's lookup ({result.lookup.source}).")
-    d.para(
-        "Each land-cover class is given three rows: a design row and a plausible "
-        "range from a low row (less runoff, e.g. veld in good condition) to a high "
-        "row (more runoff, e.g. veld in poor condition). The rows used are below; "
-        "the full lookup with its values is written to cn_lookup_used.csv, which "
-        "can be edited and used as a custom lookup."
-    )
-    d.caption("Table", "Lookup rows for the classes present")
-    d.table(
-        ["Class", "Design", "Low (less runoff)", "High (more runoff)", "Group"],
-        _class_lookup_rows(result),
-        widths_cm=[2.6, 4.3, 3.8, 3.8, 1.5],
-    )
-    d.heading("4.2 Soil groups", 3)
-    d.para(
-        "The design CN uses the recommended group of each soil cell. The soil "
-        "raster is resampled to the land-cover grid by nearest neighbour, so each "
-        "land-cover cell takes the group of the soil cell it falls in."
+        table_text = f"Curve-number table: the user's lookup ({result.lookup.source})."
+    amc_text = {
+        "none": "No adjustment: the curve numbers are CN-II (average condition).",
+        "arc1": "ARC I (dry), the fit of Hawkins et al. (1985) to NEH 630 Chapter "
+        "10 Table 10-1.",
+        "arc3": "ARC III (wet), the fit of Hawkins et al. (1985) to NEH 630 Chapter "
+        "10 Table 10-1.",
+        "sobhani": "Near-saturated (Sobhani 1976; SCS-SA Eq. 4), meant for "
+        "probable maximum flood estimates.",
+        "median": "SCS-SA Median Condition Method (Eq. 3) with a change in storage "
+        f"dS = {s.delta_s_mm:g} mm.",
+    }[s.amc]
+    for step in (
+        table_text,
+        "Lookup: each land-cover class has a design row and a plausible range from "
+        "a low row (less runoff, e.g. veld in good condition) to a high row (more "
+        "runoff, e.g. veld in poor condition). The full lookup with its values is "
+        "written to the lookup CSV, which can be edited and used as a custom lookup.",
+        "Soil groups: the design CN uses the recommended group of each soil cell, "
+        "resampled to the land-cover grid by nearest neighbour."
         + (
             " NEH 630 dual groups (A/D, B/D, C/D) are taken as "
             + (
@@ -336,72 +345,97 @@ def write_report(result) -> str:
             )
             if result.hsg.method in ("NEH630", "")
             else ""
-        )
-    )
-    d.heading("4.3 Uncertainty", 3)
-    d.para(
-        "The soil range is the CN at the group of the Ksat P5 and P95 "
-        "(hsg_*_by_ksat.tif). The condition range is the lookup's low and high "
-        "rows at the recommended group. Both are read as 90 % ranges of "
-        "independent errors and combined on each side by root-sum-square: "
-        "P05 = design - sqrt(dS^2 + dC^2), where dS and dC are the distances from "
-        "the design CN to the soil and condition limits; likewise for P95. The "
-        "soil share of the uncertainty is dS^2 / (dS^2 + dC^2), summed over both "
-        "sides. Zone means of the cell P05 and P95 assume fully related errors "
-        "and are therefore wide."
-    )
-    d.heading("4.4 Antecedent moisture", 3)
-    amc_text = {
-        "none": "No adjustment: the curve numbers are CN-II (average condition).",
-        "arc1": "ARC I (dry): CN-I = CN-II / (2.281 - 0.01281 CN-II), the fit of "
-        "Hawkins et al. (1985) to NEH 630 Chapter 10 Table 10-1.",
-        "arc3": "ARC III (wet): CN-III = CN-II / (0.427 + 0.00573 CN-II), the fit of "
-        "Hawkins et al. (1985) to NEH 630 Chapter 10 Table 10-1.",
-        "sobhani": "Near-saturated: CNw = CN-II / (0.4036 + 0.0059 CN-II) (Sobhani, "
-        "1976; SCS-SA Eq. 4), meant for probable maximum flood estimates.",
-        "median": "SCS-SA Median Condition Method (Eq. 3): CNf = 1100 / (1100 / CN-II "
-        f"- dS / 25.4), with a change in storage dS = {s.delta_s_mm:g} mm.",
-    }[s.amc]
-    d.para(
-        amc_text + " The same adjustment is applied to the design, P05 and P95 values."
-    )
-    d.heading("4.5 Zone values", 3)
-    d.para(
-        "Runoff is not linear in CN, so the mean CN of a mixed catchment gives "
-        "less runoff than the sum of its parts (Grove, Harbor & Engel, 1998). For "
-        f"each zone the stormflow Q of every cell is computed for P = {p:g} mm with "
-        f"Ia = {result.ia_ratio:g} S, and the runoff-equivalent CN is the single "
-        "value that gives the zone's mean Q. It is computed for the design, P05 "
-        "and P95 curve numbers."
-    )
+        ),
+        "Uncertainty: the soil range is the CN at the group of the Ksat P5 and P95; "
+        "the condition range is the lookup's low and high rows at the recommended "
+        "group. Both are read as 90 % ranges of independent errors and combined on "
+        "each side by root-sum-square.",
+        "Antecedent moisture: " + amc_text + " The same adjustment is applied to "
+        "the design, P05 and P95 values.",
+        "Zone values: runoff is not linear in CN, so the mean CN of a mixed "
+        "catchment gives less runoff than the sum of its parts (Grove, Harbor and "
+        f"Engel 1998). The stormflow of every cell is computed for P = {p:g} mm and "
+        "the runoff-equivalent CN is the single value that gives the zone's mean "
+        "stormflow, for the design, P05 and P95 curve numbers.",
+        "Confidence: " + plain_confidence_text(),
+    ):
+        d.numbered(step)
+
+    # Inputs and settings ------------------------------------------------------
+    d.heading("Inputs and settings", 1)
+    d.caption("Table", "Inputs and settings")
+    d.table(
+        ["Item", "Value"],
+        [
+            ["Land cover", s.landcover_path],
+            ["Soil groups", f"{s.hsg_path} ({method})"],
+            ["Soil range", result.hsg.by_ksat_path or "none (land-cover condition range only)"],
+            ["Lookup", f"{result.lookup.name}; {result.lookup.source}"],
+            ["Curve-number table", table_name],
+            ["Output grid", f"{result.grid.width} x {result.grid.height} cells of "
+             f"{result.grid.res:g} (land-cover grid)"],
+            ["Antecedent moisture", AMC_OPTIONS[s.amc]],
+            ["Initial abstraction ratio Ia / S (-)", f"{result.ia_ratio:g}"],
+            ["Design rainfall depth (mm)", f"{p:g}"],
+            ["Zones", ", ".join(result.zone_names) or "none (whole raster)"],
+            ["Run time", result.run_time_utc],
+        ],
+        widths_cm=[5.5, 11.0],
+    )  # fmt: skip
+    picture(lambda: figures.landcover_map(result, _class_colours(result)), "Land cover")
+
+    # Parameters and calculations -----------------------------------------------
+    d.heading("Parameters and calculations", 1)
+    d.caption("Table", "Parameters and equations")
+    d.table(
+        ["Parameter", "Value / equation", "Definition (source)"],
+        [
+            ["Potential retention S (mm)", "25400 / CN - 254",
+             "SCS curve-number method (USDA-NRCS 2004, NEH 630 Ch. 10)"],
+            ["Initial abstraction Ia (mm)", f"λ S, λ = {result.ia_ratio:g}",
+             "0.1 in SCS-SA (Schulze et al. 2004), 0.2 in TR-55"],
+            ["Stormflow Q (mm)", "(P - Ia)² / (P - Ia + S) for P > Ia",
+             "NEH 630 Ch. 10"],
+            ["Design rainfall P (mm)", f"{p:g}", "Depth for the runoff-equivalent CN"],
+            ["CN P05, P95 (-)", "CN ∓ sqrt(dS² + dC²)",
+             "dS, dC: distances to the soil and condition limits (root-sum-square)"],
+            ["Soil share of uncertainty (%)", "dS² / (dS² + dC²)",
+             "Summed over both sides"],
+            ["CN-I (dry) (-)", "CN / (2.281 - 0.01281 CN)", "Hawkins et al. (1985)"],
+            ["CN-III (wet) (-)", "CN / (0.427 + 0.00573 CN)", "Hawkins et al. (1985)"],
+            ["CN wet, Sobhani (-)", "CN / (0.4036 + 0.0059 CN)",
+             "Sobhani (1976); SCS-SA Eq. 4"],
+            ["CN Median Condition (-)", "1100 / (1100 / CN - dS / 25.4)",
+             "SCS-SA Eq. 3"],
+            ["Runoff-equivalent CN (-)", "CN with Q(CN) = mean Q of the zone",
+             "Grove, Harbor and Engel (1998)"],
+        ],
+        widths_cm=[4.6, 4.4, 7.5],
+    )  # fmt: skip
     d.caption(
         "Table", "Confidence classes (range of the runoff-equivalent CN, P95 - P05)"
     )
     d.table(
         ["Class", "Range"],
         [[CONF_LABELS[k], CONF_TEXT[k]] for k in CONF_LABELS],
-        widths_cm=[3.0, 13.0],
+        widths_cm=[3.0, 13.5],
+    )
+    d.caption("Table", "Lookup rows for the classes present")
+    d.table(
+        ["Class", "Design", "Low (less runoff)", "High (more runoff)", "Group"],
+        _class_lookup_rows(result),
+        widths_cm=[2.8, 4.4, 3.9, 3.9, 1.5],
     )
 
-    # 5. Results ---------------------------------------------------------
-    d.heading("5. Results", 2)
-    try:
-        d.picture(
-            figures.cn_maps(result), "Design curve number and its range (P95 - P05)"
-        )
-    except Exception as exc:  # noqa: BLE001
-        notes.append(f"Curve-number maps not drawn ({exc}).")
+    # Results --------------------------------------------------------------------
+    d.heading("Results", 1)
+    picture(
+        lambda: figures.cn_maps(result), "Design curve number and its range (P95 - P05)"
+    )
     d.caption("Table", "Curve numbers per land-cover class (whole raster)")
     d.table(
-        [
-            "Class",
-            "Area (km2)",
-            "Share (%)",
-            "Mean CN",
-            "P05",
-            "P95",
-            "Soil share of uncertainty (%)",
-        ],
+        ["Class", "Area (km²)", "Share (%)", "Mean CN", "P05", "P95",
+         "Soil share of uncertainty (%)"],
         [
             [
                 f"{c['Code']} {c['Class']}",
@@ -414,23 +448,13 @@ def write_report(result) -> str:
             ]
             for c in result.class_rows
         ],
-    )
-    try:
-        d.picture(figures.histogram(result), "Area by design curve number")
-    except Exception as exc:  # noqa: BLE001
-        notes.append(f"Histogram not drawn ({exc}).")
+        widths_cm=[4.9, 1.9, 1.7, 1.7, 1.5, 1.5, 3.3],
+    )  # fmt: skip
+    picture(lambda: figures.histogram(result), "Area by design curve number")
     d.caption("Table", f"Zone curve numbers (runoff-equivalent for P = {p:g} mm)")
     d.table(
-        [
-            "Zone",
-            "Area (km2)",
-            "Mean CN",
-            "Runoff-equivalent CN",
-            "P05",
-            "P95",
-            "Q design (mm)",
-            "Confidence",
-        ],
+        ["Zone", "Area (km²)", "Mean CN", "Runoff-equivalent CN", "P05", "P95",
+         "Q design (mm)", "Confidence"],
         [
             [
                 r["Zone"],
@@ -444,59 +468,81 @@ def write_report(result) -> str:
             ]
             for r in rows
         ],
-        widths_cm=[2.8, 1.7, 1.6, 2.6, 1.4, 1.4, 1.9, 2.0],
+        widths_cm=[2.9, 1.8, 1.7, 2.6, 1.5, 1.5, 2.2, 2.3],
+    )  # fmt: skip
+    picture(lambda: figures.zone_ranges(result), "Zone curve numbers and their ranges")
+    picture(
+        lambda: figures.uncertainty_split(result),
+        "What drives the uncertainty per zone",
     )
-    try:
-        d.picture(figures.zone_ranges(result), "Zone curve numbers and their ranges")
-    except Exception as exc:  # noqa: BLE001
-        notes.append(f"Zone range figure not drawn ({exc}).")
-    try:
-        d.picture(
-            figures.uncertainty_split(result), "What drives the uncertainty per zone"
-        )
-    except Exception as exc:  # noqa: BLE001
-        notes.append(f"Uncertainty figure not drawn ({exc}).")
-
-    # 6. Design values ---------------------------------------------------
-    d.heading("6. Design values, recommendations, limitations and risks", 2)
-    d.heading("6.1 Candidate design values", 3)
+    d.caption("Table", "Candidate design values")
     d.table(
         ["Zone", "Design CN", "Sensitivity range", "Confidence", "Main uncertainty"],
         [
             [
                 r["Zone"],
                 _f(r[eq_key]),
-                f"{_f(r['Runoff-equivalent CN P05'])} - {_f(r['Runoff-equivalent CN P95'])}",
+                f"{_f(r['Runoff-equivalent CN P05'])} to "
+                f"{_f(r['Runoff-equivalent CN P95'])}",
                 r["Confidence"],
                 r["Main uncertainty source"],
             ]
             for r in rows
         ],
-        widths_cm=[3.6, 2.4, 3.6, 2.6, 3.8],
+        widths_cm=[3.6, 2.4, 3.6, 2.8, 4.1],
     )
     d.para(
         f"Design CN = runoff-equivalent CN for P = {p:g} mm; the sensitivity range "
         "is its P05 to P95. They are candidates for the designer's judgement, not "
         "prescribed values."
     )
-    d.heading("6.2 Recommendations", 3)
+
+    # Outputs ----------------------------------------------------------------------
+    path = path or os.path.join(s.out_dir, REPORT_FILE)
+    outputs = list(ctx.get("outputs") or [])
+    if not outputs:
+        from .core import OUT_LOOKUP, OUT_METADATA, OUT_RASTER, OUT_TABLES, OUT_ZONES
+
+        labels = ctx.get("labels") or {}
+        for key in (OUT_RASTER, OUT_ZONES, OUT_LOOKUP, OUT_TABLES):
+            for f in result.written.get(key, []):
+                outputs.append((labels.get(key, os.path.basename(f)), f))
+        meta = s.path(OUT_METADATA)  # written after the report
+        if meta:
+            outputs.append((labels.get(OUT_METADATA, "Run metadata"), meta))
+        outputs.append(("This report", path))
+    d.heading("Outputs", 1)
+    d.caption("Table", "Files written")
+    d.table(
+        ["Output", "File"],
+        [[a, os.path.basename(b) if b else "-"] for a, b in outputs],
+        widths_cm=[6.0, 10.5],
+    )
+    folders = sorted({os.path.dirname(b) for _, b in outputs if b})
+    if folders:
+        d.para("Folder(s): " + "; ".join(folders))
+
+    # Notes and limitations ----------------------------------------------------------
+    d.heading("Notes and limitations", 1)
+    d.label("Recommendations")
     for text in _recommendations(result):
         d.bullet(text)
-    d.heading("6.3 Limitations", 3)
+    d.label("Limitations")
     for text in (
         _accuracy_text(result),
         "The curve-number tables come from US experience (Table 5.1 adapts them for "
         "southern Africa); values below about 50 are uncertain.",
-        "The soil and condition ranges are combined as independent 90 % ranges; "
-        "the soil range is the change of group across the Ksat P5 to P95, not a "
-        "full probability distribution.",
+        "The soil and condition ranges are combined as independent 90 % ranges; the "
+        "soil range is the change of group across the Ksat P5 to P95, not a full "
+        "probability distribution. Zone means of the cell P05 and P95 assume fully "
+        "related errors and are therefore wide.",
         "Soil groups are resampled from a coarser grid by nearest neighbour; "
         "boundaries between groups are blocky at the land-cover resolution.",
         "The land cover is one year's map; use the cover expected over the design "
         "life (development, plantation cycles, cropping).",
     ):
         d.bullet(text)
-    d.heading("6.4 Risks", 3)
+    d.label("Risks")
     for text in (
         "Underestimating runoff from built-up land where the development is denser "
         "than the lookup assumes.",
@@ -508,9 +554,14 @@ def write_report(result) -> str:
         "adjustment.",
     ):
         d.bullet(text)
+    msgs = list(dict.fromkeys(result.warnings + notes))
+    if msgs:
+        d.label("Processing messages")
+        for n in msgs:
+            d.bullet(n)
 
-    # 7. References -------------------------------------------------------
-    d.heading("7. References", 2)
+    # References -------------------------------------------------------------------------
+    d.heading("References", 1)
     refs = list(REFERENCES)
     if s.lookup_key.startswith("worldcover"):
         refs.append(WORLDCOVER_REF)
@@ -518,33 +569,6 @@ def write_report(result) -> str:
         refs += [WRC_REF, SANLC_REF]
     for ref in sorted(refs):
         d.para(ref)
-
-    # Annexes --------------------------------------------------------------
-    d.heading("Annex A. Run settings", 2)
-    d.table(
-        ["Setting", "Value"],
-        [
-            ["Tool", f"{TOOL_NAME} (mayim_tools) v{TOOL_VERSION}"],
-            ["Run time", result.run_time_utc],
-            ["Lookup", result.lookup.name],
-            ["Antecedent moisture", AMC_OPTIONS[s.amc]],
-            ["Initial abstraction ratio", f"{result.ia_ratio:g}"],
-            ["Design rainfall depth (mm)", f"{p:g}"],
-            ["Zones", ", ".join(result.zone_names) or "none (whole raster)"],
-        ],
-        widths_cm=[5.0, 11.0],
-    )
-    d.heading("Annex B. Output files", 2)
-    files = sorted(
-        {os.path.basename(f) for f in result.files}
-        | {OUT_FILE, "cn_metadata.csv", "cn_layers.qlr", REPORT_FILE}
-    )
-    d.table(["File"], [[f] for f in files], widths_cm=[16.0])
-    if notes or result.warnings:
-        d.heading("Annex C. Warnings", 2)
-        for n in result.warnings + notes:
-            d.bullet(n)
-    path = os.path.join(s.out_dir, REPORT_FILE)
     d.doc.save(path)
     return path
 

@@ -1,5 +1,8 @@
-"""Word report for Hydrological Soil Groups (HSG) (python-docx and matplotlib,
-imported lazily). Numbers without thousands separators."""
+"""Word report for Hydrological Soil Groups (HSG) in the Mayim report standard:
+title page, summary, tool and method, inputs and settings, parameters and
+calculations, results, outputs, notes and limitations, references
+(python-docx and matplotlib, imported lazily). Numbers without thousands
+separators."""
 
 from __future__ import annotations
 
@@ -19,7 +22,7 @@ from .core import (
     labels_for,
 )
 
-REPORT_TITLE = "Hydrologic Soil Groups"
+REPORT_TITLE = "Hydrological Soil Groups (HSG)"
 REPORT_FILE = "hydrologic_soil_groups_report.docx"
 METHOD_TITLE = {"NEH630": "NEH 630", "SCSSA": "SCS-SA"}
 
@@ -121,21 +124,44 @@ def _zone_table(d, result, method):
     d.table(header, body)
 
 
-def write_report(result) -> str:
-    from . import figures
+def write_report(result, path: str | None = None) -> str:
+    """Writes the report to ``path`` (default: the legacy name in out_dir)
+    and returns the path."""
+    import datetime as _dt
 
-    d = Doc()
+    from . import figures
+    from .core import OUT_METADATA
+
+    d = Doc(house_style=True)
     s = result.settings
+    ctx = s.report_context or {}
     meta = result.regional_meta
     notes = []
     area = float(result.mask.sum()) * result.cell_area_km2
     methods = list(result.methods)
     both = len(methods) == 2
+    path = path or os.path.join(s.out_dir, REPORT_FILE)
 
-    d.heading(REPORT_TITLE, 1)
+    d.title_page(
+        REPORT_TITLE,
+        "This report assigns hydrologic soil groups, with their confidence, from "
+        "the saturated hydraulic conductivity of Regional Soil Parameterisation, "
+        "the depth to an impermeable layer and the depth to the water table, as "
+        "input to curve-number runoff estimates.",
+        [
+            ("Project number", ctx.get("project_number") or "-"),
+            ("Project / site", ctx.get("project_name") or "-"),
+            ("Prepared by", "Mayim Consulting"),
+            ("Tool and version", f"{TOOL_NAME}, version {TOOL_VERSION}"),
+            ("Software", ctx.get("software") or "-"),
+            ("Report date", _dt.date.today().isoformat()),
+            ("Document status", "Draft"),
+        ],
+        subtitle=ctx.get("project_name") or None,
+    )
 
-    # 1. Summary ---------------------------------------------------------
-    d.heading("1. Summary", 2)
+    # Summary ------------------------------------------------------------
+    d.heading("Summary", 1)
     d.para(
         f"This report assigns hydrologic soil groups to {len(result.zone_names)} "
         f"zone{'s' if len(result.zone_names) != 1 else ''} covering {_f(area, 1)} "
@@ -147,17 +173,26 @@ def write_report(result) -> str:
         + "; ".join(METHODS[m] for m in methods)
         + "."
     )
-    for r in result.zone_rows:
-        d.bullet(
-            f"{r['Zone']}, {METHOD_TITLE[r['Method']]}: dominant group "
-            f"{r['Dominant group']} on {_f(r['Dominant group share (%)'], 0)} % of the "
-            f"area, mean confidence {_f(r['Mean confidence (%)'], 0)} %; at the low "
-            f"end of the Ksat range {r['Most common group at Ksat P05 (more runoff)']}, "
-            f"at the high end {r['Most common group at Ksat P95 (less runoff)']}."
-        )
+    d.caption("Table", "Summary of the groups per zone")
+    d.table(
+        ["Zone", "Method", "Dominant group (share)", "Mean confidence (%)",
+         "Low end of Ksat (more runoff)", "High end of Ksat (less runoff)"],
+        [
+            [
+                r["Zone"],
+                METHOD_TITLE[r["Method"]],
+                f"{r['Dominant group']} ({_f(r['Dominant group share (%)'], 0)} %)",
+                _f(r["Mean confidence (%)"], 0),
+                r["Most common group at Ksat P05 (more runoff)"],
+                r["Most common group at Ksat P95 (less runoff)"],
+            ]
+            for r in result.zone_rows
+        ],
+        widths_cm=[3.0, 1.8, 3.0, 2.4, 3.15, 3.15],
+    )  # fmt: skip
     if both:
         d.para(
-            "The two methods use very different Ksat limits (Section 4.4): NEH 630 "
+            "The two methods use very different Ksat limits (see Tool and method): NEH 630 "
             "(2009) places group A above 144 mm/h, while the SCS-SA groups follow "
             "the older SCS permeability rates with group A above 7.6 mm/h. The "
             "same soil can therefore fall one or two groups apart. Use the method "
@@ -166,8 +201,8 @@ def write_report(result) -> str:
             "Africa, NEH 630 with the NRCS / TR-55 tables."
         )
 
-    # 2. Purpose ---------------------------------------------------------
-    d.heading("2. Purpose and scope", 2)
+    # Tool and method -------------------------------------------------------
+    d.heading("Tool and method", 1)
     d.para(
         "Curve-number runoff methods need a hydrologic soil group for every "
         "sub-catchment. Groups are normally read from soil surveys; where none "
@@ -175,11 +210,27 @@ def write_report(result) -> str:
         "uncertainty. It assigns groups only; curve numbers are a separate step "
         "that combines the groups with land cover."
     )
-    d.heading("How confidence is judged", 3)
+    d.label("How confidence is judged")
     d.para(_plain_confidence_text())
+    for step in (
+        "Read the Ksat quantiles (P5, P50, P95) of the 0-30, 30-60 and 60-100 cm "
+        "layers from Regional Soil Parameterisation.",
+        "Find the depth to a water-impermeable layer (bedrock) and to the water "
+        "table from the chosen sources.",
+        "Assign the group of each cell by each chosen method: NEH 630 Table 7-1 "
+        "(Ksat of the least transmissive layer, impermeable-layer and water-table "
+        "depths) and the SCS-SA groups (permeability rates, intermediate groups and "
+        "field adjustments); the limits are under Parameters and calculations.",
+        "Work out the probability of each group from the Ksat range; the "
+        "recommended group is the group of the median Ksat and its confidence is "
+        "the probability of that group.",
+        "Give the groups at the low and high ends of the Ksat range and summarise "
+        "the shares, confidence and probabilities per zone.",
+    ):
+        d.numbered(step)
 
-    # 3. Data ------------------------------------------------------------
-    d.heading("3. Data", 2)
+    # Inputs and settings ------------------------------------------------------
+    d.heading("Inputs and settings", 1)
     rows = [
         ["Ksat (P5, P50, P95; 0-30, 30-60, 60-100 cm)", s.regional_folder],
     ]
@@ -189,8 +240,23 @@ def write_report(result) -> str:
     for n in result.input_notes:
         item, _, value = n.partition(": ")
         rows.append([item, value] if value else ["Note", n])
-    d.caption("Table", "Inputs")
-    d.table(["Item", "Value"], rows, widths_cm=[5.5, 10.5])
+    g = result.grid
+    adj = []
+    if s.sa_adjust_shallow:
+        adj.append("an impermeable layer shallower than 50 cm (shallow phase)")
+    if s.sa_adjust_water:
+        adj.append(
+            "a water table shallower than 60 cm (standing in for a bottomland position)"
+        )
+    rows += [
+        ["Methods", "; ".join(METHODS[m] for m in methods)],
+        ["Grid", f"{g.width} x {g.height} cells at {g.res:g}"],
+        ["Zones", ", ".join(result.zone_names)],
+        ["SCS-SA adjustments", ", ".join(adj) if adj else "none"],
+        ["Run time", result.run_time_utc],
+    ]
+    d.caption("Table", "Inputs and settings")
+    d.table(["Item", "Value"], rows, widths_cm=[5.5, 11.0])
     if s.bedrock_source in ("BDRICM", "BDTICM"):
         d.para(
             "Depth to bedrock from SoilGrids 2017 (Shangguan et al., 2017) has no "
@@ -204,7 +270,7 @@ def write_report(result) -> str:
             "200 cm or deeper, and exposed bedrock is masked in the product. "
             "The groups follow the mapped mean depth; the confidence also "
             "includes the chance that bedrock lies in another depth class "
-            "(Section 4.3)."
+            "(see Parameters and calculations)."
         )
     if s.water_source == "none":
         d.para(
@@ -213,9 +279,30 @@ def write_report(result) -> str:
             "(NEH 630) or water-table adjustments (SCS-SA) appear."
         )
 
-    # 4. Methods ---------------------------------------------------------
-    d.heading("4. Methods", 2)
-    d.heading("4.1 USDA-NRCS NEH 630 Chapter 7 (2009)", 3)
+    # Parameters and calculations ---------------------------------------------
+    d.heading("Parameters and calculations", 1)
+    d.caption("Table", "Parameters and definitions")
+    d.table(
+        ["Parameter", "Value / equation", "Definition (source)"],
+        [
+            ["Ksat (mm/h)", "P5, P50, P95 per layer",
+             "Saturated hydraulic conductivity of 0-30, 30-60 and 60-100 cm "
+             "(Regional Soil Parameterisation)"],
+            ["Least transmissive Ksat (mm/h)", "min over the layers in range",
+             "Quantile-wise minimum (layer errors assumed to move together)"],
+            ["ln(Ksat) distribution", "two-piece normal",
+             "Reproduces the P5, P50 and P95 of each cell"],
+            ["Group probability (%)", "P(limit_low < Ksat < limit_high)",
+             "From the distribution and the group limits of the method"],
+            ["Recommended group", "group of the P50 Ksat",
+             "Matches the candidate values of Regional Soil Parameterisation"],
+            ["Confidence (%)", "probability of the recommended group",
+             "Times the bedrock-depth class probability with iSDAsoil"],
+            ["1 µm/s", "3.6 mm/h", "Unit conversion of the NEH 630 limits"],
+        ],
+        widths_cm=[4.4, 4.6, 7.5],
+    )  # fmt: skip
+    d.heading("USDA-NRCS NEH 630 Chapter 7 (2009)", 2)
     d.para(
         "Table 7-1 of NEH 630 assigns the group from the depth to a water "
         "impermeable layer, the depth to the high water table and the Ksat of "
@@ -247,7 +334,7 @@ def write_report(result) -> str:
         "layers (the 30-60 cm value stands in for 30-50 cm); 0-100 cm uses all "
         "three. A group applies when Ksat exceeds its lower limit."
     )
-    d.heading("4.2 SCS-SA hydrological soil groups", 3)
+    d.heading("SCS-SA hydrological soil groups", 2)
     d.para(
         "Schulze, Schmidt & Smithers (2004, Table 2.1) describe the four basic "
         "groups by their permeability rate (saturated soil profile) and typical "
@@ -274,7 +361,7 @@ def write_report(result) -> str:
         ],
         widths_cm=[2.0, 4.0, 4.5, 5.5],
     )
-    d.para("Implementation choices in this tool:")
+    d.label("Implementation choices in this tool")
     d.bullet(
         "Permeability is the Ksat of the least transmissive layer within 0-100 cm "
         "(the manual: permeability is controlled by the properties of the profile)."
@@ -285,13 +372,6 @@ def write_report(result) -> str:
         f"between two adjacent groups: both at least {scs_sa.STRADDLE_MIN * 100:.0f} % "
         "likely. Its confidence is the probability of the two groups together."
     )
-    adj = []
-    if s.sa_adjust_shallow:
-        adj.append("an impermeable layer shallower than 50 cm (shallow phase)")
-    if s.sa_adjust_water:
-        adj.append(
-            "a water table shallower than 60 cm (standing in for a bottomland position)"
-        )
     if adj:
         d.bullet(
             "Field adjustments of Section 2.2.3(d): the group moves one step down "
@@ -301,7 +381,7 @@ def write_report(result) -> str:
         )
     else:
         d.bullet("The field adjustments of Section 2.2.3(d) were not applied.")
-    d.heading("4.3 Probabilities and the recommended group", 3)
+    d.heading("Probabilities and the recommended group", 2)
     d.para(
         "Per cell, ln(Ksat) of each layer is described by a two-piece normal "
         "distribution that reproduces its P5, P50 and P95. The least transmissive "
@@ -321,7 +401,7 @@ def write_report(result) -> str:
             "100 cm for NEH 630; shallower or deeper than 50 cm for the SCS-SA "
             "shallow-phase adjustment. Another class is counted as another group, "
             "which is slightly cautious. The probability of bedrock within 50 cm "
-            "is mapped in hsg_conditions.tif."
+            "is mapped in the conditions raster."
         )
     d.caption("Table", "Confidence classes")
     d.table(
@@ -329,7 +409,7 @@ def write_report(result) -> str:
         [[CONF_LABELS[k], CONF_TEXT[k]] for k in CONF_LABELS],
         widths_cm=[3.0, 13.0],
     )
-    d.heading("4.4 Why the methods differ", 3)
+    d.heading("Why the methods differ", 2)
     d.para(
         "NEH 630 (2009) uses Ksat limits of 144, 36 and 3.6 mm/h for the shallow "
         "range and 36, 14.4 and 1.44 mm/h for deep soils. The SCS-SA groups follow "
@@ -347,8 +427,8 @@ def write_report(result) -> str:
     except Exception as exc:  # noqa: BLE001
         notes.append(f"Ksat limit figure not drawn ({exc}).")
 
-    # 5. Results ---------------------------------------------------------
-    d.heading("5. Results", 2)
+    # Results --------------------------------------------------------------
+    d.heading("Results", 1)
     try:
         d.picture(
             figures.group_maps(
@@ -390,17 +470,18 @@ def write_report(result) -> str:
 
     # 6. Texture check ---------------------------------------------------
     if result.texture is not None and "NEH630" in methods:
-        d.heading("6. Texture cross-check (NEH 630)", 2)
+        d.heading("Texture cross-check (NEH 630)", 2)
         d.para(
             "NEH 630 describes the textures typical of each group. Where the "
             "surface layer (0-30 cm) matches one of them, the group it indicates "
             "is compared with the recommended NEH 630 group (drained letter). "
             "Many soils match none of the descriptions; the check is indicative."
         )
+        d.caption("Table", "Typical textures per group (NEH 630)")
         d.table(
             ["Group", "Typical texture (NEH 630)"],
             [[neh630.GROUP_LABEL[c], t] for c, t in TEXTURE_RULES],
-            widths_cm=[2.5, 13.5],
+            widths_cm=[2.5, 14.0],
         )
         rows = [
             [
@@ -415,18 +496,39 @@ def write_report(result) -> str:
         d.table(
             ["Zone", "Cells with a typical texture (%)", "Of these, same group (%)"],
             rows,
+            widths_cm=[6.5, 5.0, 5.0],
         )
 
-    # 7. Use ------------------------------------------------------------
-    d.heading("7. Using the groups for curve numbers", 2)
+    # Outputs ----------------------------------------------------------------
+    labels = ctx.get("labels") or {}
+    outputs = [(labels.get(f, os.path.basename(f)), f) for f in result.files]
+    meta_path = s.path(OUT_METADATA)  # written after the report
+    if meta_path:
+        outputs.append((labels.get(meta_path, "Run metadata"), meta_path))
+    outputs.append(("This report", path))
+    d.heading("Outputs", 1)
+    d.caption("Table", "Files written")
+    d.table(
+        ["Output", "File"],
+        [[a, os.path.basename(b)] for a, b in outputs],
+        widths_cm=[6.0, 10.5],
+    )
+    folders = sorted({os.path.dirname(b) for _, b in outputs if b})
+    if folders:
+        d.para("Folder(s): " + "; ".join(folders))
+
+    # Notes and limitations ------------------------------------------------------
+    d.heading("Notes and limitations", 1)
+    d.label("Using the groups for curve numbers")
     d.bullet(
-        "Use the share of each group per zone (hsg_zone_summary.csv) as area "
+        "Use the share of each group per zone (zone summary CSV) as area "
         "fractions for an area-weighted curve number, or the cell rasters with a "
         "land-cover map."
     )
     d.bullet(
         "Run the model with the groups at the low end of the Ksat range "
-        "(hsg_*_by_ksat.tif, band 1) as a cautious case for flood estimation."
+        "(the groups-at-Ksat raster, band 1) as a cautious case for flood "
+        "estimation."
     )
     if "NEH630" in methods:
         d.bullet(
@@ -444,8 +546,7 @@ def write_report(result) -> str:
         "sensitive to the group."
     )
 
-    # 8. Limitations ----------------------------------------------------
-    d.heading("8. Limitations", 2)
+    d.label("Limitations")
     for text in (
         "Ksat comes from pedotransfer functions applied to global soil maps; it "
         "describes the soil matrix, not macropores, crusting or compaction, and "
@@ -464,8 +565,14 @@ def write_report(result) -> str:
     ):
         d.bullet(text)
 
-    # 9. References -------------------------------------------------------
-    d.heading("9. References", 2)
+    msgs = list(dict.fromkeys(result.warnings + notes))
+    if msgs:
+        d.label("Processing messages")
+        for n in msgs:
+            d.bullet(n)
+
+    # References -------------------------------------------------------------
+    d.heading("References", 1)
     refs = REFERENCES + [
         "Shangguan, W., Hengl, T., Mendes de Jesus, J., Yuan, H. and Dai, Y. (2017). "
         "Mapping the global depth to bedrock for land surface modeling. Journal of "
@@ -474,30 +581,5 @@ def write_report(result) -> str:
     for ref in sorted(refs):
         d.para(ref)
 
-    # Annexes -------------------------------------------------------------
-    d.heading("Annex A. Run settings", 2)
-    g = result.grid
-    d.table(
-        ["Setting", "Value"],
-        [
-            ["Tool", f"{TOOL_NAME} (mayim_tools) v{TOOL_VERSION}"],
-            ["Run time", result.run_time_utc],
-            ["Methods", "; ".join(METHODS[m] for m in methods)],
-            ["Grid", f"{g.width} x {g.height} cells at {g.res:g}"],
-            ["Zones", ", ".join(result.zone_names)],
-            ["SCS-SA adjustments", ", ".join(adj) if adj else "none"],
-        ],
-        widths_cm=[5.0, 11.0],
-    )
-    d.heading("Annex B. Output files", 2)
-    files = sorted(
-        {os.path.basename(p) for p in result.files} | {"hsg_metadata.csv", REPORT_FILE}
-    )
-    d.table(["File"], [[f] for f in files], widths_cm=[16.0])
-    if notes or result.warnings:
-        d.heading("Annex C. Warnings", 2)
-        for n in result.warnings + notes:
-            d.bullet(n)
-    path = os.path.join(s.out_dir, REPORT_FILE)
     d.doc.save(path)
     return path

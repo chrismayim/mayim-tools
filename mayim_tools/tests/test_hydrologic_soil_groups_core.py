@@ -424,3 +424,50 @@ def test_finds_project_numbered_regional_rasters(tmp_path, regional):
     empty.mkdir()
     with pytest.raises(SoilDataError, match="No Ksat raster"):
         core.find_regional_files(str(empty))
+
+
+def test_output_standard_paths_and_report(tmp_path, regional):
+    """Selected outputs at their standard names (per-method rasters as
+    {method: path}); unticked outputs are not written; a locked CSV is
+    reported in result.failed and the rest are still written."""
+    from mayim_tools.soil._common.export import write_multiband_geotiff
+
+    folder, _ = regional
+    ras, csvd, word = (str(tmp_path / d) for d in ("ras", "csv", "word"))
+    for d in (ras, csvd, word):
+        os.makedirs(d)
+    pn = "P1"
+    outputs = {
+        core.OUT_RECOMMENDED: {
+            m: os.path.join(ras, f"{pn}_HSG_{m}_Recommended.tif")
+            for m in ("NEH630", "SCSSA")
+        },
+        core.OUT_BY_KSAT: {
+            m: os.path.join(ras, f"{pn}_HSG_{m}_By_Ksat.tif")
+            for m in ("NEH630", "SCSSA")
+        },
+        core.OUT_ZONES: os.path.join(csvd, f"{pn}_HSG_Zone_Summary.csv"),
+        core.OUT_METADATA: os.path.join(csvd, f"{pn}_HSG_Metadata.csv"),
+        core.OUT_REPORT: os.path.join(word, f"{pn}_HSG_Report.docx"),
+    }
+    os.makedirs(outputs[core.OUT_METADATA])  # a directory cannot be replaced
+    s = core.RunSettings(
+        regional_folder=folder,
+        out_dir="",
+        bedrock_source="none",
+        write_report=True,
+        outputs=outputs,
+        report_context={"project_number": pn, "project_name": "Test"},
+    )
+    r = core.run(s, write_fn=write_multiband_geotiff)
+    assert sorted(os.listdir(ras)) == sorted(
+        os.path.basename(p)
+        for k in (core.OUT_RECOMMENDED, core.OUT_BY_KSAT)
+        for p in outputs[k].values()
+    )
+    assert [p for p, _ in r.failed] == [outputs[core.OUT_METADATA]]
+    zones = outputs[core.OUT_ZONES]
+    with open(zones, "rb") as f:
+        assert f.read(3) == b"\xef\xbb\xbf"
+    assert os.path.isfile(outputs[core.OUT_REPORT])
+    assert r.report_path == outputs[core.OUT_REPORT]

@@ -6,8 +6,12 @@ Chapter 7 (2009) and / or the SCS-SA groups (Schulze, Schmidt & Smithers,
 2004), with group probabilities, a recommended group and its confidence,
 a zone summary, metadata and a Word report. Thin wrapper - the logic is in
 core.py (no QGIS; see tests/test_hydrologic_soil_groups_core.py).
+
+Outputs follow the Mayim output standard: a tick box per output, raster,
+CSV and Word folders, files named <project number>_<description>.
 """
 
+import os
 from pathlib import Path
 
 from qgis.core import (
@@ -27,9 +31,18 @@ from qgis.core import (
     QgsProcessingParameterFolderDestination,
     QgsProcessingParameterNumber,
     QgsProcessingParameterRasterLayer,
+    QgsProcessingParameterString,
 )
 from qgis.PyQt.QtGui import QIcon
 
+from mayim_tools._common.output_files import (
+    CSV,
+    EXTENSIONS,
+    RASTER,
+    WORD,
+    OutputSpec,
+    clean_name_part,
+)
 from mayim_tools.soil._common import qgis_ui
 from mayim_tools.soil._common.errors import SoilDataError
 
@@ -38,6 +51,63 @@ from . import core
 METHOD_CODES = ["NEH630", "SCSSA"]
 BEDROCK_CODES = ["BDRICM", "BDTICM", "ISDA", "raster", "constant", "none"]
 WATER_CODES = ["none", "raster", "constant"]
+
+# Selectable outputs: core output key, dialog label, file-name description,
+# folder kind, ticked by default. The per-method rasters are named
+# <project number>_HSG_<METHOD>_<description>.tif for each chosen method.
+OUTPUT_SPECS = [
+    OutputSpec(
+        core.OUT_RECOMMENDED, "Recommended groups and confidence (raster, per method)",
+        "Recommended", RASTER,
+    ),
+    OutputSpec(
+        core.OUT_BY_KSAT,
+        "Groups at Ksat P5 / P50 / P95 (raster, per method; used by SCS Curve Numbers)",
+        "By Ksat", RASTER,
+    ),
+    OutputSpec(
+        core.OUT_PROBABILITY, "Group probabilities (raster, per method)",
+        "Probability", RASTER,
+    ),
+    OutputSpec(
+        core.OUT_CONDITIONS, "Conditions: depths, table case, least transmissive "
+        "Ksat (raster)", "HSG Conditions", RASTER,
+    ),
+    OutputSpec(core.OUT_ZONES, "Zone summary (CSV)", "HSG Zone Summary", CSV),
+    OutputSpec(core.OUT_METADATA, "Run metadata (CSV)", "HSG Metadata", CSV),
+    OutputSpec(core.OUT_REPORT, "Word report", "HSG Report", WORD),
+]  # fmt: skip
+FOLDER_PARAMS = {
+    RASTER: ("FOLDER_RASTER", "Output folder for rasters (GeoTIFF)"),
+    CSV: ("FOLDER_CSV", "Output folder for CSV files"),
+    WORD: ("FOLDER_WORD", "Output folder for Word reports"),
+}
+
+
+def output_param(key: str) -> str:
+    return f"OUTPUT_{key.upper()}"
+
+
+def method_spec(spec: OutputSpec, method: str) -> OutputSpec:
+    """The per-method version of a per-method spec."""
+    short = core.METHOD_SHORT[method].upper()
+    return OutputSpec(
+        spec.key, spec.label, f"HSG {short} {spec.description}", spec.kind
+    )
+
+
+def _software_version() -> str:
+    parts = []
+    metadata = Path(__file__).resolve().parents[2] / "metadata.txt"
+    try:
+        for line in metadata.read_text(encoding="utf-8").splitlines():
+            if line.startswith("version="):
+                parts.append(f"Mayim Tools {line.split('=', 1)[1].strip()}")
+                break
+    except OSError:
+        pass
+    parts.append(f"QGIS {Qgis.version()}")
+    return ", ".join(parts)
 
 
 def _folder_behavior():
@@ -62,9 +132,9 @@ class HydrologicSoilGroupsAlgorithm(QgsProcessingAlgorithm):
     SA_WATER = "SA_WATER"
     ZONES = "ZONES"
     ZONE_FIELD = "ZONE_FIELD"
-    REPORT = "REPORT"
     LOAD_LAYERS = "LOAD_LAYERS"
-    OUTPUT_FOLDER = "OUTPUT_FOLDER"
+    PROJECT_NUMBER = "PROJECT_NUMBER"
+    PROJECT_NAME = "PROJECT_NAME"
 
     def __init__(self):
         super().__init__()
@@ -91,6 +161,16 @@ class HydrologicSoilGroupsAlgorithm(QgsProcessingAlgorithm):
         return "soil_tools"
 
     def shortHelpString(self):
+        files = "\n".join(
+            f"  {s.label}: <project number>_"
+            + (
+                f"HSG_<METHOD>_{clean_name_part(s.description)}"
+                if s.key in core.PER_METHOD
+                else clean_name_part(s.description)
+            )
+            + EXTENSIONS[s.kind]
+            for s in OUTPUT_SPECS
+        )
         return (
             f"Hydrological Soil Groups (HSG), version {core.TOOL_VERSION}\n"
             "\n"
@@ -140,14 +220,20 @@ class HydrologicSoilGroupsAlgorithm(QgsProcessingAlgorithm):
             "water table: a raster in metres, a constant, or none (> 100 cm; no "
             "global map is reliable enough). Optional zones (sub-catchments).\n"
             "\n"
-            "OUTPUTS:\thsg_<method>_recommended.tif (group, confidence %, "
-            "confidence class), hsg_<method>_by_ksat.tif (group at Ksat P5, P50, "
-            "P95), hsg_<method>_probability.tif (P of A, B, C, D), "
-            "hsg_conditions.tif (depths, NEH 630 case, least transmissive Ksat, "
-            "texture group), hsg_zone_summary.csv (group shares per zone - area "
-            "fractions for curve numbers), hsg_metadata.csv, the Word report and "
-            "hsg_layers.qlr. Group codes: 1-4 A-D, 11-13 NEH 630 dual A/D-C/D, "
-            "21-23 SCS-SA intermediate A/B, B/C, C/D.\n"
+            "OUTPUTS:\tTick the outputs wanted and choose the raster, CSV and "
+            "Word folders. Per method: the recommended group (bands: group, "
+            "confidence %, confidence class), the groups at Ksat P5, P50 and P95 "
+            "(SCS Curve Numbers finds this raster beside the recommended one) and "
+            "the probabilities of A, B, C and D. Also the conditions raster "
+            "(depths, NEH 630 case, least transmissive Ksat, texture group), the "
+            "zone summary (group shares per zone - area fractions for curve "
+            "numbers), run metadata, the Word report (Mayim report standard) and "
+            "a <project number>_HSG_Layers.qlr layer file beside the rasters. "
+            "CSVs are UTF-8 with a byte-order mark. Files are named <project "
+            "number>_<description> and replace files of the same name; a file "
+            "that is open cannot be replaced and is reported, and the other "
+            "outputs are still written. Group codes: 1-4 A-D, 11-13 NEH 630 dual "
+            "A/D-C/D, 21-23 SCS-SA intermediate A/B, B/C, C/D.\n" + files
         )
 
     def initAlgorithm(self, config=None):
@@ -262,11 +348,6 @@ class HydrologicSoilGroupsAlgorithm(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
-            QgsProcessingParameterBoolean(
-                self.REPORT, "Write the Word report", defaultValue=True
-            )
-        )
-        self.addParameter(
             QgsProcessingParameterEnum(
                 self.LOAD_LAYERS,
                 "Load outputs into the project",
@@ -275,8 +356,31 @@ class HydrologicSoilGroupsAlgorithm(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
-            QgsProcessingParameterFolderDestination(self.OUTPUT_FOLDER, "Output folder")
+            QgsProcessingParameterString(
+                self.PROJECT_NUMBER,
+                "Project number (file name prefix, optional)",
+                optional=True,
+            )
         )
+        self.addParameter(
+            QgsProcessingParameterString(
+                self.PROJECT_NAME,
+                "Project name (report title page, optional)",
+                optional=True,
+            )
+        )
+        for spec in OUTPUT_SPECS:
+            self.addParameter(
+                QgsProcessingParameterBoolean(
+                    output_param(spec.key),
+                    f"Output: {spec.label}",
+                    defaultValue=spec.default,
+                )
+            )
+        for name, label in FOLDER_PARAMS.values():
+            self.addParameter(
+                QgsProcessingParameterFolderDestination(name, label, optional=True)
+            )
 
     # ------------------------------------------------------------------
 
@@ -312,17 +416,51 @@ class HydrologicSoilGroupsAlgorithm(QgsProcessingAlgorithm):
         self, parameters, context: QgsProcessingContext, feedback: QgsProcessingFeedback
     ):
         self._post_processors = []
-        out_dir = self.parameterAsString(parameters, self.OUTPUT_FOLDER, context)
-        Path(out_dir).mkdir(parents=True, exist_ok=True)
         chosen = self.parameterAsEnums(parameters, self.METHODS, context)
         if not chosen:
             raise QgsProcessingException("Select at least one method.")
+        methods = tuple(METHOD_CODES[i] for i in chosen)
+        project_number = (
+            self.parameterAsString(parameters, self.PROJECT_NUMBER, context) or ""
+        ).strip()
+        project_name = (
+            self.parameterAsString(parameters, self.PROJECT_NAME, context) or ""
+        ).strip()
+        selected = [
+            spec
+            for spec in OUTPUT_SPECS
+            if self.parameterAsBoolean(parameters, output_param(spec.key), context)
+        ]
+        if not selected:
+            raise QgsProcessingException("Tick at least one output.")
+        folders = {}
+        for kind in {spec.kind for spec in selected}:
+            name, label = FOLDER_PARAMS[kind]
+            folder = self.parameterAsFileOutput(parameters, name, context)
+            if not folder:
+                raise QgsProcessingException(
+                    f"Choose the {label[0].lower() + label[1:]}."
+                )
+            os.makedirs(folder, exist_ok=True)
+            folders[kind] = folder
+        paths, labels = {}, {}
+        for spec in selected:
+            if spec.key in core.PER_METHOD:
+                paths[spec.key] = {}
+                for m in methods:
+                    p = method_spec(spec, m).path(folders, project_number)
+                    paths[spec.key][m] = p
+                    labels[p] = f"{spec.label.split(' (')[0]}, {m}"
+            else:
+                p = spec.path(folders, project_number)
+                paths[spec.key] = p
+                labels[p] = spec.label
         settings = core.RunSettings(
             regional_folder=self.parameterAsFile(
                 parameters, self.REGIONAL_FOLDER, context
             ),
-            out_dir=out_dir,
-            methods=tuple(METHOD_CODES[i] for i in chosen),
+            out_dir="",
+            methods=methods,
             bedrock_source=BEDROCK_CODES[
                 self.parameterAsEnum(parameters, self.BEDROCK_SOURCE, context)
             ],
@@ -343,7 +481,14 @@ class HydrologicSoilGroupsAlgorithm(QgsProcessingAlgorithm):
                 parameters, self.SA_SHALLOW, context
             ),
             sa_adjust_water=self.parameterAsBoolean(parameters, self.SA_WATER, context),
-            write_report=self.parameterAsBoolean(parameters, self.REPORT, context),
+            write_report=core.OUT_REPORT in paths,
+            outputs=paths,
+            report_context={
+                "project_number": project_number,
+                "project_name": project_name,
+                "software": _software_version(),
+                "labels": labels,
+            },
         )
         try:
             ksat_path = core.find_regional_files(settings.regional_folder)["ksat"]
@@ -365,20 +510,36 @@ class HydrologicSoilGroupsAlgorithm(QgsProcessingAlgorithm):
             raise QgsProcessingException(str(exc)) from exc
         for w in result.warnings:
             feedback.pushWarning(w)
-        feedback.pushInfo(f"Finished in {result.seconds:.0f} s; outputs in {out_dir}")
-        if result.report_path:
-            feedback.pushInfo(f"Report: {result.report_path}")
-
+        for path, reason in result.failed:
+            feedback.reportError(
+                f"{Path(path).name} could not be written ({reason}). If it is open "
+                "in QGIS, Excel or Word, close it and run again.",
+                fatalError=False,
+            )
+        for path in result.files:
+            feedback.pushInfo(f"Written: {path}")
+        feedback.pushInfo(f"Finished in {result.seconds:.0f} s.")
+        if not result.files:
+            raise QgsProcessingException(
+                "No output could be written - see the errors above."
+            )
         outputs = [
             qgis_ui.OutputLayer(
-                path=o["path"], name=o["name"], main=o["main"], classes=o["classes"]
+                path=o["path"], name=o["name"], main=o["main"],
+                classes=o["classes"],
             )
             for o in core.output_layers(result)
-            if Path(o["path"]).is_file()
-        ]
-        qlr = str(Path(out_dir) / "hsg_layers.qlr")
-        if qgis_ui.write_layer_file(outputs, qlr, feedback):
-            feedback.pushInfo(f"Layer file (reloads all outputs, styled): {qlr}")
-        choice = self.parameterAsEnum(parameters, self.LOAD_LAYERS, context)
-        qgis_ui.load_outputs(context, outputs, choice, self._post_processors)
-        return {self.OUTPUT_FOLDER: out_dir}
+            if o["path"] in result.files
+        ]  # fmt: skip
+        if outputs:
+            stem = f"{clean_name_part(project_number)}_" if project_number else ""
+            qlr = str(Path(folders[RASTER]) / f"{stem}HSG_Layers.qlr")
+            if qgis_ui.write_layer_file(outputs, qlr, feedback):
+                feedback.pushInfo(f"Layer file (reloads all outputs, styled): {qlr}")
+            choice = self.parameterAsEnum(parameters, self.LOAD_LAYERS, context)
+            qgis_ui.load_outputs(context, outputs, choice, self._post_processors)
+        out = {name: folders[kind] for kind, (name, _) in FOLDER_PARAMS.items()
+               if kind in folders}  # fmt: skip
+        if result.report_path:
+            out[output_param(core.OUT_REPORT)] = result.report_path
+        return out

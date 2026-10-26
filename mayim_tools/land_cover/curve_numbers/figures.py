@@ -1,5 +1,6 @@
-"""Figures for the SCS Curve Numbers report, in the publication style of the
-soil tools (same map frame, fonts and sizes). matplotlib object API only."""
+"""Figures for the SCS Curve Numbers report in the Mayim chart house style
+(the soil tools' map frame; 16.5 cm, Arial Narrow 9 pt, house colours,
+italic legends without a frame). matplotlib object API only."""
 
 from __future__ import annotations
 
@@ -7,14 +8,18 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from mayim_tools._common.docx_report import C_AQUA, C_BLUE, C_INK, C_INK_2
 from mayim_tools.soil._common.grid import TargetGrid
 from mayim_tools.soil.regional_parameterisation.figures import (
+    C_AMBER,
+    C_BLUE,
+    C_INK,
+    C_RED,
     _clean,
     _figure,
     _png,
     _style,
     categorical_maps,
+    chart_style,
     continuous_maps,
 )
 
@@ -80,51 +85,67 @@ def landcover_map(result, colours):
     return categorical_maps(v, [(arr, "Land cover")], cols, labels)
 
 
+def _legend(ax, handles, **kw):
+    legend = ax.legend(
+        handles=handles,
+        prop=chart_style().font_props(style="italic"),
+        frameon=False,
+        **kw,
+    )
+    for text in legend.get_texts():
+        text.set_color(C_INK)
+    return legend
+
+
 def histogram(result):
+    from matplotlib.lines import Line2D
+
     with _style():
-        fig = _figure(5.5)
+        fig = _figure(6.0)
         ax = fig.add_subplot(1, 1, 1)
         h = result.histogram.astype(float)
         area = h * result.cell_km2
-        ax.bar(np.arange(101), area, width=1.0, color=C_BLUE, edgecolor="none")
-        _clean(ax)
+        ax.bar(np.arange(101), area, width=1.0, color=C_BLUE, edgecolor=C_INK, lw=0.75)
         ax.set_xlim(20, 100.5)
-        ax.set_xlabel("Design curve number")
-        ax.set_ylabel("Area (km2)")
+        ax.set_xlabel("Design curve number (-)")
+        ax.set_ylabel("Area (km²)")
         row = result.zone_rows[0]
         mean = row["Mean CN design"]
         eq = next(
             v for k, v in row.items() if k.startswith("Runoff-equivalent CN design")
         )
         top = ax.get_ylim()[1]
-        ax.set_ylim(0, top * 1.25)
-        for x, lab, ls, y in (
-            (mean, "area-weighted mean", "--", 1.18),
-            (eq, "runoff-equivalent", "-", 1.06),
+        ax.set_ylim(0, top * 1.3)
+        _clean(ax)
+        handles = []
+        for x, lab, ls, col in (
+            (mean, "Area-weighted mean", "--", C_INK),
+            (eq, "Runoff-equivalent", "-", C_RED),
         ):
             if np.isfinite(x):
-                ax.axvline(x, color=C_INK, lw=0.8, ls=ls)
-                ax.text(
-                    x,
-                    top * y,
-                    f" {lab} {x:.1f} ",
-                    fontsize=6,
-                    va="center",
-                    ha="right",
-                    color=C_INK,
-                    bbox={"facecolor": "white", "edgecolor": "none", "pad": 0.5},
-                )
+                ax.axvline(x, color=col, lw=1.5 if col == C_RED else 0.75, ls=ls)
+                handles.append(
+                    Line2D(
+                        [], [], color=col, lw=1.5 if col == C_RED else 0.75, ls=ls,
+                        label=f"{lab} CN {x:.1f}",
+                    )
+                )  # fmt: skip
+        if handles:
+            _legend(ax, handles, loc="upper left")
         fig.tight_layout()
         return _png(fig)
 
 
 def zone_ranges(result):
     """Per zone: mean CN P05-P95 (bar), mean design (dot), runoff-equivalent
-    design (diamond) and its P05-P95 (thin line)."""
+    design (diamond) and its P05-P95 (line)."""
+    from matplotlib.lines import Line2D
+    from matplotlib.ticker import NullLocator
+
     rows = result.zone_rows
     key_eq = next(k for k in rows[0] if k.startswith("Runoff-equivalent CN design"))
     with _style():
-        fig = _figure(1.6 + 0.65 * len(rows))
+        fig = _figure(2.4 + 0.75 * len(rows))
         ax = fig.add_subplot(1, 1, 1)
         for i, r in enumerate(rows):
             y = len(rows) - 1 - i
@@ -132,7 +153,7 @@ def zone_ranges(result):
                 [r["Mean CN P05"], r["Mean CN P95"]],
                 [y + 0.12] * 2,
                 color=C_BLUE,
-                lw=4,
+                lw=5,
                 alpha=0.35,
                 solid_capstyle="butt",
             )
@@ -140,66 +161,63 @@ def zone_ranges(result):
             ax.plot(
                 [r["Runoff-equivalent CN P05"], r["Runoff-equivalent CN P95"]],
                 [y - 0.12] * 2,
-                color=C_AQUA,
-                lw=1.2,
+                color=C_RED,
+                lw=1.5,
             )
-            ax.plot(r[key_eq], y - 0.12, "D", color=C_AQUA, ms=4)
+            ax.plot(r[key_eq], y - 0.12, "D", color=C_RED, ms=4)
         ax.set_yticks(range(len(rows)))
         ax.set_yticklabels([r["Zone"] for r in rows][::-1])
         ax.set_ylim(-0.7, len(rows) - 0.3)
+        ax.set_xlabel("Curve number (-)")
         _clean(ax)
-        ax.set_xlabel("Curve number")
-        from matplotlib.lines import Line2D
-
-        ax.legend(
-            handles=[
-                Line2D(
-                    [],
-                    [],
-                    color=C_BLUE,
-                    marker="o",
-                    lw=4,
-                    alpha=0.6,
-                    label="area-weighted mean, P05-P95",
-                ),
-                Line2D(
-                    [],
-                    [],
-                    color=C_AQUA,
-                    marker="D",
-                    lw=1.2,
-                    label="runoff-equivalent, P05-P95",
-                ),
+        ax.yaxis.set_minor_locator(NullLocator())
+        _legend(
+            ax,
+            [
+                Line2D([], [], color=C_BLUE, marker="o", lw=5, alpha=0.6,
+                       label="Area-weighted mean, P05 to P95"),
+                Line2D([], [], color=C_RED, marker="D", lw=1.5,
+                       label="Runoff-equivalent, P05 to P95"),
             ],
             loc="lower center",
             bbox_to_anchor=(0.5, 1.0),
             ncol=2,
-        )
+        )  # fmt: skip
         fig.tight_layout()
         return _png(fig)
 
 
 def uncertainty_split(result):
+    from matplotlib.patches import Patch
+    from matplotlib.ticker import NullLocator
+
     rows = [
         r for r in result.zone_rows if np.isfinite(r["Soil share of uncertainty (%)"])
     ]
     if not rows:
         raise ValueError("no uncertainty")
     with _style():
-        fig = _figure(1.4 + 0.5 * len(rows))
+        fig = _figure(2.4 + 0.6 * len(rows))
         ax = fig.add_subplot(1, 1, 1)
         names = [r["Zone"] for r in rows][::-1]
         soil = np.array([r["Soil share of uncertainty (%)"] for r in rows][::-1])
-        ax.barh(names, soil, color=C_BLUE, label="soil group")
-        ax.barh(
-            names, 100 - soil, left=soil, color="#c9c7c2", label="land-cover condition"
-        )
+        ax.barh(names, soil, color=C_BLUE, edgecolor=C_INK, lw=0.75)
+        ax.barh(names, 100 - soil, left=soil, color=C_AMBER, edgecolor=C_INK, lw=0.75)
         ax.set_xlim(0, 100)
         ax.set_xlabel("Share of the CN uncertainty (%)")
-        _clean(ax, grid=False)
-        ax.tick_params(axis="y", length=0)
-        ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=2)
-        for s in ("left",):
-            ax.spines[s].set_color(C_INK_2)
+        _clean(ax)
+        ax.yaxis.set_minor_locator(NullLocator())
+        ax.grid(False, axis="y", which="both")
+        _legend(
+            ax,
+            [
+                Patch(facecolor=C_BLUE, edgecolor=C_INK, lw=0.75, label="Soil group"),
+                Patch(facecolor=C_AMBER, edgecolor=C_INK, lw=0.75,
+                      label="Land-cover condition"),
+            ],
+            loc="lower center",
+            bbox_to_anchor=(0.5, 1.0),
+            ncol=2,
+        )  # fmt: skip
         fig.tight_layout()
         return _png(fig)
