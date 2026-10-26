@@ -104,7 +104,7 @@ from mayim_tools.soil._common.stats import (  # noqa: F401
     texture_sum_check,
 )
 
-TOOL_VERSION = "0.4.0"
+TOOL_VERSION = "0.5.0"
 
 BASE_URL = "https://files.isric.org/soilgrids/latest/data/"
 SG2017_URL = "https://files.isric.org/soilgrids/former/2017-03-10/data/"

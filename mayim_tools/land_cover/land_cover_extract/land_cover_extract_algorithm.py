@@ -26,17 +26,15 @@ from qgis.core import (
     QgsProcessingParameterFeatureSource,
     QgsProcessingParameterField,
     QgsProcessingParameterFile,
-    QgsProcessingParameterFileDestination,
-    QgsProcessingParameterFolderDestination,
     QgsProcessingParameterNumber,
     QgsProcessingParameterPoint,
     QgsUnitTypes,
 )
 from qgis.PyQt.QtGui import QIcon
 
+from mayim_tools.soil._common import extract_files as xf
 from mayim_tools.soil._common import qgis_ui
 from mayim_tools.soil._common.export import (
-    metadata_path_for,
     write_class_geotiff,
     write_metadata_csv,
     write_points_csv,
@@ -119,8 +117,6 @@ class LandCoverExtractAlgorithm(QgsProcessingAlgorithm):
     MAX_AREA_KM2 = "MAX_AREA_KM2"
     WORKERS = "WORKERS"
     LOAD_LAYERS = "LOAD_LAYERS"
-    OUTPUT_FOLDER = "OUTPUT_FOLDER"
-    OUTPUT_CSV = "OUTPUT_CSV"
 
     MODE_OPTIONS = ["Area (class GeoTIFF)", "Points (CSV)"]
 
@@ -182,7 +178,8 @@ class LandCoverExtractAlgorithm(QgsProcessingAlgorithm):
             "(Byte, nodata 0, colours and class names embedded) and a layer file. "
             "Point mode: a CSV with the class code and name at each site (SANLC "
             "adds the SALCC level 1 and 2 groups). Both modes write "
-            "worldcover_metadata.csv / sanlc_metadata.csv (or <name>_metadata.csv) "
+            "worldcover_metadata.csv / sanlc_metadata.csv (point mode: "
+            "worldcover_points.csv / sanlc_points.csv and <name>_metadata.csv) "
             "with citations, accuracy, class areas (SANLC also by SALCC level 1 "
             "group) or counts, and warnings.\n"
             "\n"
@@ -198,7 +195,7 @@ class LandCoverExtractAlgorithm(QgsProcessingAlgorithm):
             "Data: WorldCover CC BY 4.0, (c) ESA WorldCover project / Contains "
             "modified Copernicus Sentinel data processed by ESA WorldCover "
             "consortium. SANLC (c) Department of Forestry, Fisheries and the "
-            "Environment, South Africa.\n"
+            "Environment, South Africa.\n" + "\n\n" + xf.FILES_HELP
         )
 
     def initAlgorithm(self, config=None):
@@ -324,19 +321,7 @@ class LandCoverExtractAlgorithm(QgsProcessingAlgorithm):
                 defaultValue=qgis_ui.LOAD_ALL,
             )
         )
-        self.addParameter(
-            QgsProcessingParameterFolderDestination(
-                self.OUTPUT_FOLDER, "Output folder (area mode)", optional=True
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterFileDestination(
-                self.OUTPUT_CSV,
-                "Output CSV (points mode)",
-                fileFilter="CSV files (*.csv)",
-                optional=True,
-            )
-        )
+        xf.add_output_parameters(self)
 
     # ------------------------------------------------------------------
 
@@ -391,10 +376,8 @@ class LandCoverExtractAlgorithm(QgsProcessingAlgorithm):
             return {}
 
     def _run_area(self, parameters, context, feedback, selection, common, gdal_ver):
-        folder = self.parameterAsString(parameters, self.OUTPUT_FOLDER, context)
-        if not folder:
-            raise QgsProcessingException("Area mode needs an output folder.")
-        Path(folder).mkdir(parents=True, exist_ok=True)
+        files = xf.ExtractFiles(self, parameters, context, feedback, area=True)
+        folder = files.folder
         out_crs = self.parameterAsCrs(parameters, self.OUTPUT_CRS, context)
         if not out_crs.isValid():
             raise QgsProcessingException("Choose a valid output CRS.")
@@ -426,7 +409,7 @@ class LandCoverExtractAlgorithm(QgsProcessingAlgorithm):
             bounds_ll,
             folder,
             geographic=out_crs.isGeographic(),
-            write_fn=_write_classes,
+            write_fn=files.raster_writer(_write_classes),
             **common,
         )
         settings = {
@@ -439,30 +422,39 @@ class LandCoverExtractAlgorithm(QgsProcessingAlgorithm):
             "Grid size (cells)": f"{grid.width} x {grid.height}",
             "Resampling": "nearest neighbour",
         }
-        meta_path = metadata_path_for(folder, "area", METADATA_NAME)
-        write_metadata_csv(
-            core.build_metadata(result, selection, settings, gdal_ver), meta_path
+        meta_path = files.path(METADATA_NAME)
+        files.write(
+            meta_path,
+            lambda p: write_metadata_csv(
+                core.build_metadata(result, selection, settings, gdal_ver),
+                p,
+                encoding=xf.CSV_ENCODING,
+            ),
         )
         self._report(result, feedback)
-        feedback.pushInfo(f"{len(result.files)} raster(s) written to {folder}")
+        n_written = sum(1 for path in result.files if files.actual(path))
+        feedback.pushInfo(f"{n_written} raster(s) written to {folder}")
         feedback.pushInfo(f"Metadata: {meta_path}")
         outputs = [
             qgis_ui.OutputLayer(
-                path=path, name=Path(path).stem, main=True, classes=CLASS_STYLE
+                path=files.actual(path),
+                name=Path(files.actual(path) or path).stem,
+                main=True,
+                classes=CLASS_STYLE,
             )
             for path in result.files
         ]
-        qlr = str(Path(folder) / "worldcover_layers.qlr")
+        outputs = [o for o in outputs if o.path]
+        qlr = files.path("worldcover_layers.qlr")
         if qgis_ui.write_layer_file(outputs, qlr, feedback):
             feedback.pushInfo(f"Layer file (reloads all outputs, styled): {qlr}")
         choice = self.parameterAsEnum(parameters, self.LOAD_LAYERS, context)
         qgis_ui.load_outputs(context, outputs, choice, self._post_processors)
-        return {self.OUTPUT_FOLDER: folder}
+        return files.finish({})
 
     def _run_points(self, parameters, context, feedback, selection, common, gdal_ver):
-        out_csv = self.parameterAsFileOutput(parameters, self.OUTPUT_CSV, context)
-        if not out_csv:
-            raise QgsProcessingException("Points mode needs an output CSV.")
+        files = xf.ExtractFiles(self, parameters, context, feedback, area=False)
+        out_csv = files.path("worldcover_points.csv")
         sites = [
             core.Site(label, lon, lat)
             for label, lon, lat in qgis_ui.point_sites(
@@ -477,21 +469,32 @@ class LandCoverExtractAlgorithm(QgsProcessingAlgorithm):
         ]
         feedback.pushInfo(f"{len(sites)} site(s) to sample.")
         result = core.extract_points(selection, sites, **common)
-        n_rows, _ = write_points_csv(result.rows, out_csv, core.POINT_COLUMNS)
-        meta_path = metadata_path_for(out_csv, "points")
-        write_metadata_csv(
-            core.build_metadata(
-                result,
-                selection,
-                {"Sites": len(sites), "Sampling": "nearest cell"},
-                gdal_ver,
+        counts = {}
+        files.write(
+            out_csv,
+            lambda p: counts.update(
+                n=write_points_csv(result.rows, p, core.POINT_COLUMNS)
             ),
+        )
+        n_rows, _ = counts.get("n", (0, 0))
+        meta_path = out_csv[:-4] + "_metadata.csv"
+        files.write(
             meta_path,
+            lambda p: write_metadata_csv(
+                core.build_metadata(
+                    result,
+                    selection,
+                    {"Sites": len(sites), "Sampling": "nearest cell"},
+                    gdal_ver,
+                ),
+                p,
+                encoding=xf.CSV_ENCODING,
+            ),
         )
         self._report(result, feedback)
         feedback.pushInfo(f"{n_rows} rows written to {out_csv}")
         feedback.pushInfo(f"Metadata: {meta_path}")
-        return {self.OUTPUT_CSV: out_csv}
+        return files.finish({})
 
     # ------------------------------------------------------------------
     # SANLC (local GeoTIFF)
@@ -543,10 +546,8 @@ class LandCoverExtractAlgorithm(QgsProcessingAlgorithm):
     def _run_sanlc_area(
         self, parameters, context, feedback, year, path, common, gdal_ver, tool
     ):
-        folder = self.parameterAsString(parameters, self.OUTPUT_FOLDER, context)
-        if not folder:
-            raise QgsProcessingException("Area mode needs an output folder.")
-        Path(folder).mkdir(parents=True, exist_ok=True)
+        files = xf.ExtractFiles(self, parameters, context, feedback, area=True)
+        folder = files.folder
         out_crs = self.parameterAsCrs(parameters, self.OUTPUT_CRS, context)
         if not out_crs.isValid():
             raise QgsProcessingException("Choose a valid output CRS.")
@@ -578,7 +579,7 @@ class LandCoverExtractAlgorithm(QgsProcessingAlgorithm):
             grid,
             folder,
             geographic=out_crs.isGeographic(),
-            write_fn=_write_sanlc,
+            write_fn=files.raster_writer(_write_sanlc),
             **common,
         )
         settings = {
@@ -591,9 +592,14 @@ class LandCoverExtractAlgorithm(QgsProcessingAlgorithm):
             "Grid size (cells)": f"{grid.width} x {grid.height}",
             "Resampling": "nearest neighbour",
         }
-        meta_path = metadata_path_for(folder, "area", SANLC_METADATA_NAME)
-        write_metadata_csv(
-            sl.build_metadata(result, settings, gdal_ver, tool), meta_path
+        meta_path = files.path(SANLC_METADATA_NAME)
+        files.write(
+            meta_path,
+            lambda p: write_metadata_csv(
+                sl.build_metadata(result, settings, gdal_ver, tool),
+                p,
+                encoding=xf.CSV_ENCODING,
+            ),
         )
         feedback.pushInfo(f"Finished in {result.seconds:.0f} s.")
         rec = result.records[0]
@@ -606,27 +612,30 @@ class LandCoverExtractAlgorithm(QgsProcessingAlgorithm):
                     f"{sl.class_name(c)} {100 * a / total:.0f} %" for c, a in top
                 )
             )
-        feedback.pushInfo(f"Raster: {result.files[0]}")
+        feedback.pushInfo(f"Raster: {files.actual(result.files[0])}")
         feedback.pushInfo(f"Metadata: {meta_path}")
         outputs = [
             qgis_ui.OutputLayer(
-                path=p, name=Path(p).stem, main=True, classes=SANLC_STYLE
+                path=files.actual(p),
+                name=Path(files.actual(p) or p).stem,
+                main=True,
+                classes=SANLC_STYLE,
             )
             for p in result.files
         ]
-        qlr = str(Path(folder) / "sanlc_layers.qlr")
+        outputs = [o for o in outputs if o.path]
+        qlr = files.path("sanlc_layers.qlr")
         if qgis_ui.write_layer_file(outputs, qlr, feedback):
             feedback.pushInfo(f"Layer file (reloads the output, styled): {qlr}")
         choice = self.parameterAsEnum(parameters, self.LOAD_LAYERS, context)
         qgis_ui.load_outputs(context, outputs, choice, self._post_processors)
-        return {self.OUTPUT_FOLDER: folder}
+        return files.finish({})
 
     def _run_sanlc_points(
         self, parameters, context, feedback, year, path, common, gdal_ver, tool
     ):
-        out_csv = self.parameterAsFileOutput(parameters, self.OUTPUT_CSV, context)
-        if not out_csv:
-            raise QgsProcessingException("Points mode needs an output CSV.")
+        files = xf.ExtractFiles(self, parameters, context, feedback, area=False)
+        out_csv = files.path("sanlc_points.csv")
         sites = [
             core.Site(label, lon, lat)
             for label, lon, lat in qgis_ui.point_sites(
@@ -641,20 +650,31 @@ class LandCoverExtractAlgorithm(QgsProcessingAlgorithm):
         ]
         feedback.pushInfo(f"{len(sites)} site(s) to sample.")
         result = sl.extract_points(year, path, sites, **common)
-        n_rows, _ = write_points_csv(result.rows, out_csv, sl.POINT_COLUMNS)
-        meta_path = metadata_path_for(out_csv, "points")
-        write_metadata_csv(
-            sl.build_metadata(
-                result,
-                {"Sites": len(sites), "Sampling": "nearest cell"},
-                gdal_ver,
-                tool,
+        counts = {}
+        files.write(
+            out_csv,
+            lambda p: counts.update(
+                n=write_points_csv(result.rows, p, sl.POINT_COLUMNS)
             ),
+        )
+        n_rows, _ = counts.get("n", (0, 0))
+        meta_path = out_csv[:-4] + "_metadata.csv"
+        files.write(
             meta_path,
+            lambda p: write_metadata_csv(
+                sl.build_metadata(
+                    result,
+                    {"Sites": len(sites), "Sampling": "nearest cell"},
+                    gdal_ver,
+                    tool,
+                ),
+                p,
+                encoding=xf.CSV_ENCODING,
+            ),
         )
         feedback.pushInfo(f"{n_rows} rows written to {out_csv}")
         feedback.pushInfo(f"Metadata: {meta_path}")
-        return {self.OUTPUT_CSV: out_csv}
+        return files.finish({})
 
     @staticmethod
     def _report(result, feedback):

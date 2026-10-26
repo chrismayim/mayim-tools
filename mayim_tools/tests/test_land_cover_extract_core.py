@@ -377,7 +377,7 @@ def test_gdal_end_to_end(tmp_path, monkeypatch):
 
     out = tmp_path / "pts.csv"
     write_points_csv(pts.rows, out, core.POINT_COLUMNS)
-    with open(out, encoding="utf-8") as f:
+    with open(out, encoding="utf-8-sig") as f:
         rows = list(csv.DictReader(f))
     assert rows[0]["ClassCode"] == "40" and rows[2]["ClassCode"] == ""
 

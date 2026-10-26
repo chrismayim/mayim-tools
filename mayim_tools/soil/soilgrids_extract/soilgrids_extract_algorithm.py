@@ -22,23 +22,23 @@ from qgis.core import (
     QgsProcessingParameterExtent,
     QgsProcessingParameterFeatureSource,
     QgsProcessingParameterField,
-    QgsProcessingParameterFileDestination,
-    QgsProcessingParameterFolderDestination,
     QgsProcessingParameterNumber,
     QgsProcessingParameterPoint,
     QgsUnitTypes,
 )
 from qgis.PyQt.QtGui import QIcon
 
+from mayim_tools.soil._common import extract_files as xf
 from mayim_tools.soil._common import qgis_ui
 
 from . import core
 from .export import (
-    metadata_path_for,
     write_metadata_csv,
     write_multiband_geotiff,
     write_points_csv,
 )
+
+METADATA_NAME = "soilgrids_metadata.csv"
 
 STAT_OPTIONS = [
     ("mean", "Mean"),
@@ -64,8 +64,6 @@ class SoilGridsExtractAlgorithm(QgsProcessingAlgorithm):
     LOAD_LAYERS = "LOAD_LAYERS"
     SG2017 = "SG2017"
     WORKERS = "WORKERS"
-    OUTPUT_FOLDER = "OUTPUT_FOLDER"
-    OUTPUT_CSV = "OUTPUT_CSV"
 
     MODE_OPTIONS = ["Area (multi-band GeoTIFFs)", "Points (CSV)"]
 
@@ -133,11 +131,13 @@ class SoilGridsExtractAlgorithm(QgsProcessingAlgorithm):
             "band; pick another depth under Layer Properties > Symbology > Band. "
             "One layer file, soilgrids_layers.qlr, is written per run: drag it "
             "into any QGIS project to reload every output with its style (no "
-            "style file per raster). Point mode: one long-format CSV (Site, "
+            "style file per raster). Point mode: one long-format CSV, "
+            "soilgrids_points.csv (Site, "
             "Longitude, Latitude, Product, Variable, Description, depth, "
             "Statistic, Value, Units, Route). Both modes write a metadata CSV "
             "(soilgrids_metadata.csv "
-            "in the folder, or <name>_metadata.csv next to the CSV) with sources, "
+            "beside the rasters, or soilgrids_points_metadata.csv beside the "
+            "point CSV) with sources, "
             "access date, routes, units, per-layer statistics, a sand+silt+clay "
             "check and all warnings.\n"
             "\n"
@@ -180,7 +180,7 @@ class SoilGridsExtractAlgorithm(QgsProcessingAlgorithm):
             "if the area's bounding box is larger; raise it deliberately for "
             "large studies.\n"
             "  Parallel downloads (advanced, default 8): layers read at the same "
-            "time. Lower it on a slow or metered connection.\n"
+            "time. Lower it on a slow or metered connection.\n" + "\n\n" + xf.FILES_HELP
         )
 
     def initAlgorithm(self, config=None):
@@ -311,19 +311,7 @@ class SoilGridsExtractAlgorithm(QgsProcessingAlgorithm):
                 defaultValue=qgis_ui.LOAD_ALL,
             )
         )
-        self.addParameter(
-            QgsProcessingParameterFolderDestination(
-                self.OUTPUT_FOLDER, "Output folder (area mode)", optional=True
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterFileDestination(
-                self.OUTPUT_CSV,
-                "Output CSV (points mode)",
-                fileFilter="CSV files (*.csv)",
-                optional=True,
-            )
-        )
+        xf.add_output_parameters(self)
 
     # ------------------------------------------------------------------
     # Input collection
@@ -409,10 +397,8 @@ class SoilGridsExtractAlgorithm(QgsProcessingAlgorithm):
             return {}
 
     def _run_area(self, parameters, context, feedback, selection, common, gdal_ver):
-        folder = self.parameterAsString(parameters, self.OUTPUT_FOLDER, context)
-        if not folder:
-            raise QgsProcessingException("Area mode needs an output folder.")
-        Path(folder).mkdir(parents=True, exist_ok=True)
+        files = xf.ExtractFiles(self, parameters, context, feedback, area=True)
+        folder = files.folder
         out_crs = self.parameterAsCrs(parameters, self.OUTPUT_CRS, context)
         if not out_crs.isValid():
             raise QgsProcessingException("Choose a valid output CRS.")
@@ -436,7 +422,7 @@ class SoilGridsExtractAlgorithm(QgsProcessingAlgorithm):
             grid,
             bounds_ll,
             folder,
-            write_fn=write_multiband_geotiff,
+            write_fn=files.raster_writer(write_multiband_geotiff),
             **common,
         )
         settings = {
@@ -450,38 +436,49 @@ class SoilGridsExtractAlgorithm(QgsProcessingAlgorithm):
             "Buffer (cells)": core.BUFFER_CELLS,
             "Resampling": "nearest neighbour",
         }
-        meta_path = metadata_path_for(folder, "area")
-        write_metadata_csv(
-            core.build_metadata(result, selection, settings, gdal_ver), meta_path
+        meta_path = files.path(METADATA_NAME)
+        files.write(
+            meta_path,
+            lambda p: write_metadata_csv(
+                core.build_metadata(result, selection, settings, gdal_ver),
+                p,
+                encoding=xf.CSV_ENCODING,
+            ),
         )
         self._report(result, feedback)
-        feedback.pushInfo(f"{len(result.files)} raster(s) written to {folder}")
+        n_written = sum(1 for path in result.files if files.actual(path))
+        feedback.pushInfo(f"{n_written} raster(s) written to {folder}")
         feedback.pushInfo(f"Metadata: {meta_path}")
 
         outputs = [
             qgis_ui.OutputLayer(
-                path=path,
-                name=Path(path).stem
+                path=files.actual(path),
+                name=Path(files.actual(path) or path).stem
                 + (" (median)" if Path(path).stem.endswith("_Q0.50") else ""),
                 main=path in result.load_files,
             )
             for path in result.files
         ]
-        qlr = str(Path(folder) / "soilgrids_layers.qlr")
+        outputs = [o for o in outputs if o.path]
+        qlr = files.path("soilgrids_layers.qlr")
         if qgis_ui.write_layer_file(outputs, qlr, feedback):
             feedback.pushInfo(f"Layer file (reloads all outputs, styled): {qlr}")
         choice = self.parameterAsEnum(parameters, self.LOAD_LAYERS, context)
         qgis_ui.load_outputs(context, outputs, choice, self._post_processors)
-        return {self.OUTPUT_FOLDER: folder}
+        return files.finish({})
 
     def _run_points(self, parameters, context, feedback, selection, common, gdal_ver):
-        out_csv = self.parameterAsFileOutput(parameters, self.OUTPUT_CSV, context)
-        if not out_csv:
-            raise QgsProcessingException("Points mode needs an output CSV.")
+        files = xf.ExtractFiles(self, parameters, context, feedback, area=False)
+        out_csv = files.path("soilgrids_points.csv")
         sites = self._sites(parameters, context, feedback)
         feedback.pushInfo(f"{len(sites)} site(s) to sample.")
         result = core.extract_points(selection, sites, **common)
-        n_rows, n_missing = write_points_csv(result.rows, out_csv)
+        counts = {}
+        files.write(
+            out_csv,
+            lambda p: counts.update(n=write_points_csv(result.rows, p)),
+        )
+        n_rows, n_missing = counts.get("n", (0, 0))
         if n_missing:
             feedback.pushWarning(
                 f"{n_missing} of {n_rows} values are missing (no SoilGrids data at "
@@ -489,14 +486,19 @@ class SoilGridsExtractAlgorithm(QgsProcessingAlgorithm):
                 "empty cells, never as zero."
             )
         settings = {"Sites": len(sites), "Sampling": "nearest cell"}
-        meta_path = metadata_path_for(out_csv, "points")
-        write_metadata_csv(
-            core.build_metadata(result, selection, settings, gdal_ver), meta_path
+        meta_path = out_csv[:-4] + "_metadata.csv"
+        files.write(
+            meta_path,
+            lambda p: write_metadata_csv(
+                core.build_metadata(result, selection, settings, gdal_ver),
+                p,
+                encoding=xf.CSV_ENCODING,
+            ),
         )
         self._report(result, feedback)
         feedback.pushInfo(f"{n_rows} rows written to {out_csv}")
         feedback.pushInfo(f"Metadata: {meta_path}")
-        return {self.OUTPUT_CSV: out_csv}
+        return files.finish({})
 
     @staticmethod
     def _report(result, feedback):

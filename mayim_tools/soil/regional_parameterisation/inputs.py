@@ -227,20 +227,23 @@ def detect_product(refs: list[BandRef]) -> str | None:
 
 
 def read_run_metadata(folder: str) -> dict[str, str]:
-    """'# Run' section of an extraction metadata CSV (Item -> Value)."""
+    """'# Run' section of an extraction metadata CSV (Item -> Value). The
+    file may carry a project-number prefix and a byte-order mark."""
+    from mayim_tools.soil._common.extract_files import find_named_file
+
     for name in (
         "soilgrids_metadata.csv",
         "openlandmap_metadata.csv",
         "isda_metadata.csv",
     ):
-        path = os.path.join(folder, name)
-        if os.path.isfile(path):
+        path = find_named_file(folder, name)
+        if path:
             break
     else:
         return {}
     out: dict[str, str] = {}
     section = None
-    with open(path, newline="", encoding="utf-8") as f:
+    with open(path, newline="", encoding="utf-8-sig") as f:
         for row in csv.reader(f):
             if not row:
                 continue

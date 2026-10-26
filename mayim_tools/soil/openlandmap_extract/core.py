@@ -91,7 +91,7 @@ from .catalogue import (
 )
 from .soil_types import SUBGROUP_NAMES
 
-TOOL_VERSION = "0.4.0"
+TOOL_VERSION = "0.5.0"
 DEFAULT_WORKERS = 8
 DEFAULT_MAX_AREA_KM2 = 5000.0  # 30 m data: 5000 km2 is ~5.6 million cells
 TEXTURE_SUM_TOLERANCE = 2.0

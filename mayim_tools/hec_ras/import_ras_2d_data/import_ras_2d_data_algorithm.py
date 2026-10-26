@@ -104,6 +104,7 @@ from qgis.core import (
     QgsProcessingParameterEnum,
     QgsProcessingParameterFile,
     QgsProcessingParameterFolderDestination,
+    QgsProcessingParameterString,
     QgsRendererCategory,
     QgsSingleSymbolRenderer,
     QgsVectorFileWriter,
@@ -113,6 +114,7 @@ from qgis.core import (
 from qgis.PyQt.QtCore import QMetaType
 from qgis.PyQt.QtGui import QColor, QIcon
 
+from mayim_tools._common.output_files import clean_name_part
 from mayim_tools.hec_ras.import_ras_2d_data.boundary_lines.core import (
     read_boundary_condition_lines,
 )
@@ -148,7 +150,7 @@ from mayim_tools.hec_ras.import_ras_2d_data.structures.core import (
     read_weir_structures,
 )
 
-TOOL_VERSION = "0.4.5"
+TOOL_VERSION = "0.5.0"
 
 # --- Element catalogue -------------------------------------------------
 #
@@ -493,6 +495,7 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
     INPUT_GEOMETRY_HDF = "INPUT_GEOMETRY_HDF"
     CRS = "CRS"
     ELEMENTS = "ELEMENTS"
+    PROJECT_NUMBER = "PROJECT_NUMBER"
     OUTPUT_FOLDER = "OUTPUT_FOLDER"
 
     def createInstance(self):
@@ -528,8 +531,14 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
             "output folder, in one tool run. Use the 'Elements to "
             "import' checklist to pick which of these to write; all "
             "are selected by default. Each selected element becomes "
-            "its own <name>.gpkg file in the output folder and is "
-            "loaded into the project automatically.\n"
+            "its own <project number>_<name>.gpkg file in the output "
+            "folder and is loaded into the project automatically. "
+            "GeoPackage is kept (rather than the shapefiles of the Mayim "
+            "output standard) so the HEC-RAS attribute names, which are "
+            "longer than 10 characters and contain spaces, and the RAS "
+            "styles that use them, stay intact. A file that is open in "
+            "QGIS cannot be replaced: it is reported and the other "
+            "elements are still written.\n"
             "\n"
             "NOTE:\t'2D Mesh Cells (polygons)' isn't one of Chris's "
             "originally-listed elements but is kept from the earlier "
@@ -560,11 +569,12 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
             "geometry is defined in - not yet auto-detected from the "
             "file, set this to match your project.\n"
             "  Elements to import: which geometry types to write.\n"
+            "  Project number (optional): file name prefix.\n"
             "  Output folder: where the .gpkg file for each selected "
-            "element is written, named after the element (spaces - and "
-            "forward slashes, which can't appear in a filename - "
-            "replaced with underscores, e.g. 'SA_2D_connections_-_"
-            "bridge_2D.gpkg').\n"
+            "element is written, named <project number>_<element> (spaces "
+            "- and forward slashes, which can't appear in a filename - "
+            "replaced with underscores, e.g. 'MC2025_014_SA_2D_connections_"
+            "-_bridge_2D.gpkg').\n"
             "\n"
             "STYLING:\tEach output layer is styled automatically on "
             "load. Most elements get one of Chris's saved .qml style "
@@ -603,9 +613,16 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
+            QgsProcessingParameterString(
+                self.PROJECT_NUMBER,
+                "Project number (file name prefix, optional)",
+                optional=True,
+            )
+        )
+        self.addParameter(
             QgsProcessingParameterFolderDestination(
                 self.OUTPUT_FOLDER,
-                "Output folder (one .gpkg per selected element)",
+                "Output folder for vector layers (one GeoPackage per element)",
             )
         )
         # No QML-styles-folder parameter: styling is hard-coded (see
@@ -633,6 +650,11 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
         # without this each styler would be garbage-collected before
         # it ever ran.
         self._post_processors = []
+        self._feedback = feedback
+        project_number = clean_name_part(
+            self.parameterAsString(parameters, self.PROJECT_NUMBER, context) or ""
+        )
+        self._prefix = f"{project_number}_" if project_number else ""
 
         selected = set(self.parameterAsEnums(parameters, self.ELEMENTS, context))
         if not selected:
@@ -690,10 +712,18 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
                     feedback,
                     element_id,
                 )
-            written_paths.append(path)
+            if path:
+                written_paths.append(path)
 
         feedback.pushInfo(f"Wrote {len(written_paths)} layer(s) to {output_folder}")
+        if selected and not written_paths:
+            raise QgsProcessingException(
+                "No layer could be written - see the errors above."
+            )
         return {self.OUTPUT_FOLDER: output_folder}
+
+    def _out_path(self, output_folder, slug) -> str:
+        return str(Path(output_folder) / f"{self._prefix}{slug}.gpkg")
 
     # --- Generic file writers -------------------------------------
     #
@@ -713,7 +743,23 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
         layer.updateFields()
         return layer
 
-    def _export_layer(self, layer, out_path, context):
+    def _export_layer(self, layer, out_path, context) -> bool:
+        """Writes the layer; a file that cannot be replaced (open in QGIS)
+        is reported and False returned, so the other elements are still
+        written."""
+        try:
+            self._write_gpkg(layer, out_path, context)
+        except QgsProcessingException as e:
+            self._feedback.reportError(
+                f"{e} If {Path(out_path).name} is open in QGIS, remove it from "
+                "the project and run again.",
+                fatalError=False,
+            )
+            return False
+        self._feedback.pushInfo(f"Written: {out_path}")
+        return True
+
+    def _write_gpkg(self, layer, out_path, context):
         layer.updateExtents()
         options = QgsVectorFileWriter.SaveVectorOptions()
         options.driverName = "GPKG"
@@ -749,7 +795,7 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
     ):
         feedback.pushInfo(f"{label}: found {len(features)}")
         fields = _attribute_fields(f.attributes for f in features)
-        out_path = str(Path(output_folder) / f"{slug}.gpkg")
+        out_path = self._out_path(output_folder, slug)
         layer = self._build_memory_layer(fields, QgsWkbTypes.MultiLineString, crs)
         qgs_features = []
         for feature in features:
@@ -763,7 +809,8 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
             )
             qgs_features.append(qgs_feature)
         layer.dataProvider().addFeatures(qgs_features)
-        self._export_layer(layer, out_path, context)
+        if not self._export_layer(layer, out_path, context):
+            return None
         self._register_output(
             out_path, label, context, element_id=element_id, category_field="Name"
         )
@@ -774,7 +821,7 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
     ):
         feedback.pushInfo(f"{label}: found {len(features)}")
         fields = _attribute_fields(f.attributes for f in features)
-        out_path = str(Path(output_folder) / f"{slug}.gpkg")
+        out_path = self._out_path(output_folder, slug)
         layer = self._build_memory_layer(fields, QgsWkbTypes.Polygon, crs)
         qgs_features = []
         for feature in features:
@@ -789,7 +836,8 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
                 )
             qgs_features.append(qgs_feature)
         layer.dataProvider().addFeatures(qgs_features)
-        self._export_layer(layer, out_path, context)
+        if not self._export_layer(layer, out_path, context):
+            return None
         self._register_output(out_path, label, context, element_id=element_id)
         return out_path
 
@@ -798,7 +846,7 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
     ):
         feedback.pushInfo(f"{label}: found {len(features)}")
         fields = _attribute_fields(f.attributes for f in features)
-        out_path = str(Path(output_folder) / f"{slug}.gpkg")
+        out_path = self._out_path(output_folder, slug)
         layer = self._build_memory_layer(fields, QgsWkbTypes.Point, crs)
         qgs_features = []
         for feature in features:
@@ -809,7 +857,8 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
             qgs_feature.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(x, y)))
             qgs_features.append(qgs_feature)
         layer.dataProvider().addFeatures(qgs_features)
-        self._export_layer(layer, out_path, context)
+        if not self._export_layer(layer, out_path, context):
+            return None
         self._register_output(out_path, label, context, element_id=element_id)
         return out_path
 
@@ -837,17 +886,15 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
         out_paths = {}
         labels = {}
         if ELEMENT_PERIMETER in wanted:
-            out_paths[ELEMENT_PERIMETER] = str(
-                Path(output_folder) / "2D_perimeter.gpkg"
-            )
+            out_paths[ELEMENT_PERIMETER] = self._out_path(output_folder, "2D_perimeter")
             labels[ELEMENT_PERIMETER] = "2D perimeter"
             layers[ELEMENT_PERIMETER] = self._build_memory_layer(
                 area_field, QgsWkbTypes.Polygon, crs
             )
             feature_lists[ELEMENT_PERIMETER] = []
         if ELEMENT_CELL_POLYGONS in wanted:
-            out_paths[ELEMENT_CELL_POLYGONS] = str(
-                Path(output_folder) / "2D_Mesh_Cells_(polygons).gpkg"
+            out_paths[ELEMENT_CELL_POLYGONS] = self._out_path(
+                output_folder, "2D_Mesh_Cells_(polygons)"
             )
             labels[ELEMENT_CELL_POLYGONS] = "2D Mesh Cells (polygons)"
             layers[ELEMENT_CELL_POLYGONS] = self._build_memory_layer(
@@ -855,8 +902,8 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
             )
             feature_lists[ELEMENT_CELL_POLYGONS] = []
         if ELEMENT_CELL_POINTS in wanted:
-            out_paths[ELEMENT_CELL_POINTS] = str(
-                Path(output_folder) / "2D_computation_points.gpkg"
+            out_paths[ELEMENT_CELL_POINTS] = self._out_path(
+                output_folder, "2D_computation_points"
             )
             labels[ELEMENT_CELL_POINTS] = "2D computation points"
             layers[ELEMENT_CELL_POINTS] = self._build_memory_layer(
@@ -907,7 +954,8 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
         for element_id, layer in layers.items():
             layer.dataProvider().addFeatures(feature_lists[element_id])
             out_path = out_paths[element_id]
-            self._export_layer(layer, out_path, context)
+            if not self._export_layer(layer, out_path, context):
+                continue
             # ELEMENT_CELL_POINTS has a QML mapping (RAS_2D_comp_points)
             # and gets _QmlFileStyler via _register_output below;
             # ELEMENT_PERIMETER/ELEMENT_CELL_POLYGONS have none and

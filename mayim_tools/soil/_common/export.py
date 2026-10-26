@@ -87,13 +87,14 @@ def class_colour(code: int) -> str:
 
 
 def write_points_csv(
-    rows: list[dict], path: str | Path, columns: list[str]
+    rows: list[dict], path: str | Path, columns: list[str], encoding="utf-8-sig"
 ) -> tuple[int, int]:
-    """Long-format point CSV with the given columns. Missing values are
-    empty cells, never zero; Longitude/Latitude are rounded to 6 decimals.
-    Returns (n_rows, n_missing)."""
+    """Long-format point CSV with the given columns, UTF-8 with a
+    byte-order mark. Missing values are empty cells, never zero;
+    Longitude/Latitude are rounded to 6 decimals. Returns (n_rows,
+    n_missing)."""
     n_missing = 0
-    with open(path, "w", newline="", encoding="utf-8") as f:
+    with open(path, "w", newline="", encoding=encoding) as f:
         w = csv.writer(f)
         w.writerow(columns)
         for row in rows:

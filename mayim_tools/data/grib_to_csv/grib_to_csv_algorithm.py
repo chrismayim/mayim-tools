@@ -10,21 +10,28 @@ Mirrors the design_rainfall plugin's structure: this file is a thin
 QGIS wrapper, all real logic lives in core.py (zero QGIS dependency).
 """
 
+import os
 from pathlib import Path
 
 from qgis.core import (
     QgsProcessingAlgorithm,
     QgsProcessingContext,
+    QgsProcessingException,
     QgsProcessingFeedback,
+    QgsProcessingOutputFile,
     QgsProcessingParameterBoolean,
     QgsProcessingParameterFile,
-    QgsProcessingParameterFileDestination,
+    QgsProcessingParameterFolderDestination,
     QgsProcessingParameterNumber,
     QgsProcessingParameterString,
 )
 from qgis.PyQt.QtGui import QIcon
 
+from mayim_tools._common.output_files import single_output_path
+
 from .core import grib_to_csv, read_variable_info
+
+TOOL_VERSION = "0.3.0"
 
 
 class GribToCsvAlgorithm(QgsProcessingAlgorithm):
@@ -34,6 +41,8 @@ class GribToCsvAlgorithm(QgsProcessingAlgorithm):
     CONVERT_MM = "CONVERT_MM"
     DROP_NA = "DROP_NA"
     DECIMALS = "DECIMALS"
+    PROJECT_NUMBER = "PROJECT_NUMBER"
+    FOLDER_CSV = "FOLDER_CSV"
     OUTPUT_CSV = "OUTPUT_CSV"
 
     def icon(self):
@@ -57,6 +66,7 @@ class GribToCsvAlgorithm(QgsProcessingAlgorithm):
 
     def shortHelpString(self):
         return (
+            f"GRIB to CSV (version {TOOL_VERSION})\n\n"
             "Exports a variable from a GRIB file (ERA5 or similar "
             "reanalysis/forecast product) to CSV - one row per grid-cell/"
             "time combination, using the file's own dimensions (typically "
@@ -71,7 +81,12 @@ class GribToCsvAlgorithm(QgsProcessingAlgorithm):
             "by convention and this multiplies by 1000, relabelling units "
             "- it only acts on variables whose units are already metre-"
             "based, so it's safe to leave on for non-precipitation "
-            "variables too."
+            "variables too.\n\n"
+            "OUTPUT:\tChoose the CSV folder. The file is named <project "
+            "number>_<GRIB file name>_<variable>.csv and replaces a file of "
+            "the same name; a file that is open in Excel cannot be replaced "
+            "and is reported. The CSV is UTF-8 with a byte-order mark (Excel "
+            "shows it cleanly; pandas reads it directly)."
         )
 
     def initAlgorithm(self, config=None):
@@ -115,12 +130,18 @@ class GribToCsvAlgorithm(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
-            QgsProcessingParameterFileDestination(
-                self.OUTPUT_CSV,
-                "Output CSV",
-                fileFilter="CSV files (*.csv)",
+            QgsProcessingParameterString(
+                self.PROJECT_NUMBER,
+                "Project number (file name prefix, optional)",
+                optional=True,
             )
         )
+        self.addParameter(
+            QgsProcessingParameterFolderDestination(
+                self.FOLDER_CSV, "Output folder for CSV files"
+            )
+        )
+        self.addOutput(QgsProcessingOutputFile(self.OUTPUT_CSV, "Output CSV"))
 
     def processAlgorithm(
         self, parameters, context: QgsProcessingContext, feedback: QgsProcessingFeedback
@@ -134,7 +155,13 @@ class GribToCsvAlgorithm(QgsProcessingAlgorithm):
             if parameters.get(self.DECIMALS) is not None
             else None
         )
-        output_csv = self.parameterAsFileOutput(parameters, self.OUTPUT_CSV, context)
+        folder = self.parameterAsFileOutput(parameters, self.FOLDER_CSV, context)
+        if not folder:
+            raise QgsProcessingException("Choose the output folder for CSV files.")
+        os.makedirs(folder, exist_ok=True)
+        project_number = (
+            self.parameterAsString(parameters, self.PROJECT_NUMBER, context) or ""
+        ).strip()
 
         try:
             var_info = read_variable_info(input_path)
@@ -151,6 +178,11 @@ class GribToCsvAlgorithm(QgsProcessingAlgorithm):
             feedback.pushInfo(
                 f"  {v.name}: {v.long_name} [{v.units}] dims={v.dims}{marker}"
             )
+
+        selected = variable or (var_info[0].name if var_info else "data")
+        output_csv = single_output_path(
+            folder, project_number, f"{Path(input_path).stem} {selected}"
+        )
 
         def _progress(pct):
             if feedback.isCanceled():
@@ -170,6 +202,11 @@ class GribToCsvAlgorithm(QgsProcessingAlgorithm):
         except InterruptedError:
             feedback.pushInfo("Cancelled.")
             return {}
+        except PermissionError as e:
+            raise QgsProcessingException(
+                f"{Path(output_csv).name} could not be written ({e}). If it is "
+                "open in Excel, close it and run again."
+            ) from e
 
         feedback.pushInfo(f"{n_rows} rows written to {output_csv}")
-        return {self.OUTPUT_CSV: output_csv}
+        return {self.OUTPUT_CSV: output_csv, self.FOLDER_CSV: folder}

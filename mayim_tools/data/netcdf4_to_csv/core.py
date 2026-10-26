@@ -163,8 +163,8 @@ def flatten_to_dataframe(
     if estimated_rows > max_rows:
         raise ValueError(
             f"Flattening '{variable}' would produce approximately "
-            f"{estimated_rows:,} rows (shape {da.shape} across dims "
-            f"{da.dims}), which exceeds the safety limit of {max_rows:,}. "
+            f"{estimated_rows} rows (shape {da.shape} across dims "
+            f"{da.dims}), which exceeds the safety limit of {max_rows}. "
             f"This is usually too large to be a usable CSV - consider "
             f"point extraction mode instead, or explicitly raise the row "
             f"limit if the full flattened output is genuinely what's "
@@ -242,5 +242,5 @@ def convert_netcdf4_to_csv(
         else:
             df = extract_at_points(ds, resolved_variable, points)
 
-    df.to_csv(output_path, index=False)
+    df.to_csv(output_path, index=False, encoding="utf-8-sig")
     return {"rows_written": len(df), "variable": resolved_variable, "mode": mode}

@@ -68,7 +68,7 @@ from .catalogue import (
     units_of,
 )
 
-TOOL_VERSION = "0.1.0"
+TOOL_VERSION = "0.2.0"
 DEFAULT_WORKERS = 8
 DEFAULT_MAX_AREA_KM2 = 5000.0  # 30 m data
 TEXTURE_SUM_TOLERANCE = 2.0

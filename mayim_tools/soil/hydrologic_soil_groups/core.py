@@ -31,6 +31,7 @@ import numpy as np
 
 from mayim_tools.soil._common.errors import SoilDataError
 from mayim_tools.soil._common.export import write_metadata_csv
+from mayim_tools.soil._common.extract_files import find_named_file
 from mayim_tools.soil._common.grid import TargetGrid
 
 from . import neh630, scs_sa
@@ -467,8 +468,8 @@ def _depth_layer(
         arr = read_band_to_grid(raster, grid) * 100.0
         return arr, f"User raster {os.path.basename(raster)} (m)", notes
     if source == "ISDA":
-        mean_path = os.path.join(folder or "", ISDA_BEDROCK_MEAN)
-        if not folder or not os.path.isfile(mean_path):
+        mean_path = find_named_file(folder, ISDA_BEDROCK_MEAN)
+        if not mean_path:
             raise SoilDataError(
                 f"{ISDA_BEDROCK_MEAN} not found in the iSDAsoil folder ({folder}). "
                 "Run 'Extract: iSDAsoil (Africa)' with 'bedrock' selected, or choose "
@@ -480,8 +481,8 @@ def _depth_layer(
         )
         return read_band_to_grid(mean_path, grid), BEDROCK_SOURCES[source], notes
     if source in ("BDRICM", "BDTICM"):
-        path = os.path.join(folder or "", BEDROCK_FILE)
-        if not folder or not os.path.isfile(path):
+        path = find_named_file(folder, BEDROCK_FILE)
+        if not path:
             raise SoilDataError(
                 f"{BEDROCK_FILE} not found in the SoilGrids folder ({folder}). "
                 "Run 'Extract: SoilGrids 2.0' with 'Depth to bedrock (SoilGrids "
@@ -745,8 +746,8 @@ def run(
     wt = np.where(np.isfinite(wt), wt, DEEP_CM)
     result.impermeable_cm = np.where(valid, imp, np.nan)
     if settings.bedrock_source == "ISDA":
-        sd_path = os.path.join(settings.isda_folder, ISDA_BEDROCK_SD)
-        if os.path.isfile(sd_path):
+        sd_path = find_named_file(settings.isda_folder, ISDA_BEDROCK_SD)
+        if sd_path:
             sd = read_band_to_grid(sd_path, grid)
             result.impermeable_sd = np.where(valid & np.isfinite(sd), sd, np.nan)
             result.input_notes.append(

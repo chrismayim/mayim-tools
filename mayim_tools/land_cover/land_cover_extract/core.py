@@ -54,7 +54,7 @@ from .catalogue import (
     tiles_for_bounds,
 )
 
-TOOL_VERSION = "0.2.0"
+TOOL_VERSION = "0.3.0"
 DEFAULT_WORKERS = 8
 DEFAULT_MAX_AREA_KM2 = 5000.0  # 10 m data: 50 million cells, about 50 MB
 WORLDCOVER_OPTIONS = {

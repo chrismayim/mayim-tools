@@ -20,17 +20,15 @@ from qgis.core import (
     QgsProcessingParameterExtent,
     QgsProcessingParameterFeatureSource,
     QgsProcessingParameterField,
-    QgsProcessingParameterFileDestination,
-    QgsProcessingParameterFolderDestination,
     QgsProcessingParameterNumber,
     QgsProcessingParameterPoint,
     QgsUnitTypes,
 )
 from qgis.PyQt.QtGui import QIcon
 
+from mayim_tools.soil._common import extract_files as xf
 from mayim_tools.soil._common import qgis_ui
 from mayim_tools.soil._common.export import (
-    metadata_path_for,
     write_metadata_csv,
     write_multiband_geotiff,
     write_points_csv,
@@ -69,8 +67,6 @@ class IsdaExtractAlgorithm(QgsProcessingAlgorithm):
     MAX_AREA_KM2 = "MAX_AREA_KM2"
     WORKERS = "WORKERS"
     LOAD_LAYERS = "LOAD_LAYERS"
-    OUTPUT_FOLDER = "OUTPUT_FOLDER"
-    OUTPUT_CSV = "OUTPUT_CSV"
 
     MODE_OPTIONS = ["Area (multi-band GeoTIFFs)", "Points (CSV)"]
 
@@ -127,8 +123,9 @@ class IsdaExtractAlgorithm(QgsProcessingAlgorithm):
             "OUTPUTS:\tArea mode: isda_<variable>_<mean|sd>.tif, one band per "
             "depth, each described like 'clay_20-50cm_mean_30m_isda (%)' (later "
             "tools select bands by description), and isda_layers.qlr. Point mode: "
-            "long-format CSV. Both modes write isda_metadata.csv (or "
-            "<name>_metadata.csv) with sources, transforms, the band order used, "
+            "long-format CSV, isda_points.csv. Both modes write isda_metadata.csv "
+            "(or isda_points_metadata.csv) with sources, transforms, the band "
+            "order used, "
             "per-layer statistics, a sand+silt+clay check and warnings.\n"
             "\n"
             "PARAMETERS:\n"
@@ -141,6 +138,8 @@ class IsdaExtractAlgorithm(QgsProcessingAlgorithm):
             "  Parallel downloads (advanced, default 8).\n"
             "\n"
             "Data: CC-BY 4.0. Cite Hengl et al. (2021), Scientific Reports 11:6130.\n"
+            + "\n\n"
+            + xf.FILES_HELP
         )
 
     def initAlgorithm(self, config=None):
@@ -264,19 +263,7 @@ class IsdaExtractAlgorithm(QgsProcessingAlgorithm):
                 defaultValue=qgis_ui.LOAD_ALL,
             )
         )
-        self.addParameter(
-            QgsProcessingParameterFolderDestination(
-                self.OUTPUT_FOLDER, "Output folder (area mode)", optional=True
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterFileDestination(
-                self.OUTPUT_CSV,
-                "Output CSV (points mode)",
-                fileFilter="CSV files (*.csv)",
-                optional=True,
-            )
-        )
+        xf.add_output_parameters(self)
 
     # ------------------------------------------------------------------
 
@@ -336,10 +323,8 @@ class IsdaExtractAlgorithm(QgsProcessingAlgorithm):
             return {}
 
     def _run_area(self, parameters, context, feedback, selection, common, gdal_ver):
-        folder = self.parameterAsString(parameters, self.OUTPUT_FOLDER, context)
-        if not folder:
-            raise QgsProcessingException("Area mode needs an output folder.")
-        Path(folder).mkdir(parents=True, exist_ok=True)
+        files = xf.ExtractFiles(self, parameters, context, feedback, area=True)
+        folder = files.folder
         out_crs = self.parameterAsCrs(parameters, self.OUTPUT_CRS, context)
         if not out_crs.isValid():
             raise QgsProcessingException("Choose a valid output CRS.")
@@ -357,7 +342,11 @@ class IsdaExtractAlgorithm(QgsProcessingAlgorithm):
             f"{QgsUnitTypes.toString(out_crs.mapUnits())} in {out_crs.authid()}."
         )
         result = core.extract_area(
-            selection, grid, folder, write_fn=_write_geotiff, **common
+            selection,
+            grid,
+            folder,
+            write_fn=files.raster_writer(_write_geotiff),
+            **common,
         )
         settings = {
             "Area of interest": desc,
@@ -369,30 +358,38 @@ class IsdaExtractAlgorithm(QgsProcessingAlgorithm):
             "Grid size (cells)": f"{grid.width} x {grid.height}",
             "Resampling": "nearest neighbour",
         }
-        meta_path = metadata_path_for(folder, "area", METADATA_NAME)
-        write_metadata_csv(
-            core.build_metadata(result, selection, settings, gdal_ver), meta_path
+        meta_path = files.path(METADATA_NAME)
+        files.write(
+            meta_path,
+            lambda p: write_metadata_csv(
+                core.build_metadata(result, selection, settings, gdal_ver),
+                p,
+                encoding=xf.CSV_ENCODING,
+            ),
         )
         self._report(result, feedback)
-        feedback.pushInfo(f"{len(result.files)} raster(s) written to {folder}")
+        n_written = sum(1 for path in result.files if files.actual(path))
+        feedback.pushInfo(f"{n_written} raster(s) written to {folder}")
         feedback.pushInfo(f"Metadata: {meta_path}")
         outputs = [
             qgis_ui.OutputLayer(
-                path=path, name=Path(path).stem, main=path in result.load_files
+                path=files.actual(path),
+                name=Path(files.actual(path) or path).stem,
+                main=path in result.load_files,
             )
             for path in result.files
         ]
-        qlr = str(Path(folder) / "isda_layers.qlr")
+        outputs = [o for o in outputs if o.path]
+        qlr = files.path("isda_layers.qlr")
         if qgis_ui.write_layer_file(outputs, qlr, feedback):
             feedback.pushInfo(f"Layer file (reloads all outputs, styled): {qlr}")
         choice = self.parameterAsEnum(parameters, self.LOAD_LAYERS, context)
         qgis_ui.load_outputs(context, outputs, choice, self._post_processors)
-        return {self.OUTPUT_FOLDER: folder}
+        return files.finish({})
 
     def _run_points(self, parameters, context, feedback, selection, common, gdal_ver):
-        out_csv = self.parameterAsFileOutput(parameters, self.OUTPUT_CSV, context)
-        if not out_csv:
-            raise QgsProcessingException("Points mode needs an output CSV.")
+        files = xf.ExtractFiles(self, parameters, context, feedback, area=False)
+        out_csv = files.path("isda_points.csv")
         sites = [
             core.Site(label, lon, lat)
             for label, lon, lat in qgis_ui.point_sites(
@@ -407,26 +404,37 @@ class IsdaExtractAlgorithm(QgsProcessingAlgorithm):
         ]
         feedback.pushInfo(f"{len(sites)} site(s) to sample.")
         result = core.extract_points(selection, sites, **common)
-        n_rows, n_missing = write_points_csv(result.rows, out_csv, core.POINT_COLUMNS)
+        counts = {}
+        files.write(
+            out_csv,
+            lambda p: counts.update(
+                n=write_points_csv(result.rows, p, core.POINT_COLUMNS)
+            ),
+        )
+        n_rows, n_missing = counts.get("n", (0, 0))
         if n_missing:
             feedback.pushWarning(
                 f"{n_missing} of {n_rows} values are missing (outside Africa, "
                 "water or masked); written as empty cells, never as zero."
             )
-        meta_path = metadata_path_for(out_csv, "points")
-        write_metadata_csv(
-            core.build_metadata(
-                result,
-                selection,
-                {"Sites": len(sites), "Sampling": "nearest cell"},
-                gdal_ver,
-            ),
+        meta_path = out_csv[:-4] + "_metadata.csv"
+        files.write(
             meta_path,
+            lambda p: write_metadata_csv(
+                core.build_metadata(
+                    result,
+                    selection,
+                    {"Sites": len(sites), "Sampling": "nearest cell"},
+                    gdal_ver,
+                ),
+                p,
+                encoding=xf.CSV_ENCODING,
+            ),
         )
         self._report(result, feedback)
         feedback.pushInfo(f"{n_rows} rows written to {out_csv}")
         feedback.pushInfo(f"Metadata: {meta_path}")
-        return {self.OUTPUT_CSV: out_csv}
+        return files.finish({})
 
     @staticmethod
     def _report(result, feedback):

@@ -6,6 +6,7 @@ Thin wrapper - all real logic lives in core.py (zero QGIS dependency,
 independently testable; see tests/test_netcdf4_to_csv_core.py).
 """
 
+import os
 from pathlib import Path
 
 from qgis.core import (
@@ -16,19 +17,24 @@ from qgis.core import (
     QgsProcessingContext,
     QgsProcessingException,
     QgsProcessingFeedback,
+    QgsProcessingOutputFile,
     QgsProcessingParameterBoolean,
     QgsProcessingParameterEnum,
     QgsProcessingParameterFeatureSource,
     QgsProcessingParameterField,
     QgsProcessingParameterFile,
-    QgsProcessingParameterFileDestination,
+    QgsProcessingParameterFolderDestination,
     QgsProcessingParameterNumber,
     QgsProcessingParameterPoint,
     QgsProcessingParameterString,
 )
 from qgis.PyQt.QtGui import QIcon
 
+from mayim_tools._common.output_files import single_output_path
+
 from .core import DEFAULT_MAX_FLATTEN_ROWS, convert_netcdf4_to_csv, list_variables
+
+TOOL_VERSION = "0.2.0"
 
 WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
 MODE_OPTIONS = [
@@ -46,6 +52,8 @@ class Netcdf4ToCsvAlgorithm(QgsProcessingAlgorithm):
     NAME_FIELD = "NAME_FIELD"
     MAX_ROWS = "MAX_ROWS"
     DROP_NA = "DROP_NA"
+    PROJECT_NUMBER = "PROJECT_NUMBER"
+    FOLDER_CSV = "FOLDER_CSV"
     OUTPUT_CSV = "OUTPUT_CSV"
 
     def icon(self):
@@ -92,7 +100,7 @@ class Netcdf4ToCsvAlgorithm(QgsProcessingAlgorithm):
             "needing to guess or trigger an error. Flatten mode refuses "
             "BEFORE attempting a conversion that would produce an "
             "unusably large row count (default limit "
-            f"{DEFAULT_MAX_FLATTEN_ROWS:,} rows, adjustable) rather than "
+            f"{DEFAULT_MAX_FLATTEN_ROWS} rows, adjustable) rather than "
             "exhausting memory or hanging; Points mode is usually the "
             "better fit for time-series-style files.\n"
             "\n"
@@ -102,8 +110,15 @@ class Netcdf4ToCsvAlgorithm(QgsProcessingAlgorithm):
             "  Mode: Flatten or Points.\n"
             "  Point of interest / point layer: Points mode only.\n"
             "  Max rows (Flatten only): safety limit, default "
-            f"{DEFAULT_MAX_FLATTEN_ROWS:,}.\n"
-            "  Drop missing values (Flatten only): off by default."
+            f"{DEFAULT_MAX_FLATTEN_ROWS}.\n"
+            "  Drop missing values (Flatten only): off by default.\n"
+            "\n"
+            "OUTPUT:\tChoose the CSV folder. The file is named <project "
+            "number>_<NetCDF file name>_<variable>.csv and replaces a file of "
+            "the same name; a file that is open in Excel cannot be replaced "
+            "and is reported. The CSV is UTF-8 with a byte-order mark. In "
+            "Points mode it has the same Site column first as the "
+            "precipitation extract tools."
         )
 
     def initAlgorithm(self, config=None):
@@ -170,12 +185,18 @@ class Netcdf4ToCsvAlgorithm(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
-            QgsProcessingParameterFileDestination(
-                self.OUTPUT_CSV,
-                "Output CSV",
-                fileFilter="CSV files (*.csv)",
+            QgsProcessingParameterString(
+                self.PROJECT_NUMBER,
+                "Project number (file name prefix, optional)",
+                optional=True,
             )
         )
+        self.addParameter(
+            QgsProcessingParameterFolderDestination(
+                self.FOLDER_CSV, "Output folder for CSV files"
+            )
+        )
+        self.addOutput(QgsProcessingOutputFile(self.OUTPUT_CSV, "Output CSV"))
 
     def collect_points(self, parameters, context, feedback):
         source = self.parameterAsSource(parameters, self.INPUT_POINTS, context)
@@ -224,7 +245,13 @@ class Netcdf4ToCsvAlgorithm(QgsProcessingAlgorithm):
         is_flatten = mode_idx == 0
         max_rows = self.parameterAsInt(parameters, self.MAX_ROWS, context)
         drop_na = self.parameterAsBoolean(parameters, self.DROP_NA, context)
-        output_path = self.parameterAsFileOutput(parameters, self.OUTPUT_CSV, context)
+        folder = self.parameterAsFileOutput(parameters, self.FOLDER_CSV, context)
+        if not folder:
+            raise QgsProcessingException("Choose the output folder for CSV files.")
+        os.makedirs(folder, exist_ok=True)
+        project_number = (
+            self.parameterAsString(parameters, self.PROJECT_NUMBER, context) or ""
+        ).strip()
 
         feedback.pushInfo(f"Input file: {input_path}")
         feedback.pushInfo(f"Mode: {MODE_OPTIONS[mode_idx]}")
@@ -260,6 +287,12 @@ class Netcdf4ToCsvAlgorithm(QgsProcessingAlgorithm):
                 f"Auto-detected sole variable: "
                 f"{available[0] if available else '(none found)'}"
             )
+            name_variable = available[0] if available else "data"
+        else:
+            name_variable = variable
+        output_path = single_output_path(
+            folder, project_number, f"{Path(input_path).stem} {name_variable}"
+        )
 
         points = None
         if not is_flatten:
@@ -277,6 +310,11 @@ class Netcdf4ToCsvAlgorithm(QgsProcessingAlgorithm):
                 max_rows=max_rows,
                 drop_na=drop_na,
             )
+        except PermissionError as e:
+            raise QgsProcessingException(
+                f"{Path(output_path).name} could not be written ({e}). If it is "
+                "open in Excel, close it and run again."
+            ) from e
         except Exception as e:
             raise QgsProcessingException(str(e)) from e
         feedback.setProgress(100)
@@ -285,4 +323,4 @@ class Netcdf4ToCsvAlgorithm(QgsProcessingAlgorithm):
             f"Variable used: {info['variable']}. {info['rows_written']} "
             f"row(s) written to {output_path}"
         )
-        return {self.OUTPUT_CSV: output_path}
+        return {self.OUTPUT_CSV: output_path, self.FOLDER_CSV: folder}

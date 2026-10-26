@@ -440,7 +440,7 @@ def test_points_rows(tmp_path):
     assert {r["Resolution_m"] for r in result.rows} == {30, 120}
     path = tmp_path / "p.csv"
     assert write_points_csv(result.rows, path, core.POINT_COLUMNS) == (4, 0)
-    header = path.read_text(encoding="utf-8").splitlines()[0].split(",")
+    header = path.read_text(encoding="utf-8-sig").splitlines()[0].split(",")
     assert header == core.POINT_COLUMNS
 
 

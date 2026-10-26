@@ -832,7 +832,7 @@ def test_points_csv_missing_is_empty(tmp_path):
     ]
     path = tmp_path / "p.csv"
     assert write_points_csv(rows, path) == (2, 1)
-    with open(path, newline="", encoding="utf-8") as f:
+    with open(path, newline="", encoding="utf-8-sig") as f:
         data = list(csv.DictReader(f))
     assert data[0]["Value"] == "30.0" and data[1]["Value"] == ""
     assert data[0]["Product"] == "SoilGrids 2.0"
@@ -1204,3 +1204,28 @@ def test_extract_area_mismatched_layout_end_to_end(mock_server, tmp_path):
         found = {round(float(v), 3) for v in np.unique(data)}
         assert found == values, (name, found)
     assert not list(out.glob("*.qml"))  # no style files any more
+
+
+def test_extract_files_names_and_lookup(tmp_path):
+    """Extraction outputs carry an optional project-number prefix; readers
+    find them with or without it (case-insensitive), the newest first."""
+    import os
+    import time
+
+    from mayim_tools.soil._common.extract_files import find_named_file
+
+    assert find_named_file(str(tmp_path), "soilgrids_metadata.csv") is None
+    old = tmp_path / "soilgrids2017_depth_to_bedrock.tif"
+    old.write_bytes(b"x")
+    assert find_named_file(str(tmp_path), "SoilGrids2017_Depth_To_Bedrock.tif")
+    time.sleep(0.01)
+    new = tmp_path / "MC2025_014_soilgrids2017_depth_to_bedrock.tif"
+    new.write_bytes(b"x")
+    os.utime(new, (time.time() + 5, time.time() + 5))
+    found = find_named_file(str(tmp_path), "soilgrids2017_depth_to_bedrock.tif")
+    assert found == str(new)
+    (tmp_path / "xsoilgrids_metadata.csv").write_text("x")  # no underscore
+    assert find_named_file(str(tmp_path), "soilgrids_metadata.csv") is None
+    path = tmp_path / "p.csv"
+    write_points_csv([], path)
+    assert path.read_bytes().startswith(b"\xef\xbb\xbf")

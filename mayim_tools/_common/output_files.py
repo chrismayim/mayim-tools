@@ -65,6 +65,19 @@ class OutputSpec:
         )
 
 
+def single_output_path(
+    folder: str, project_number: str | None, description: str, ext: str = ".csv"
+) -> str:
+    """Path of a tool's single output file: <folder>/<project number>_
+    <description><ext>, e.g. for a conversion tool whose description is the
+    input file name and variable."""
+    parts = [clean_name_part(project_number), clean_name_part(description)]
+    stem = "_".join(p for p in parts if p)
+    if not stem:
+        raise ValueError("An output needs a description to be named.")
+    return str(Path(folder) / (stem + ext))
+
+
 def shapefile_field_names(names: list[str]) -> list[str]:
     """Unique shapefile (dBASE) field names of at most 10 characters: names
     that already fit are kept, longer ones are shortened and, if that
