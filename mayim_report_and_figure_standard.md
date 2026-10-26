@@ -1,8 +1,8 @@
 # Mayim Report, Figure and Graph Standard
 
-*House design standard for every Word report, graph, chart and map produced by Mayim tools and analyses (version 2.1, October 2026).*
+*House design standard for every Word report, graph, chart and map produced by Mayim tools and analyses (version 2.2, October 2026).*
 
-*Version 2: title page added (section 1.4); report structure and checklist updated to match; font availability rule added (section 2.2). Version 2.1: minor and major contours, with an option to leave contours off (section 3.2).*
+*Version 2: title page added (section 1.4); report structure and checklist updated to match; font availability rule added (section 2.2). Version 2.1: minor and major contours, with an option to leave contours off (section 3.2). Version 2.2: gridlines drawn as semi-transparent black, so crossing gridlines no longer cut gaps in each other (section 2.3).*
 
 **How to use this document:** give it to Claude in any chat with the instruction "apply the Mayim report and figure standard". Every value below is a requirement unless it is marked as a default. If something is not covered here, follow the closest rule and say which choice was made.
 
@@ -110,8 +110,9 @@ Write guideline-neutral content unless a specific standard (e.g. SANRAL, ARR) is
 
 - **Plot area border:** black, 0.75 pt, on all four sides.
 - **Ticks:** black, 0.75 pt wide, with minor ticks on.
-- **Major gridlines:** solid, 0.75 pt, #BFBFBF.
-- **Minor gridlines:** solid, 0.75 pt, #F2F2F2.
+- **Major gridlines:** solid, 0.75 pt, black at 25 % opacity (#00000040), which shows as #BFBFBF on the white plot area.
+- **Minor gridlines:** solid, 0.75 pt, black at 5 % opacity (#0000000D), which shows as #F2F2F2 on the white plot area.
+- Gridlines are semi-transparent, not solid grey, so that where two gridlines cross the later one darkens the crossing slightly instead of painting a light gap through the other. Solid grey minor lines drawn over the major lines of the other axis make the major lines look dashed.
 - Draw gridlines behind the data.
 - Use plain number formatting, with no offset or scientific notation on coordinate or elevation axes, and no thousands separators.
 - Show units in the axis titles: "Elevation (m)", "Distance upstream from outlet (km)".
@@ -215,7 +216,7 @@ The standard is implemented in shared modules. Reuse them rather than re-coding 
 | What | Where | How to use it |
 |---|---|---|
 | Report text styles, title page, tables, captions, 16.5 cm pictures | `mayim_tools/_common/docx_report.py` | `Doc(house_style=True)`, then `.title_page(title, purpose, details, subtitle)`, `.heading()`, `.para()`, `.label()`, `.bullet()`, `.numbered()`, `.caption()`, `.table()`, `.picture()` |
-| Chart style (fonts, border, grids, palette, exact-size PNG) | `mayim_tools/_common/report_figures.py` | `style = ChartStyle()`; `with style.context(): fig = style.figure(height_cm)` … `style.axes(ax)`; `style.legend(ax)`; `style.png(fig)`. The constants are `CHART_SIZE = 9`, `CHART_COLOURS`, `CHART_GRID_MAJOR` and `CHART_GRID_MINOR` |
+| Chart style (fonts, border, grids, palette, exact-size PNG) | `mayim_tools/_common/report_figures.py` | `style = ChartStyle()`; `with style.context(): fig = style.figure(height_cm)` … `style.axes(ax)`; `style.legend(ax)`; `style.png(fig)`. The constants are `CHART_SIZE = 9`, `CHART_COLOURS`, `CHART_GRID_MAJOR` (#00000040) and `CHART_GRID_MINOR` (#0000000D); `style.axes(ax)` draws the grid, so tools need no axis drawing-order workarounds |
 | Map composition (legend with symbol images, scale bar, north arrow) | `mayim_tools/_common/report_maps.py` | `PlanMap`, `figure_rendered_map`, `scale_bar`, `north_arrow`, `image_legend`, `OSM_ATTRIBUTION`, `OSM_LICENCE_NOTE` |
 | QGIS map render, legend keys, OSM background | `mayim_tools/_common/qgis_maps.py` | `render_map`, `legend_entries`, `osm_layer`, `osm_has_tiles`, `map_crs_and_extent` |
 | Shapefile export, loading layers with styles | `hydrology/catchment_delineation/qgis_outputs.py` | `apply_style`, `save_shapefile`, `load_on_completion`, `make_plan_map` |
@@ -249,8 +250,9 @@ with matplotlib.rc_context(RC):
     for s in ax.spines.values():
         s.set_visible(True); s.set_color("black"); s.set_linewidth(0.75)
     ax.minorticks_on(); ax.set_axisbelow(True)
-    ax.grid(True, which="major", color="#BFBFBF", linewidth=0.75, linestyle="-")
-    ax.grid(True, which="minor", color="#F2F2F2", linewidth=0.75, linestyle="-")
+    # semi-transparent black: #BFBFBF / #F2F2F2 on white, no gaps where lines cross
+    ax.grid(True, which="major", color="#00000040", linewidth=0.75, linestyle="-")
+    ax.grid(True, which="minor", color="#0000000D", linewidth=0.75, linestyle="-")
     ax.legend(prop=FontProperties(family="Arial Narrow", size=9, style="italic"),
               frameon=False)
     fig.savefig("figure.png", dpi=200, facecolor="white")  # no bbox_inches="tight"
@@ -266,7 +268,7 @@ with matplotlib.rc_context(RC):
 - [ ] Every figure is 16.5 cm wide, saved without cropping.
 - [ ] Figure text is Arial Narrow 9 pt: regular for text, bold for axis titles, italic for legends.
 - [ ] House fonts found (including the per-user Windows font folder); any substitution named in the run log.
-- [ ] Black 0.75 pt plot border; major and minor gridlines in #BFBFBF and #F2F2F2.
+- [ ] Black 0.75 pt plot border; major and minor gridlines in semi-transparent black (#00000040 and #0000000D, i.e. #BFBFBF and #F2F2F2 on white), with no gaps where gridlines cross.
 - [ ] Content colours follow the palette order, with no thin yellow lines.
 - [ ] Natural ground profiles are black, 1 pt, dashed.
 - [ ] Maps:

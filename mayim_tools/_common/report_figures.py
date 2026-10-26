@@ -148,7 +148,10 @@ def save_report_figure(fig, path_stem: str | Path, formats=("png", "svg")) -> li
 #   legend         Arial Narrow 9 pt black italic
 #   axis titles    Arial Narrow 9 pt bold
 #   plot area      black 0.75 pt border on all four sides
-#   gridlines      major solid 0.75 pt #BFBFBF, minor solid 0.75 pt #F2F2F2
+#   gridlines      major solid 0.75 pt black at 25 % opacity, minor solid
+#                  0.75 pt black at 5 % opacity (#BFBFBF / #F2F2F2 on white);
+#                  semi-transparent so crossing gridlines never cut gaps in
+#                  each other (standard v2.2, section 2.3)
 #   content        CHART_COLOURS in this order
 #   width          16.5 cm, saved at that exact size (height to suit content)
 
@@ -165,8 +168,11 @@ CHART_COLOURS = [
     "#FF00FF",
 ]
 CHART_LINE_PT = 0.75  # border and gridlines
-CHART_GRID_MAJOR = "#BFBFBF"
-CHART_GRID_MINOR = "#F2F2F2"
+# Semi-transparent black, so a gridline drawn over another darkens the
+# crossing slightly instead of painting a light gap through it (solid light
+# minor lines made the major lines of the other axis look dashed).
+CHART_GRID_MAJOR = "#00000040"  # shows as #BFBFBF on white
+CHART_GRID_MINOR = "#0000000D"  # shows as #F2F2F2 on white
 CHART_DPI = 200
 
 
