@@ -13,6 +13,12 @@ polygon/area parameter alongside these two without changing this
 structure - the per-site estimation loop below is already written to
 handle an arbitrary list of (label, lat, lon) tuples, however they
 were sourced.
+
+Outputs follow the Mayim report and figure standard: the user ticks the
+outputs wanted and chooses one folder per kind used (vector layers,
+CSV, Word); files are named <project number>_<description> with
+underscores; every layer written is loaded into the project with its
+style.
 """
 
 from __future__ import annotations
@@ -25,31 +31,31 @@ from qgis.core import (
     Qgis,
     QgsCoordinateReferenceSystem,
     QgsCoordinateTransform,
-    QgsFeature,
-    QgsFeatureSink,
-    QgsField,
-    QgsFields,
-    QgsGeometry,
-    QgsPointXY,
     QgsProcessing,
     QgsProcessingAlgorithm,
     QgsProcessingContext,
     QgsProcessingException,
     QgsProcessingFeedback,
-    QgsProcessingLayerPostProcessorInterface,
     QgsProcessingParameterBoolean,
     QgsProcessingParameterEnum,
-    QgsProcessingParameterFeatureSink,
     QgsProcessingParameterFeatureSource,
     QgsProcessingParameterField,
-    QgsProcessingParameterFileDestination,
+    QgsProcessingParameterFolderDestination,
     QgsProcessingParameterNumber,
     QgsProcessingParameterPoint,
     QgsProcessingParameterString,
     QgsWkbTypes,
 )
-from qgis.PyQt.QtCore import QMetaType
 from qgis.PyQt.QtGui import QIcon
+
+from mayim_tools._common.output_files import (
+    CSV,
+    EXTENSIONS,
+    SHAPEFILE,
+    WORD,
+    OutputSpec,
+    clean_name_part,
+)
 
 from .core import (
     DAILY_DURATIONS,
@@ -58,50 +64,53 @@ from .core import (
     DesignRainfallEngine,
     PointEstimate,
 )
+from .qgis_outputs import (
+    grid_points_layer,
+    load_on_completion,
+    poi_layer,
+    save_shapefile,
+    stations_layer,
+)
 from .report import REPORT_TITLE, write_csv, write_csv_multi, write_report_docx
 
-TOOL_VERSION = "1.1"
+TOOL_VERSION = "1.2"
 
 WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
 
-STYLES_DIR = Path(__file__).resolve().parent / "styles"
+# Selectable outputs: key, dialog label, file-name description, folder
+# kind, ticked by default.
+OUTPUT_SPECS = [
+    OutputSpec(
+        "OUTPUT_LAYER", "Snapped grid point(s)", "Design Rainfall Grid Points",
+        SHAPEFILE,
+    ),
+    OutputSpec(
+        "OUTPUT_QUERY_POINTS", "Point(s) of interest (POI)", "Design Rainfall POI",
+        SHAPEFILE,
+    ),
+    OutputSpec(
+        "OUTPUT_STATIONS", "Nearest rainfall stations", "Design Rainfall Stations",
+        SHAPEFILE, False,
+    ),
+    OutputSpec("OUTPUT_CSV", "Depth table (CSV)", "Design Rainfall Table", CSV),
+    OutputSpec(
+        "OUTPUT_DOCX", "Design rainfall report (Word)", "Design Rainfall Report",
+        WORD, False,
+    ),
+]  # fmt: skip
+SPEC_BY_KEY = {spec.key: spec for spec in OUTPUT_SPECS}
+FOLDER_PARAMS = {
+    SHAPEFILE: ("FOLDER_SHP", "Output folder for vector layers (shapefiles)"),
+    CSV: ("FOLDER_CSV", "Output folder for CSV files"),
+    WORD: ("FOLDER_WORD", "Output folder for Word reports"),
+}
 
-
-class _StylePostProcessor(QgsProcessingLayerPostProcessorInterface):
-    """Loads a saved QML style (symbology + labeling) onto an
-    output layer once Processing has finished loading it into the
-    project."""
-
-    def __init__(self, style_path: Path):
-        super().__init__()
-        self.style_path = str(style_path)
-
-    def postProcessLayer(self, layer, context, feedback):
-        layer.loadNamedStyle(self.style_path)
-        layer.triggerRepaint()
-
-
-def _qmetatype_for_dtype(dtype):
-    """Maps a pandas/numpy dtype to the closest QMetaType for QgsField."""
-    kind = getattr(dtype, "kind", "O")
-    if kind in ("i", "u"):
-        return QMetaType.Type.LongLong
-    if kind == "f":
-        return QMetaType.Type.Double
-    return QMetaType.Type.QString
-
-
-def _fields_from_dataframe(df, leading=()):
-    """Builds a QgsFields from a (non-geometry) DataFrame's columns,
-    optionally prefixed with extra (name, QMetaType) leading fields."""
-    fields = QgsFields()
-    for name, qtype in leading:
-        fields.append(QgsField(name, qtype))
-    for col in df.columns:
-        if col == "geometry":
-            continue
-        fields.append(QgsField(str(col)[:80], _qmetatype_for_dtype(df[col].dtype)))
-    return fields
+# QML style file per vector output, in this tool's own styles/ folder.
+STYLE_BY_KEY = {
+    "OUTPUT_LAYER": "snapped_grid_point.qml",
+    "OUTPUT_QUERY_POINTS": "poi.qml",
+    "OUTPUT_STATIONS": "nearest_stations.qml",
+}
 
 
 def _software_version() -> str:
@@ -119,13 +128,6 @@ def _software_version() -> str:
     return ", ".join(parts)
 
 
-def _location(dest_id: str) -> str:
-    """Report location of a sink output: its file path, or 'Temporary
-    layer' for a memory layer."""
-    path = str(dest_id).split("|")[0]
-    return path if os.path.exists(path) else "Temporary layer (QGIS project)"
-
-
 class DesignRainfallPointAlgorithm(QgsProcessingAlgorithm):
 
     POINT = "POINT"
@@ -135,13 +137,8 @@ class DesignRainfallPointAlgorithm(QgsProcessingAlgorithm):
     NAME_FIELD = "NAME_FIELD"
     DURATIONS = "DURATIONS"
     RETURN_PERIODS = "RETURN_PERIODS"
-    OUTPUT_CSV = "OUTPUT_CSV"
-    OUTPUT_DOCX = "OUTPUT_DOCX"
-    OUTPUT_LAYER = "OUTPUT_LAYER"
-    OUTPUT_QUERY_POINTS = "OUTPUT_QUERY_POINTS"
-    OUTPUT_STATIONS = "OUTPUT_STATIONS"
-    NUM_STATIONS = "NUM_STATIONS"
     REPORT_OSM = "REPORT_OSM"
+    NUM_STATIONS = "NUM_STATIONS"
 
     # Duration choices shown in the UI, mapped to internal (family, value)
     _DURATION_CHOICES = (
@@ -173,6 +170,11 @@ class DesignRainfallPointAlgorithm(QgsProcessingAlgorithm):
         return "rainfall_tools"
 
     def shortHelpString(self):
+        files = "\n".join(
+            f"  {spec.label}: <project number>_"
+            f"{clean_name_part(spec.description)}{EXTENSIONS[spec.kind]}"
+            for spec in OUTPUT_SPECS
+        )
         return (
             f"<b>{REPORT_TITLE} (version {TOOL_VERSION})</b><br><br>"
             "<b>PURPOSE</b><br>"
@@ -196,25 +198,44 @@ class DesignRainfallPointAlgorithm(QgsProcessingAlgorithm):
             "<i>Point of interest</i> - click the map or type coordinates; "
             "OR <i>point layer</i> - every feature is processed (optional "
             "site name field).<br>"
-            "<i>Project number / Project / site name</i> - optional, shown "
-            "on the report's title page.<br>"
+            "<i>Project number</i> - optional, used as the output file-name "
+            "prefix and shown on the report's title page.<br>"
+            "<i>Project / site name</i> - optional, shown on the report's "
+            "title page only (not used in file names).<br>"
             "<i>Durations / Return periods</i> - the combinations to "
             "estimate.<br>"
-            "<i>Output CSV</i> - duration x return period table (depth, "
-            "lower, upper), with the nearest stations appended.<br>"
-            "<i>Output Word report</i> - annexure in the Mayim report "
-            "standard: title page, summary, method, inputs, parameters, "
-            "depth tables, a "
-            "layout map per site (point of interest, snapped grid point and "
-            "nearest stations, drawn with the tool's layer styles), the "
-            "nearest rainfall stations (reference only), outputs, notes and "
-            "references.<br>"
-            "<i>OpenStreetMap background</i> - adds OSM tiles behind the "
-            "report map (needs internet access).<br>"
-            "<i>Snapped grid point / POI / Nearest rainfall stations</i> - "
-            "point layers loaded with their preset styles.<br>"
             "<i>Nearest rainfall stations to list</i> - number of stations "
-            "per site (0 = none)."
+            "per site, reference only, not used in the calculation (0 = "
+            "none).<br>"
+            "<i>OpenStreetMap background</i> - adds OSM tiles behind the "
+            "report map (needs internet access).<br><br>"
+            "<b>OUTPUTS</b><br>"
+            "Tick the outputs wanted (the snapped grid points, POI and "
+            "depth table are ticked by default) and choose an output folder "
+            "for each kind used: vector layers (shapefiles), CSV and Word. "
+            "Files are named &lt;project number&gt;_&lt;description&gt; with "
+            "underscores (just &lt;description&gt; without a project "
+            "number) and replace files of the same name; a file that is "
+            "open in QGIS cannot be replaced - remove it from the project "
+            "first (the other outputs are still written). Every layer "
+            "written is loaded into the project with its style.<br>"
+            + files.replace("\n", "<br>")
+            + "<br><br>"
+            "<i>Snapped grid point(s)</i> - the grid point(s) used, with the "
+            "duration x return-period depths as attributes (field names "
+            "over 10 characters are shortened for the shapefile).<br>"
+            "<i>Point(s) of interest (POI)</i> - the requested location(s), "
+            "independently of the snapped grid points.<br>"
+            "<i>Nearest rainfall stations</i> - the stations listed above, "
+            "as a point layer (reference only).<br>"
+            "<i>Depth table (CSV)</i> - duration x return period table "
+            "(depth, lower, upper), with the nearest stations appended.<br>"
+            "<i>Design rainfall report (Word)</i> - annexure in the Mayim "
+            "report standard: title page, summary, method, inputs, "
+            "parameters, depth tables, a layout map per site (point of "
+            "interest, snapped grid point and nearest stations, drawn with "
+            "the tool's layer styles), the nearest rainfall stations "
+            "(reference only), outputs, notes and references."
         )
 
     def initAlgorithm(self, config=None):
@@ -244,14 +265,14 @@ class DesignRainfallPointAlgorithm(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterString(
                 self.PROJECT_NUMBER,
-                "Project number (optional, for the report)",
+                "Project number (file name prefix, optional)",
                 optional=True,
             )
         )
         self.addParameter(
             QgsProcessingParameterString(
                 self.PROJECT_NAME,
-                "Project / site name (optional, for the report)",
+                "Project / site name (optional, for the report title page)",
                 optional=True,
             )
         )
@@ -274,45 +295,6 @@ class DesignRainfallPointAlgorithm(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
-            QgsProcessingParameterFileDestination(
-                self.OUTPUT_CSV,
-                "Output CSV",
-                fileFilter="CSV files (*.csv)",
-                optional=True,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterFileDestination(
-                self.OUTPUT_DOCX,
-                "Output Word report",
-                fileFilter="Word documents (*.docx)",
-                optional=True,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterBoolean(
-                self.REPORT_OSM,
-                "Add OpenStreetMap background to the report map",
-                defaultValue=True,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterFeatureSink(
-                self.OUTPUT_LAYER,
-                "Snapped grid point",
-                optional=True,
-                type=QgsProcessing.SourceType.TypeVectorPoint,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterFeatureSink(
-                self.OUTPUT_QUERY_POINTS,
-                "POI",
-                optional=True,
-                type=QgsProcessing.SourceType.TypeVectorPoint,
-            )
-        )
-        self.addParameter(
             QgsProcessingParameterNumber(
                 self.NUM_STATIONS,
                 "Nearest rainfall stations to list "
@@ -323,14 +305,24 @@ class DesignRainfallPointAlgorithm(QgsProcessingAlgorithm):
                 defaultValue=6,
             )
         )
-        self.addParameter(
-            QgsProcessingParameterFeatureSink(
-                self.OUTPUT_STATIONS,
-                "Nearest rainfall stations",
-                optional=True,
-                type=QgsProcessing.SourceType.TypeVectorPoint,
+        for spec in OUTPUT_SPECS:
+            self.addParameter(
+                QgsProcessingParameterBoolean(
+                    spec.key, f"Output: {spec.label}", defaultValue=spec.default
+                )
             )
+        for name, label in FOLDER_PARAMS.values():
+            self.addParameter(
+                QgsProcessingParameterFolderDestination(name, label, optional=True)
+            )
+        report_osm = QgsProcessingParameterBoolean(
+            self.REPORT_OSM,
+            "Word report: OpenStreetMap background on the layout map "
+            "(needs internet)",
+            defaultValue=True,
         )
+        report_osm.setFlags(report_osm.flags() | Qgis.ProcessingParameterFlag.Advanced)
+        self.addParameter(report_osm)
 
     # ------------------------------------------------------------------
     def _collect_sites(self, parameters, context, feedback):
@@ -403,12 +395,34 @@ class DesignRainfallPointAlgorithm(QgsProcessingAlgorithm):
         )
         return_periods = [RETURN_PERIODS[i] for i in selected_rt_idx]
 
+        project_number = (
+            self.parameterAsString(parameters, self.PROJECT_NUMBER, context) or ""
+        ).strip()
+
+        selected = [
+            spec
+            for spec in OUTPUT_SPECS
+            if self.parameterAsBoolean(parameters, spec.key, context)
+        ]
+        if not selected:
+            raise QgsProcessingException("Tick at least one output.")
+        folders = {}
+        for kind in {spec.kind for spec in selected}:
+            name, label = FOLDER_PARAMS[kind]
+            folder = self.parameterAsFileOutput(parameters, name, context)
+            if not folder:
+                raise QgsProcessingException(f"Choose the {label.lower()}.")
+            os.makedirs(folder, exist_ok=True)
+            folders[kind] = folder
+        paths = {spec.key: spec.path(folders, project_number) for spec in selected}
+        want = set(paths)
+
         engine = DesignRainfallEngine()
         estimates = {}
         for i, (label, lat, lon) in enumerate(sites):
             if feedback.isCanceled():
                 break
-            feedback.setProgress(100 * i / max(len(sites), 1))
+            feedback.setProgress(50 * i / max(len(sites), 1))
             grid_row = engine.nearest_grid_point(lat, lon)
 
             results = []
@@ -439,7 +453,23 @@ class DesignRainfallPointAlgorithm(QgsProcessingAlgorithm):
                 f"{label}: MAP={grid_row['MAP']}mm, {len(results)} estimates computed"
             )
 
-        outputs = {}
+        outputs = {
+            name: folders[kind] for kind, (name, _) in FOLDER_PARAMS.items()
+            if kind in folders
+        }  # fmt: skip
+        written = []  # (label, path) for the log and the report
+
+        def done(key, path):
+            outputs[key] = path
+            written.append((SPEC_BY_KEY[key].label, path))
+
+        def failed(key, path, error):
+            feedback.reportError(
+                f"{SPEC_BY_KEY[key].label}: {Path(path).name} could not be "
+                f"written ({error}). If it is open in QGIS, remove it from "
+                "the project and run again.",
+                fatalError=False,
+            )
 
         # Compute nearest stations once (used by both the CSV and the
         # dedicated stations output layer) - reference/comparison only,
@@ -452,61 +482,67 @@ class DesignRainfallPointAlgorithm(QgsProcessingAlgorithm):
                     lat, lon, n=num_stations
                 )
 
-        # Layers first, so the report can list every output.
-        report_outputs = []
-        sink_result = self._write_output_layer(
-            parameters, context, estimates, return_periods
+        feedback.setProgress(50)
+        feedback.setProgressText("Writing outputs")
+        transform_context = context.transformContext()
+
+        vector_layers = (
+            ("OUTPUT_LAYER", lambda: grid_points_layer(estimates, WGS84)),
+            ("OUTPUT_QUERY_POINTS", lambda: poi_layer(sites, WGS84)),
+            ("OUTPUT_STATIONS", lambda: stations_layer(per_site_stations, WGS84)),
         )
-        if sink_result:
-            outputs[self.OUTPUT_LAYER] = sink_result
-            self._register_style(context, sink_result, "snapped_grid_point.qml")
-            report_outputs.append(("Snapped grid point layer", _location(sink_result)))
+        for key, build in vector_layers:
+            if key not in want:
+                continue
+            layer = build()
+            if layer is None:
+                feedback.pushWarning(f"{SPEC_BY_KEY[key].label}: nothing to write.")
+                continue
+            path = paths[key]
+            try:
+                save_shapefile(layer, path, transform_context)
+            except Exception as e:
+                failed(key, path, e)
+                continue
+            load_on_completion(
+                context, path, Path(path).stem, STYLE_BY_KEY[key],
+                self._post_processors,
+            )  # fmt: skip
+            done(key, path)
 
-        query_points_result = self._write_query_points(parameters, context, sites)
-        if query_points_result:
-            outputs[self.OUTPUT_QUERY_POINTS] = query_points_result
-            self._register_style(context, query_points_result, "poi.qml")
-            report_outputs.append(("POI layer", _location(query_points_result)))
+        if "OUTPUT_CSV" in want:
+            path = paths["OUTPUT_CSV"]
+            try:
+                if len(estimates) == 1:
+                    label, est = next(iter(estimates.items()))
+                    write_csv(est, path, stations=per_site_stations.get(label))
+                else:
+                    write_csv_multi(
+                        estimates, path, stations_by_site=per_site_stations or None
+                    )
+                done("OUTPUT_CSV", path)
+            except Exception as e:
+                failed("OUTPUT_CSV", path, e)
+        feedback.setProgress(70)
 
-        if num_stations > 0:
-            stations_result = self._write_stations_layer(
-                parameters, context, per_site_stations, feedback
-            )
-            if stations_result:
-                outputs[self.OUTPUT_STATIONS] = stations_result
-                self._register_style(context, stations_result, "nearest_stations.qml")
-                report_outputs.append(
-                    ("Nearest rainfall stations layer", _location(stations_result))
-                )
-
-        csv_path = self.parameterAsFileOutput(parameters, self.OUTPUT_CSV, context)
-        if csv_path:
-            if len(estimates) == 1:
-                label, est = next(iter(estimates.items()))
-                write_csv(est, csv_path, stations=per_site_stations.get(label))
-            else:
-                write_csv_multi(
-                    estimates, csv_path, stations_by_site=per_site_stations or None
-                )
-            outputs[self.OUTPUT_CSV] = csv_path
-            report_outputs.append(("CSV table", csv_path))
-            feedback.pushInfo(f"CSV written: {csv_path}")
-
-        docx_path = self.parameterAsFileOutput(parameters, self.OUTPUT_DOCX, context)
-        if docx_path and estimates:
-            written = self._write_report(
+        if "OUTPUT_DOCX" in want and estimates:
+            self._write_report(
                 parameters,
                 context,
                 feedback,
-                docx_path,
+                paths["OUTPUT_DOCX"],
                 estimates,
                 per_site_stations,
                 num_stations,
-                report_outputs,
+                written,
+                project_number,
+                done,
+                failed,
             )
-            if written:
-                outputs[self.OUTPUT_DOCX] = docx_path
 
+        for label, path in written:
+            feedback.pushInfo(f"{label}: {path}")
+        feedback.setProgress(100)
         return outputs
 
     def _write_report(
@@ -518,15 +554,21 @@ class DesignRainfallPointAlgorithm(QgsProcessingAlgorithm):
         estimates,
         per_site_stations,
         num_stations,
-        report_outputs,
+        written,
+        project_number,
+        done,
+        failed,
     ):
-        """Word report with a QGIS-rendered layout map per site. Returns
-        True when the report was written."""
+        """Word report with a QGIS-rendered layout map per site."""
         try:
             import docx  # noqa: F401
         except ImportError:
-            feedback.reportError("python-docx not installed - skipping Word output.")
-            return False
+            feedback.reportError(
+                "python-docx not installed - skipping Word output. Install "
+                "it from the OSGeo4W Shell with: python -m pip install "
+                "python-docx."
+            )
+            return
         source = self.parameterAsSource(parameters, self.INPUT_POINTS, context)
         if source is not None and source.featureCount() > 0:
             input_text = f"Point layer: {source.sourceName()}"
@@ -564,14 +606,12 @@ class DesignRainfallPointAlgorithm(QgsProcessingAlgorithm):
             "run_time": datetime.now().strftime("%Y-%m-%d %H:%M"),
             "input": input_text,
             "software": _software_version(),
-            "project_number": self.parameterAsString(
-                parameters, self.PROJECT_NUMBER, context
-            ).strip(),
+            "project_number": project_number,
             "project_name": self.parameterAsString(
                 parameters, self.PROJECT_NAME, context
             ).strip(),
             "num_stations": num_stations,
-            "outputs": report_outputs + [("This report", docx_path)],
+            "outputs": written + [("This report", docx_path)],
             "warnings": list(self._warnings),
             # filled while the maps are rendered; read by the report's notes
             "map_messages": map_messages,
@@ -584,149 +624,12 @@ class DesignRainfallPointAlgorithm(QgsProcessingAlgorithm):
                 stations_by_site=per_site_stations,
                 plan_map=plan_map,
             )
-        except PermissionError:
-            feedback.reportError(
-                f"Word report not written - the file is open or locked: {docx_path}"
-            )
-            return False
+        except PermissionError as e:
+            failed("OUTPUT_DOCX", docx_path, e)
+            return
+        except Exception as e:  # a report failure must not lose the other outputs
+            feedback.pushWarning(f"The Word report could not be written: {e}")
+            return
         for message in dict.fromkeys(map_messages + (messages or [])):
             feedback.pushWarning(message)
-        feedback.pushInfo(f"Word report written: {docx_path}")
-        return True
-
-    def _register_style(self, context, dest_id, style_filename):
-        """Attaches a saved QML style to an output layer via a
-        post-processor, so it loads already symbolised/labeled -
-        QGIS requires a Python-side reference to the post-processor
-        to be kept alive for the duration of the run, hence
-        self._post_processors."""
-        if not dest_id:
-            return
-        details = context.layerToLoadOnCompletionDetails(dest_id)
-        processor = _StylePostProcessor(STYLES_DIR / style_filename)
-        details.setPostProcessor(processor)
-        self._post_processors.append(processor)
-
-    # ------------------------------------------------------------------
-    def _write_query_points(self, parameters, context, sites):
-        """Minimal layer: just the site label + the query point geometry -
-        useful to see/symbolise the input location(s) independently of
-        the results layer."""
-        if not sites:
-            return None
-        fields = QgsFields()
-        fields.append(QgsField("site", QMetaType.Type.QString))
-        fields.append(QgsField("latitude", QMetaType.Type.Double))
-        fields.append(QgsField("longitude", QMetaType.Type.Double))
-
-        sink, dest_id = self.parameterAsSink(
-            parameters,
-            self.OUTPUT_QUERY_POINTS,
-            context,
-            fields,
-            Qgis.WkbType.Point,
-            WGS84,
-        )
-        if sink is None:
-            return None
-        for label, lat, lon in sites:
-            feat = QgsFeature(fields)
-            feat.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(lon, lat)))
-            feat.setAttributes([label, lat, lon])
-            sink.addFeature(feat, QgsFeatureSink.Flag.FastInsert)
-        return dest_id
-
-    def _write_stations_layer(self, parameters, context, per_site_stations, feedback):
-        """Nearest N daily rainfall stations per site, for reference/
-        comparison only - NOT used in the grid-based calculation itself
-        (mirrors the original tool's 'closest stations' listing).
-        per_site_stations: dict[label, GeoDataFrame], precomputed by
-        the caller so the same data feeds both this layer and the CSV."""
-        if not per_site_stations or all(df.empty for df in per_site_stations.values()):
-            feedback.pushWarning("No nearby stations found.")
-            return None
-
-        sample_df = next(df for df in per_site_stations.values() if not df.empty)
-        fields = _fields_from_dataframe(
-            sample_df, leading=[("site", QMetaType.Type.QString)]
-        )
-        data_cols = [c for c in sample_df.columns if c != "geometry"]
-
-        sink, dest_id = self.parameterAsSink(
-            parameters,
-            self.OUTPUT_STATIONS,
-            context,
-            fields,
-            Qgis.WkbType.Point,
-            WGS84,
-        )
-        if sink is None:
-            return None
-
-        for label, nearby in per_site_stations.items():
-            for _, row in nearby.iterrows():
-                feat = QgsFeature(fields)
-                feat.setGeometry(
-                    QgsGeometry.fromPointXY(QgsPointXY(row.geometry.x, row.geometry.y))
-                )
-                attrs = [label] + [row[col] for col in data_cols]
-                feat.setAttributes(attrs)
-                sink.addFeature(feat, QgsFeatureSink.Flag.FastInsert)
-
-        return dest_id
-
-    # ------------------------------------------------------------------
-    def _write_output_layer(self, parameters, context, estimates, return_periods):
-        """Flattened point layer: one feature per site, one field per
-        duration x return-period combo (median/lower/upper)."""
-        fields = QgsFields()
-        fields.append(QgsField("site", QMetaType.Type.QString))
-        fields.append(QgsField("map_mm", QMetaType.Type.Double))
-        fields.append(QgsField("altitude_m", QMetaType.Type.Double))
-        fields.append(QgsField("cluster", QMetaType.Type.Int))
-
-        # Build field list from the first estimate's results (all sites
-        # share the same requested duration/RT combos)
-        if not estimates:
-            return None
-        sample_results = next(iter(estimates.values())).results
-        combo_keys = []
-        for r in sample_results:
-            key = f"{r.duration_label.replace(' ', '')}_{r.return_period}y"
-            combo_keys.append(key)
-            fields.append(QgsField(key, QMetaType.Type.Double))
-            fields.append(QgsField(f"{key}_L", QMetaType.Type.Double))
-            fields.append(QgsField(f"{key}_U", QMetaType.Type.Double))
-
-        sink, dest_id = self.parameterAsSink(
-            parameters,
-            self.OUTPUT_LAYER,
-            context,
-            fields,
-            Qgis.WkbType.Point,
-            WGS84,
-        )
-        if sink is None:
-            return None
-
-        for label, est in estimates.items():
-            feat = QgsFeature(fields)
-            feat.setGeometry(
-                QgsGeometry.fromPointXY(QgsPointXY(est.longitude, est.latitude))
-            )
-            attrs = [label, est.map_mm, est.altitude_m, est.cluster]
-            lookup = {
-                f"{r.duration_label.replace(' ', '')}_{r.return_period}y": r
-                for r in est.results
-            }
-            for key in combo_keys:
-                r = lookup.get(key)
-                attrs += [
-                    r.depth if r else None,
-                    r.lower if r else None,
-                    r.upper if r else None,
-                ]
-            feat.setAttributes(attrs)
-            sink.addFeature(feat, QgsFeatureSink.Flag.FastInsert)
-
-        return dest_id
+        done("OUTPUT_DOCX", docx_path)
