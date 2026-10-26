@@ -199,6 +199,53 @@ def test_column_not_found_raises():
     print("test_column_not_found_raises: PASS")
 
 
+def test_csvs_follow_the_output_standard(tmp_path=None):
+    """CSVs are UTF-8 with BOM; the event inventory, event curves and Huff
+    curves CSVs start with a '#' column key; the HEC-HMS / SWMM reader still
+    reads the Huff curves CSV."""
+    import tempfile
+
+    from mayim_tools.data.hec_hms_project import storms as stm
+    from mayim_tools.rainfall.huff_curves.huffrain import export
+
+    rng = np.random.default_rng(7)
+    depths = []
+    for k in range(40):  # 40 storms of 8 h, peak moving through the event
+        storm = np.zeros(8)
+        storm[k % 8] = 10.0
+        storm += rng.uniform(0.1, 1.0, 8)
+        depths += list(np.round(storm, 2)) + [0.0] * 12
+    result = build_huff_curves(
+        _make_df("2020-01-01", 1, depths), "DateTime", "Precip", mit_hours=6
+    )
+    folder = Path(tmp_path or tempfile.mkdtemp())
+    writers = {
+        "inv": (export.write_event_inventory, "EventID", True),
+        "cur": (export.write_event_curves, "EventID", True),
+        "huff": (export.write_huff_curves, "Quartile", True),
+        "meta": (export.write_metadata, "Key", False),
+    }
+    for name, (writer, first_col, keyed) in writers.items():
+        path = folder / f"{name}.csv"
+        writer(result, path)
+        raw = path.read_bytes()
+        assert raw.startswith(b"\xef\xbb\xbf"), name
+        lines = raw.decode("utf-8-sig").splitlines()
+        assert (lines[0] == "# Column key") == keyed, name
+        header = next(line for line in lines if not line.startswith("#"))
+        assert header.split(",")[0] == first_col, name
+        if keyed:
+            key = {line[2:].split(":")[0] for line in lines if line.startswith("# ")}
+            for col in header.split(","):
+                if not (col.startswith("P") and col[1:].isdigit()):
+                    assert col in key, (name, col)
+            df = pd.read_csv(path, comment="#")
+            assert len(df) > 0 and df.columns[0] == first_col
+    huff = stm.read_huff_csv(str(folder / "huff.csv"))
+    assert any(k[1] == "P50" for k in huff)
+    print("test_csvs_follow_the_output_standard: PASS")
+
+
 if __name__ == "__main__":
     tests = [
         v for k, v in list(globals().items()) if k.startswith("test_") and callable(v)

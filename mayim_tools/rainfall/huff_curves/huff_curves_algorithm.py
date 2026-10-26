@@ -3,9 +3,13 @@ outputs (event inventory, normalized event curves, percentile curve
 bundles, metadata).
 
 Thin wrapper - all real logic lives in huffrain/ (zero QGIS dependency,
-independently testable outside QGIS; see huffrain/tests/).
+independently testable outside QGIS; see tests/test_huffrain.py).
+
+Outputs follow the Mayim output standard: a tick box per output, one
+CSV folder, files named <project number>_<description>.csv.
 """
 
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -14,13 +18,21 @@ from qgis.core import (
     QgsProcessingContext,
     QgsProcessingException,
     QgsProcessingFeedback,
+    QgsProcessingParameterBoolean,
     QgsProcessingParameterEnum,
     QgsProcessingParameterFile,
-    QgsProcessingParameterFileDestination,
+    QgsProcessingParameterFolderDestination,
     QgsProcessingParameterNumber,
     QgsProcessingParameterString,
 )
 from qgis.PyQt.QtGui import QIcon
+
+from mayim_tools._common.output_files import (
+    CSV,
+    EXTENSIONS,
+    OutputSpec,
+    clean_name_part,
+)
 
 from .huffrain.export import (
     write_event_curves,
@@ -29,6 +41,34 @@ from .huffrain.export import (
     write_metadata,
 )
 from .huffrain.io import build_huff_curves
+
+TOOL_NAME = "Precipitation data to Huff Curves"
+TOOL_VERSION = "1.1.0"
+
+# Selectable outputs: key, dialog label, file-name description, folder
+# kind, ticked by default. All share the CSV folder.
+OUTPUT_SPECS = [
+    OutputSpec("OUTPUT_HUFF", "Percentile Huff curves (CSV)", "Huff Curves", CSV),
+    OutputSpec(
+        "OUTPUT_EVENTS", "Event inventory (CSV)", "Huff Event Inventory", CSV,
+    ),
+    OutputSpec(
+        "OUTPUT_METADATA", "Metadata and diagnostics (CSV)", "Huff Curves Metadata",
+        CSV,
+    ),
+    OutputSpec(
+        "OUTPUT_CURVES", "Normalised event curves (CSV; long, one row per event "
+        "per time point)", "Huff Event Curves", CSV, False,
+    ),
+]  # fmt: skip
+SPEC_BY_KEY = {spec.key: spec for spec in OUTPUT_SPECS}
+FOLDER_PARAMS = {CSV: ("FOLDER_CSV", "Output folder for CSV files")}
+WRITERS = {
+    "OUTPUT_HUFF": write_huff_curves,
+    "OUTPUT_EVENTS": write_event_inventory,
+    "OUTPUT_METADATA": write_metadata,
+    "OUTPUT_CURVES": write_event_curves,
+}
 
 
 class HuffCurvesAlgorithm(QgsProcessingAlgorithm):
@@ -45,6 +85,7 @@ class HuffCurvesAlgorithm(QgsProcessingAlgorithm):
     QUALITY_MODE = "QUALITY_MODE"
     NORMALIZED_STEP = "NORMALIZED_STEP"
     MIN_SAMPLE = "MIN_SAMPLE"
+    PROJECT_NUMBER = "PROJECT_NUMBER"
     OUTPUT_EVENTS = "OUTPUT_EVENTS"
     OUTPUT_CURVES = "OUTPUT_CURVES"
     OUTPUT_HUFF = "OUTPUT_HUFF"
@@ -73,7 +114,13 @@ class HuffCurvesAlgorithm(QgsProcessingAlgorithm):
         return "rainfall_tools"
 
     def shortHelpString(self):
+        files = "\n".join(
+            f"  {spec.label}: <project number>_"
+            f"{clean_name_part(spec.description)}{EXTENSIONS[spec.kind]}"
+            for spec in OUTPUT_SPECS
+        )
         return (
+            f"{TOOL_NAME} (version {TOOL_VERSION})\n\n"
             "Derives Huff curves from a CSV rainfall time series (timestamp + "
             "precipitation depth columns). Delineates storm events using a "
             "minimum inter-event time (MIT - recommended automatically if left "
@@ -86,7 +133,20 @@ class HuffCurvesAlgorithm(QgsProcessingAlgorithm):
             "from the curves but kept in the event inventory for auditability. "
             "This is a scoped v1: bootstrap uncertainty bands, stratification "
             "by duration/season, regional pooling, and design hyetograph "
-            "generation are not yet implemented."
+            "generation are not yet implemented.\n\n"
+            "OUTPUTS\n"
+            "Tick the outputs wanted (Huff curves, event inventory and metadata "
+            "by default; the long normalised event curves table is optional) "
+            "and choose the CSV output folder. Files are named <project "
+            "number>_<description> with underscores (just <description> "
+            "without a project number) and replace files of the same name; a "
+            "file that is open in Excel or QGIS cannot be replaced - close it "
+            "and run again (the other outputs are still written). The CSVs are "
+            "UTF-8 with a byte-order mark, so Excel opens them cleanly; the Huff "
+            "curves, event inventory and event curves CSVs start with a column "
+            "key ('#' lines) explaining the headings. The Huff curves CSV can "
+            "be read directly by Prepare HEC-HMS project and Prepare SWMM "
+            "project.\n" + files
         )
 
     def initAlgorithm(self, config=None):
@@ -190,35 +250,22 @@ class HuffCurvesAlgorithm(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
-            QgsProcessingParameterFileDestination(
-                self.OUTPUT_EVENTS,
-                "Output: event inventory CSV",
-                fileFilter="CSV files (*.csv)",
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterFileDestination(
-                self.OUTPUT_CURVES,
-                "Output: normalized event curves CSV",
-                fileFilter="CSV files (*.csv)",
+            QgsProcessingParameterString(
+                self.PROJECT_NUMBER,
+                "Project number (file name prefix, optional)",
                 optional=True,
             )
         )
-        self.addParameter(
-            QgsProcessingParameterFileDestination(
-                self.OUTPUT_HUFF,
-                "Output: percentile Huff curves CSV",
-                fileFilter="CSV files (*.csv)",
+        for spec in OUTPUT_SPECS:
+            self.addParameter(
+                QgsProcessingParameterBoolean(
+                    spec.key, f"Output: {spec.label}", defaultValue=spec.default
+                )
             )
-        )
-        self.addParameter(
-            QgsProcessingParameterFileDestination(
-                self.OUTPUT_METADATA,
-                "Output: metadata/diagnostics CSV",
-                fileFilter="CSV files (*.csv)",
-                optional=True,
+        for name, label in FOLDER_PARAMS.values():
+            self.addParameter(
+                QgsProcessingParameterFolderDestination(name, label, optional=True)
             )
-        )
 
     def processAlgorithm(
         self, parameters, context: QgsProcessingContext, feedback: QgsProcessingFeedback
@@ -257,6 +304,26 @@ class HuffCurvesAlgorithm(QgsProcessingAlgorithm):
             parameters, self.NORMALIZED_STEP, context
         )
         min_sample = self.parameterAsInt(parameters, self.MIN_SAMPLE, context)
+        project_number = (
+            self.parameterAsString(parameters, self.PROJECT_NUMBER, context) or ""
+        ).strip()
+
+        selected = [
+            spec
+            for spec in OUTPUT_SPECS
+            if self.parameterAsBoolean(parameters, spec.key, context)
+        ]
+        if not selected:
+            raise QgsProcessingException("Tick at least one output.")
+        folders = {}
+        for kind in {spec.kind for spec in selected}:
+            name, label = FOLDER_PARAMS[kind]
+            folder = self.parameterAsFileOutput(parameters, name, context)
+            if not folder:
+                raise QgsProcessingException(f"Choose the {label.lower()}.")
+            os.makedirs(folder, exist_ok=True)
+            folders[kind] = folder
+        paths = {spec.key: spec.path(folders, project_number) for spec in selected}
 
         try:
             df = pd.read_csv(csv_path)
@@ -298,30 +365,32 @@ class HuffCurvesAlgorithm(QgsProcessingAlgorithm):
                 f"{' (INSUFFICIENT SAMPLE)' if cs.insufficient_sample else ''}"
             )
 
-        outputs = {}
-
-        events_path = self.parameterAsFileOutput(
-            parameters, self.OUTPUT_EVENTS, context
-        )
-        write_event_inventory(result, events_path)
-        outputs[self.OUTPUT_EVENTS] = events_path
-
-        curves_path = self.parameterAsFileOutput(
-            parameters, self.OUTPUT_CURVES, context
-        )
-        if curves_path:
-            write_event_curves(result, curves_path)
-            outputs[self.OUTPUT_CURVES] = curves_path
-
-        huff_path = self.parameterAsFileOutput(parameters, self.OUTPUT_HUFF, context)
-        write_huff_curves(result, huff_path)
-        outputs[self.OUTPUT_HUFF] = huff_path
-
-        metadata_path = self.parameterAsFileOutput(
-            parameters, self.OUTPUT_METADATA, context
-        )
-        if metadata_path:
-            write_metadata(result, metadata_path)
-            outputs[self.OUTPUT_METADATA] = metadata_path
+        outputs = {
+            name: folders[kind]
+            for kind, (name, _) in FOLDER_PARAMS.items()
+            if kind in folders
+        }
+        written = []
+        for key, writer in WRITERS.items():
+            if key not in paths:
+                continue
+            path = paths[key]
+            try:
+                writer(result, path)
+            except Exception as e:
+                feedback.reportError(
+                    f"{SPEC_BY_KEY[key].label}: {Path(path).name} could not be "
+                    f"written ({e}). If it is open in QGIS or Excel, close it and "
+                    "run again.",
+                    fatalError=False,
+                )
+                continue
+            outputs[key] = path
+            written.append(path)
+            feedback.pushInfo(f"Written: {path}")
+        if not written:
+            raise QgsProcessingException(
+                "No output could be written - see the errors above."
+            )
 
         return outputs
