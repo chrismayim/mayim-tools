@@ -1,5 +1,7 @@
 """CSV writers for the Terrain Profile tool (no QGIS dependency).
-Numbers are written without thousands separators."""
+Numbers are written without thousands separators. The CSVs are UTF-8 with
+a byte-order mark and start with a column key ('#' lines): read them in
+pandas with comment='#'."""
 
 from __future__ import annotations
 
@@ -10,6 +12,23 @@ from collections.abc import Sequence
 import numpy as np
 
 from .core import MEASUREMENT_FIELDS, SectionProfile
+
+CSV_ENCODING = "utf-8-sig"
+PROFILE_KEY = {
+    "section": "section label",
+    "chainage_m": "chainage along the section from its start, m",
+    "x": "easting of the sample, m (DEM CRS)",
+    "y": "northing of the sample, m (DEM CRS)",
+    "ground_m": "ground level from the DEM, m",
+    "wse_<event>_m": "water-surface elevation for the event, m (blank where dry)",
+    "depth_<event>_m": "water depth for the event, m (blank where dry)",
+}
+
+
+def _write_key(f, key) -> None:
+    f.write("# Column key\n")
+    for col, meaning in key:
+        f.write(f"# {col}: {meaning}\n")
 
 
 def _num(value, decimals: int) -> str:
@@ -42,7 +61,8 @@ def write_profile_csv(path: str, sections: Sequence[SectionProfile]) -> None:
     for lab in labels:
         tag = column_tag(lab)
         header += [f"wse_{tag}_m", f"depth_{tag}_m"]
-    with open(path, "w", newline="", encoding="utf-8") as f:
+    with open(path, "w", newline="", encoding=CSV_ENCODING) as f:
+        _write_key(f, PROFILE_KEY.items())
         writer = csv.writer(f)
         writer.writerow(header)
         for s in sections:
@@ -73,7 +93,8 @@ _DECIMALS = {
 def write_measurements_csv(path: str, rows: Sequence[dict]) -> None:
     """One row per section per event (MEASUREMENT_FIELDS)."""
     names = [n for n, _ in MEASUREMENT_FIELDS]
-    with open(path, "w", newline="", encoding="utf-8") as f:
+    with open(path, "w", newline="", encoding=CSV_ENCODING) as f:
+        _write_key(f, MEASUREMENT_FIELDS)
         writer = csv.writer(f)
         writer.writerow(names)
         for r in rows:

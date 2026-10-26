@@ -8,9 +8,15 @@ terrain_storage kept.)
 
 Thin wrapper - all real logic lives in core.py (zero QGIS dependency,
 independently testable; see tests/test_terrain_storage_core.py).
+
+Outputs follow the Mayim output standard: a tick box per output, raster,
+shapefile, CSV and Word folders, files named <project number>_<description>,
+layers loaded with the Mayim 'DEM Stage Storage' styles; a locked file is
+reported and the other outputs are still written.
 """
 
 import math
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -33,13 +39,12 @@ from qgis.core import (
     QgsProcessingLayerPostProcessorInterface,
     QgsProcessingParameterBoolean,
     QgsProcessingParameterEnum,
-    QgsProcessingParameterFeatureSink,
     QgsProcessingParameterFeatureSource,
     QgsProcessingParameterField,
-    QgsProcessingParameterFileDestination,
+    QgsProcessingParameterFolderDestination,
     QgsProcessingParameterNumber,
-    QgsProcessingParameterRasterDestination,
     QgsProcessingParameterRasterLayer,
+    QgsProcessingParameterString,
     QgsRendererCategory,
     QgsSingleBandPseudoColorRenderer,
     QgsWkbTypes,
@@ -47,6 +52,15 @@ from qgis.core import (
 from qgis.PyQt.QtCore import QMetaType
 from qgis.PyQt.QtGui import QIcon
 
+from mayim_tools._common.output_files import (
+    CSV,
+    EXTENSIONS,
+    RASTER,
+    SHAPEFILE,
+    WORD,
+    OutputSpec,
+    clean_name_part,
+)
 from mayim_tools.hydrology._common.grid_polygons import (
     group_polygons,
     ring_to_map,
@@ -74,7 +88,7 @@ from .core import (
 from .export import write_hec_table, write_stage_table_csv
 from .report import write_report_docx
 
-TOOL_VERSION = "0.3.0"
+TOOL_VERSION = "0.4.0"
 
 MODE_OPTIONS = [
     "Connected to the lowest point (pool fills over ridges in turn)",
@@ -177,6 +191,101 @@ WS_FIELDS = [
 ]
 
 
+# Selectable outputs. The HEC-RAS / HEC-HMS table is tab-delimited text
+# (.txt) in the CSV folder; the bed-estimate outputs apply only when 'DEM
+# surface is a water surface' is ticked.
+OUTPUT_SPECS = [
+    OutputSpec(
+        "OUTPUT_TABLE", "Stage-area-volume table (CSV)", "Stage Area Volume", CSV
+    ),
+    OutputSpec(
+        "OUTPUT_HEC", "HEC-RAS / HEC-HMS elevation-volume table (TXT)",
+        "HEC Elevation Volume", CSV, False,
+    ),
+    OutputSpec(
+        "OUTPUT_WS", "Water-surface polygons (shapefile)", "Water Surface Polygons",
+        SHAPEFILE,
+    ),
+    OutputSpec(
+        "OUTPUT_CONTOURS", "Water-edge contours, smoothed (shapefile)",
+        "Water Edge Contours", SHAPEFILE,
+    ),
+    OutputSpec(
+        "OUTPUT_DEPTH", "Depth at the top stage (raster)", "Depth Top Stage", RASTER
+    ),
+    OutputSpec(
+        "OUTPUT_SPILL", "Spill points, summary per storage (shapefile)",
+        "Spill Points", SHAPEFILE,
+    ),
+    OutputSpec(
+        "OUTPUT_FLOOR", "Floor points, lowest ground per storage (shapefile)",
+        "Floor Points", SHAPEFILE,
+    ),
+    OutputSpec("OUTPUT_DOCX", "Stage-storage report (Word)", "Stage Storage Report",
+               WORD),
+    OutputSpec(
+        "OUTPUT_BED_DEM", "Bed estimate: DEM with estimated bed, central (raster)",
+        "Bed DEM Central", RASTER, False,
+    ),
+    OutputSpec(
+        "OUTPUT_BED_DEM_LOW", "Bed estimate: DEM with estimated bed, low - shallow "
+        "(raster)", "Bed DEM Low", RASTER, False,
+    ),
+    OutputSpec(
+        "OUTPUT_BED_DEM_HIGH", "Bed estimate: DEM with estimated bed, high - deep "
+        "(raster)", "Bed DEM High", RASTER, False,
+    ),
+    OutputSpec(
+        "OUTPUT_SURVEY_WATER", "Bed estimate: surveyed water surface with the "
+        "estimates (shapefile)", "Surveyed Water Surface", SHAPEFILE, False,
+    ),
+    OutputSpec(
+        "OUTPUT_BED_TABLE", "Bed estimate: summary (CSV)", "Bed Estimate Summary",
+        CSV, False,
+    ),
+    OutputSpec(
+        "OUTPUT_PROFILE", "Bed estimate: centreline profiles (CSV)",
+        "Bed Centreline Profiles", CSV, False,
+    ),
+]  # fmt: skip
+SPEC_BY_KEY = {spec.key: spec for spec in OUTPUT_SPECS}
+BED_KEYS = (
+    "OUTPUT_BED_DEM",
+    "OUTPUT_BED_DEM_LOW",
+    "OUTPUT_BED_DEM_HIGH",
+    "OUTPUT_SURVEY_WATER",
+    "OUTPUT_BED_TABLE",
+    "OUTPUT_PROFILE",
+)
+FOLDER_PARAMS = {
+    RASTER: ("FOLDER_RASTER", "Output folder for rasters (GeoTIFF)"),
+    SHAPEFILE: ("FOLDER_SHP", "Output folder for vector layers (shapefiles)"),
+    CSV: ("FOLDER_CSV", "Output folder for CSV and text tables"),
+    WORD: ("FOLDER_WORD", "Output folder for Word reports"),
+}
+
+
+def output_path(spec: OutputSpec, folders: dict, project_number: str) -> str:
+    path = spec.path(folders, project_number)
+    if spec.key == "OUTPUT_HEC":
+        path = str(Path(path).with_suffix(".txt"))
+    return path
+
+
+def _software_version() -> str:
+    parts = []
+    metadata = Path(__file__).resolve().parents[2] / "metadata.txt"
+    try:
+        for line in metadata.read_text(encoding="utf-8").splitlines():
+            if line.startswith("version="):
+                parts.append(f"Mayim Tools {line.split('=', 1)[1].strip()}")
+                break
+    except OSError:
+        pass
+    parts.append(f"QGIS {Qgis.version()}")
+    return ", ".join(parts)
+
+
 STYLES_DIR = Path(__file__).resolve().parent / "styles"
 STYLE_DEPTH = "depth_top_stage.qml"
 STYLE_FLOOR = "floor_points.qml"
@@ -274,14 +383,6 @@ def _fields(specs) -> QgsFields:
     return fields
 
 
-def _describe_destination(dest) -> str:
-    """Readable location of a Processing output."""
-    text = str(dest or "")
-    if text.startswith("memory:") or "TEMPORARY_OUTPUT" in text or not text:
-        return "Temporary layer (not saved)"
-    return text
-
-
 def _is_null(value) -> bool:
     return value is None or str(value) in ("", "NULL")
 
@@ -320,6 +421,8 @@ class DemDepressionStageStorageAlgorithm(QgsProcessingAlgorithm):
     OUTPUT_SURVEY_WATER = "OUTPUT_SURVEY_WATER"
     OUTPUT_BED_TABLE = "OUTPUT_BED_TABLE"
     OUTPUT_PROFILE = "OUTPUT_PROFILE"
+    PROJECT_NUMBER = "PROJECT_NUMBER"
+    PROJECT_NAME = "PROJECT_NAME"
 
     def icon(self):
         return QIcon(
@@ -343,6 +446,11 @@ class DemDepressionStageStorageAlgorithm(QgsProcessingAlgorithm):
 
     def shortHelpString(self):
         glossary = "\n".join(f"  {n}: {d}" for n, _, d in SPILL_FIELDS)
+        files = "\n".join(
+            f"  {s.label}: <project number>_{clean_name_part(s.description)}"
+            + (".txt" if s.key == "OUTPUT_HEC" else EXTENSIONS[s.kind])
+            for s in OUTPUT_SPECS
+        )
         return (
             f"DEM depression stage-storage (version {TOOL_VERSION})\n"
             "\n"
@@ -403,12 +511,21 @@ class DemDepressionStageStorageAlgorithm(QgsProcessingAlgorithm):
             "Outputs load with the standard Mayim 'DEM Stage Storage' styles; "
             "the depth colour ramp is stretched to each run's depth range and "
             "the water-surface classes are rebuilt for its stages. "
-            "Optional Word (.docx) report: method, inputs, definitions, and per "
-            "storage area a description, key results, the stage-area-volume "
-            "and depth-distribution tables and figures (depth map, elevation-"
-            "area-capacity, stage-storage, stage-area, depth-area and depth-"
-            "volume curves, depth distribution). It needs python-docx (and "
-            "matplotlib for figures) in QGIS's Python.\n"
+            "Word report (Mayim report standard): title page, summary, method, "
+            "inputs, parameters and equations, and per storage area a "
+            "description, key results, the stage-area-volume and depth-"
+            "distribution tables and figures (depth map, elevation-area-"
+            "capacity, stage-storage, stage-area, depth-area and depth-volume "
+            "curves, depth distribution), outputs, notes and references. It "
+            "needs python-docx (and matplotlib for figures) in QGIS's Python.\n"
+            "\n"
+            "FILES:\tTick the outputs wanted and choose the raster, shapefile, "
+            "CSV and Word folders. Files are named <project number>_"
+            "<description> and replace files of the same name; a file that is "
+            "open (a layer loaded in QGIS, a CSV in Excel) cannot be replaced "
+            "and is reported, and the other outputs are still written. The CSVs "
+            "are UTF-8 with a byte-order mark and start with a column key ('#' "
+            "lines).\n" + files + "\n"
             "\n"
             "BED BELOW A WATER SURFACE:\tTick 'DEM surface is a water surface' "
             "when the DEM shows the water of a pan, pond or dam as surveyed (LiDAR, "
@@ -424,7 +541,8 @@ class DemDepressionStageStorageAlgorithm(QgsProcessingAlgorithm):
             "known maximum depth field overrides them (+-20%). The settings are "
             "under Advanced parameters. Outputs: DEMs with the estimated bed "
             "(central, low, high), the surveyed water surface with all "
-            "estimates, a bed-estimate summary CSV and a centreline profile CSV. "
+            "estimates, a bed-estimate summary CSV and a centreline profile CSV "
+            "(tick them under the outputs). "
             "It is an estimate for storage modelling, not a survey.\n"
             "\n"
             "SPILL POINT ATTRIBUTES:\n" + glossary
@@ -576,118 +694,29 @@ class DemDepressionStageStorageAlgorithm(QgsProcessingAlgorithm):
             param.setFlags(param.flags() | Qgis.ProcessingParameterFlag.Advanced)
             self.addParameter(param)
         self.addParameter(
-            QgsProcessingParameterFileDestination(
-                self.OUTPUT_TABLE,
-                "Stage-area-volume table (CSV)",
-                fileFilter="CSV files (*.csv)",
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterFileDestination(
-                self.OUTPUT_HEC,
-                "HEC-RAS / HEC-HMS elevation-volume table (TXT)",
-                fileFilter="Text files (*.txt)",
-                optional=True,
-                createByDefault=False,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterFeatureSink(
-                self.OUTPUT_WS,
-                "Water-surface polygons",
-                type=QgsProcessing.SourceType.TypeVectorPolygon,
+            QgsProcessingParameterString(
+                self.PROJECT_NUMBER,
+                "Project number (file name prefix, optional)",
                 optional=True,
             )
         )
         self.addParameter(
-            QgsProcessingParameterFeatureSink(
-                self.OUTPUT_CONTOURS,
-                "Water-edge contours (smoothed)",
-                type=QgsProcessing.SourceType.TypeVectorLine,
+            QgsProcessingParameterString(
+                self.PROJECT_NAME,
+                "Project name (report title page, optional)",
                 optional=True,
             )
         )
-        self.addParameter(
-            QgsProcessingParameterRasterDestination(
-                self.OUTPUT_DEPTH, "Depth at top stage", optional=True
+        for spec in OUTPUT_SPECS:
+            self.addParameter(
+                QgsProcessingParameterBoolean(
+                    spec.key, f"Output: {spec.label}", defaultValue=spec.default
+                )
             )
-        )
-        self.addParameter(
-            QgsProcessingParameterFeatureSink(
-                self.OUTPUT_SPILL,
-                "Spill points (summary per storage)",
-                type=QgsProcessing.SourceType.TypeVectorPoint,
-                optional=True,
+        for name, label in FOLDER_PARAMS.values():
+            self.addParameter(
+                QgsProcessingParameterFolderDestination(name, label, optional=True)
             )
-        )
-        self.addParameter(
-            QgsProcessingParameterFeatureSink(
-                self.OUTPUT_FLOOR,
-                "Floor points (lowest ground per storage)",
-                type=QgsProcessing.SourceType.TypeVectorPoint,
-                optional=True,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterRasterDestination(
-                self.OUTPUT_BED_DEM,
-                "Bed estimate: DEM with estimated bed (central)",
-                optional=True,
-                createByDefault=False,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterRasterDestination(
-                self.OUTPUT_BED_DEM_LOW,
-                "Bed estimate: DEM with estimated bed (low - shallow)",
-                optional=True,
-                createByDefault=False,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterRasterDestination(
-                self.OUTPUT_BED_DEM_HIGH,
-                "Bed estimate: DEM with estimated bed (high - deep)",
-                optional=True,
-                createByDefault=False,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterFeatureSink(
-                self.OUTPUT_SURVEY_WATER,
-                "Bed estimate: surveyed water surface with estimates",
-                type=QgsProcessing.SourceType.TypeVectorPolygon,
-                optional=True,
-                createByDefault=False,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterFileDestination(
-                self.OUTPUT_BED_TABLE,
-                "Bed estimate: summary (CSV)",
-                fileFilter="CSV files (*.csv)",
-                optional=True,
-                createByDefault=False,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterFileDestination(
-                self.OUTPUT_PROFILE,
-                "Bed estimate: centreline profiles (CSV)",
-                fileFilter="CSV files (*.csv)",
-                optional=True,
-                createByDefault=False,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterFileDestination(
-                self.OUTPUT_DOCX,
-                "Stage-storage report (Word)",
-                fileFilter="Word documents (*.docx)",
-                optional=True,
-                createByDefault=False,
-            )
-        )
 
     # ------------------------------------------------------------------
 
@@ -766,12 +795,42 @@ class DemDepressionStageStorageAlgorithm(QgsProcessingAlgorithm):
         contour_interval = self.parameterAsDouble(
             parameters, self.CONTOUR_INTERVAL, context
         )
-        table_path = self.parameterAsFileOutput(parameters, self.OUTPUT_TABLE, context)
-        hec_path = self.parameterAsFileOutput(parameters, self.OUTPUT_HEC, context)
-        depth_path = self.parameterAsOutputLayer(parameters, self.OUTPUT_DEPTH, context)
-        docx_path = self.parameterAsFileOutput(parameters, self.OUTPUT_DOCX, context)
-
         estimate_bed = self.parameterAsBoolean(parameters, self.ESTIMATE_BED, context)
+        project_number = (
+            self.parameterAsString(parameters, self.PROJECT_NUMBER, context) or ""
+        ).strip()
+        project_name = (
+            self.parameterAsString(parameters, self.PROJECT_NAME, context) or ""
+        ).strip()
+        want = [
+            spec.key
+            for spec in OUTPUT_SPECS
+            if self.parameterAsBoolean(parameters, spec.key, context)
+        ]
+        if not estimate_bed:
+            skipped = [SPEC_BY_KEY[k].label for k in want if k in BED_KEYS]
+            if skipped:
+                feedback.pushInfo(
+                    "Bed-estimate outputs skipped ('DEM surface is a water "
+                    "surface' is not ticked): " + "; ".join(skipped)
+                )
+            want = [k for k in want if k not in BED_KEYS]
+        if not want:
+            raise QgsProcessingException("Tick at least one output.")
+        folders = {}
+        for kind in {SPEC_BY_KEY[key].kind for key in want}:
+            name, label = FOLDER_PARAMS[kind]
+            folder = self.parameterAsFileOutput(parameters, name, context)
+            if not folder:
+                raise QgsProcessingException(
+                    f"Choose the {label[0].lower() + label[1:]}."
+                )
+            os.makedirs(folder, exist_ok=True)
+            folders[kind] = folder
+        paths = {
+            key: output_path(SPEC_BY_KEY[key], folders, project_number) for key in want
+        }
+
         depth_field = self.parameterAsString(parameters, self.DEPTH_FIELD, context)
         bed = self._bed_settings(parameters, context, crs, feedback, estimate_bed)
 
@@ -884,60 +943,121 @@ class DemDepressionStageStorageAlgorithm(QgsProcessingAlgorithm):
                 f"written:\n{detail}"
             )
 
-        outputs = {}
-        write_stage_table_csv(table_path, results)
-        outputs[self.OUTPUT_TABLE] = table_path
-        if hec_path:
-            write_hec_table(hec_path, results)
-            outputs[self.OUTPUT_HEC] = hec_path
-
-        contour_id = self._write_contours(parameters, context, results, geoms, crs)
-        if contour_id is not None:
-            outputs[self.OUTPUT_CONTOURS] = contour_id
-            self._register_style(context, contour_id, STYLE_CONTOURS)
-        ws_id = self._write_water_surfaces(
-            parameters, context, feedback, results, geoms, crs
+        from mayim_tools.hydrology.catchment_delineation.qgis_outputs import (
+            MemoryLayers,
+            save_shapefile,
         )
-        if ws_id is not None:
-            outputs[self.OUTPUT_WS] = ws_id
-            self._register_style(context, ws_id, STYLE_WS, recategorise=True)
-        spill_id = self._write_spill_points(parameters, context, results, crs)
-        if spill_id is not None:
-            outputs[self.OUTPUT_SPILL] = spill_id
-            self._register_style(context, spill_id, STYLE_SPILL)
-        floor_id = self._write_floor_points(parameters, context, results, crs)
-        if floor_id is not None:
-            outputs[self.OUTPUT_FLOOR] = floor_id
-            self._register_style(context, floor_id, STYLE_FLOOR)
-        bathys = [r.bathymetry for r in results if r.bathymetry is not None]
-        if bathys:
-            outputs.update(
-                self._write_bed_outputs(
-                    parameters, context, dem_layer, bathys, geoms, results, crs
-                )
+
+        outputs = {name: folders[kind] for kind, (name, _) in FOLDER_PARAMS.items()
+                   if kind in folders}  # fmt: skip
+        written = []  # (label, path) for the report
+
+        def done(key, path):
+            outputs[key] = path
+            written.append((SPEC_BY_KEY[key].label, path))
+            feedback.pushInfo(f"Written: {path}")
+
+        def failed(key, error):
+            feedback.reportError(
+                f"{SPEC_BY_KEY[key].label}: {Path(paths[key]).name} could not be "
+                f"written ({error}). If it is open in QGIS, Excel or Word, close "
+                "it and run again.",
+                fatalError=False,
             )
 
-        if depth_path:
+        def guarded(key, writer):
+            if key not in paths:
+                return False
+            try:
+                writer(paths[key])
+            except Exception as e:  # locked or not writable
+                failed(key, e)
+                return False
+            done(key, paths[key])
+            return True
+
+        guarded(self.OUTPUT_TABLE, lambda p: write_stage_table_csv(p, results))
+        guarded(self.OUTPUT_HEC, lambda p: write_hec_table(p, results))
+
+        # vector layers: filled as memory layers, then written as shapefiles
+        feedback.setProgressText("Writing layers")
+        memory = MemoryLayers()
+        self._sink_target = memory
+        if self.OUTPUT_CONTOURS in want:
+            self._write_contours(parameters, context, results, geoms, crs)
+        if self.OUTPUT_WS in want:
+            self._write_water_surfaces(
+                parameters, context, feedback, results, geoms, crs
+            )
+        if self.OUTPUT_SPILL in want:
+            self._write_spill_points(parameters, context, results, crs)
+        if self.OUTPUT_FLOOR in want:
+            self._write_floor_points(parameters, context, results, crs)
+        bathys = [r.bathymetry for r in results if r.bathymetry is not None]
+        if bathys and self.OUTPUT_SURVEY_WATER in want:
+            self._write_survey_water(parameters, context, results, geoms, crs)
+        for key, style, options in (
+            (self.OUTPUT_CONTOURS, STYLE_CONTOURS, {}),
+            (self.OUTPUT_WS, STYLE_WS, {"recategorise": True}),
+            (self.OUTPUT_SPILL, STYLE_SPILL, {}),
+            (self.OUTPUT_FLOOR, STYLE_FLOOR, {}),
+            (self.OUTPUT_SURVEY_WATER, None, {}),
+        ):
+            layer = memory.get(key)
+            if key not in want or layer is None:
+                continue
+            if layer.featureCount() == 0:
+                feedback.pushWarning(f"{SPEC_BY_KEY[key].label}: nothing to write.")
+                continue
+            try:
+                path = save_shapefile(layer, paths[key], context.transformContext())
+            except Exception as e:
+                failed(key, e)
+                continue
+            self._load(context, path, style, **options)
+            done(key, path)
+
+        # rasters
+        if self.OUTPUT_DEPTH in want:
             merged = mosaic_depths(results, DEFAULT_DEPTH_NODATA)
             if merged is not None:
                 array, (r0, c0) = merged
-                write_raster(
-                    depth_path,
-                    array,
-                    window_geotransform(gt, r0, c0),
-                    projection,
-                    DEFAULT_DEPTH_NODATA,
-                )
-                outputs[self.OUTPUT_DEPTH] = depth_path
                 valid = array[array != DEFAULT_DEPTH_NODATA]
                 depth_range = (
                     (float(valid.min()), float(valid.max())) if valid.size else None
                 )
-                self._register_style(
-                    context, depth_path, STYLE_DEPTH, raster_range=depth_range
-                )
+                if guarded(
+                    self.OUTPUT_DEPTH,
+                    lambda p: write_raster(
+                        p, array, window_geotransform(gt, r0, c0), projection,
+                        DEFAULT_DEPTH_NODATA,
+                    ),
+                ):  # fmt: skip
+                    self._load(
+                        context, paths[self.OUTPUT_DEPTH], STYLE_DEPTH,
+                        raster_range=depth_range,
+                    )  # fmt: skip
+        if bathys:
+            for key, scenario in (
+                (self.OUTPUT_BED_DEM, "central"),
+                (self.OUTPUT_BED_DEM_LOW, "low"),
+                (self.OUTPUT_BED_DEM_HIGH, "high"),
+            ):
+                if guarded(
+                    key,
+                    lambda p, s=scenario: write_bed_dem(
+                        dem_layer.source(), p, bathys, s
+                    ),
+                ):
+                    self._load(context, paths[key], None)
+            guarded(
+                self.OUTPUT_BED_TABLE,
+                lambda p: write_bathymetry_summary_csv(p, bathys),
+            )
+            guarded(self.OUTPUT_PROFILE, lambda p: write_profile_csv(p, bathys))
 
-        if docx_path:
+        if self.OUTPUT_DOCX in want:
+            docx_path = paths[self.OUTPUT_DOCX]
             feedback.setProgressText("Writing report")
             run_warnings = list(failures)
             for r in results:
@@ -945,6 +1065,9 @@ class DemDepressionStageStorageAlgorithm(QgsProcessingAlgorithm):
             context_info = {
                 "tool": self.displayName(),
                 "version": TOOL_VERSION,
+                "software": _software_version(),
+                "project_number": project_number,
+                "project_name": project_name,
                 "run_time": datetime.now().strftime("%Y-%m-%d %H:%M"),
                 "dem": {
                     "path": dem_layer.source(),
@@ -979,31 +1102,13 @@ class DemDepressionStageStorageAlgorithm(QgsProcessingAlgorithm):
                 "coverage": COVERAGE_OPTIONS[
                     self.parameterAsEnum(parameters, self.COVERAGE, context)
                 ],
-                "outputs": [
-                    (label, _describe_destination(outputs.get(key)))
-                    for key, label in (
-                        (self.OUTPUT_TABLE, "Stage-area-volume table (CSV)"),
-                        (self.OUTPUT_HEC, "HEC-RAS / HEC-HMS table"),
-                        (self.OUTPUT_WS, "Water-surface polygons"),
-                        (self.OUTPUT_CONTOURS, "Water-edge contours (smoothed)"),
-                        (self.OUTPUT_DEPTH, "Depth at top stage"),
-                        (self.OUTPUT_SPILL, "Spill points"),
-                        (self.OUTPUT_FLOOR, "Floor points"),
-                        (self.OUTPUT_BED_DEM, "DEM with estimated bed (central)"),
-                        (self.OUTPUT_BED_DEM_LOW, "DEM with estimated bed (low)"),
-                        (self.OUTPUT_BED_DEM_HIGH, "DEM with estimated bed (high)"),
-                        (self.OUTPUT_SURVEY_WATER, "Surveyed water surface"),
-                        (self.OUTPUT_BED_TABLE, "Bed estimate summary (CSV)"),
-                        (self.OUTPUT_PROFILE, "Centreline profiles (CSV)"),
-                    )
-                    if outputs.get(key)
-                ]
-                + [("This report", docx_path)],
+                "outputs": list(written) + [("This report", docx_path)],
                 "warnings": run_warnings,
             }
             try:
-                write_report_docx(docx_path, results, context_info)
-                outputs[self.OUTPUT_DOCX] = docx_path
+                for message in write_report_docx(docx_path, results, context_info):
+                    feedback.pushInfo(message)
+                done(self.OUTPUT_DOCX, docx_path)
             except ImportError:
                 feedback.pushWarning(
                     "The Word report needs the python-docx package, which is not "
@@ -1012,14 +1117,18 @@ class DemDepressionStageStorageAlgorithm(QgsProcessingAlgorithm):
                     "were written."
                 )
             except Exception as e:  # report failure must not lose the results
-                feedback.pushWarning(f"The Word report could not be written: {e}")
+                failed(self.OUTPUT_DOCX, e)
+        if not written:
+            raise QgsProcessingException(
+                "No output could be written - see the errors above."
+            )
         feedback.setProgress(100)
         return outputs
 
     # ------------------------------------------------------------------
 
     def _write_water_surfaces(self, parameters, context, feedback, results, geoms, crs):
-        sink, dest_id = self.parameterAsSink(
+        sink, dest_id = self._sink_target.parameterAsSink(
             parameters,
             self.OUTPUT_WS,
             context,
@@ -1054,7 +1163,7 @@ class DemDepressionStageStorageAlgorithm(QgsProcessingAlgorithm):
         return dest_id
 
     def _write_contours(self, parameters, context, results, geoms, crs):
-        sink, dest_id = self.parameterAsSink(
+        sink, dest_id = self._sink_target.parameterAsSink(
             parameters,
             self.OUTPUT_CONTOURS,
             context,
@@ -1179,20 +1288,8 @@ class DemDepressionStageStorageAlgorithm(QgsProcessingAlgorithm):
             "volume_m3": None if _is_null(vol) else float(vol) * 1e6,
         }
 
-    def _write_bed_outputs(
-        self, parameters, context, dem_layer, bathys, geoms, results, crs
-    ):
-        outputs = {}
-        for key, scenario in (
-            (self.OUTPUT_BED_DEM, "central"),
-            (self.OUTPUT_BED_DEM_LOW, "low"),
-            (self.OUTPUT_BED_DEM_HIGH, "high"),
-        ):
-            path = self.parameterAsOutputLayer(parameters, key, context)
-            if path:
-                write_bed_dem(dem_layer.source(), path, bathys, scenario)
-                outputs[key] = path
-        sink, dest_id = self.parameterAsSink(
+    def _write_survey_water(self, parameters, context, results, geoms, crs):
+        sink, dest_id = self._sink_target.parameterAsSink(
             parameters,
             self.OUTPUT_SURVEY_WATER,
             context,
@@ -1200,54 +1297,44 @@ class DemDepressionStageStorageAlgorithm(QgsProcessingAlgorithm):
             Qgis.WkbType.MultiPolygon,
             crs,
         )
-        if sink is not None:
-            for r in results:
-                b = r.bathymetry
-                if b is None:
-                    continue
-                polys = group_polygons(trace_rings(b.water_mask))
-                polys_map = [
-                    [ring_to_map(simplify_ring(ring), b.window_gt) for ring in poly]
-                    for poly in polys
-                ]
-                geom = QgsGeometry.fromWkt(rings_to_multipolygon_wkt(polys_map))
-                geom = geom.makeValid().intersection(geoms[id(r)])
-                if QgsWkbTypes.flatType(geom.wkbType()) not in (
-                    Qgis.WkbType.Polygon,
-                    Qgis.WkbType.MultiPolygon,
-                ):
-                    geom.convertGeometryCollectionToSubclass(Qgis.GeometryType.Polygon)
-                geom.convertToMultiType()
-                feat = QgsFeature(_fields(SURVEY_FIELDS))
-                feat.setGeometry(geom)
-                for name, _, _ in SURVEY_FIELDS:
-                    value = b.attributes.get(name)
-                    feat[name] = float(value) if isinstance(value, float) else value
-                sink.addFeature(feat, QgsFeatureSink.Flag.FastInsert)
-            outputs[self.OUTPUT_SURVEY_WATER] = dest_id
-        table = self.parameterAsFileOutput(parameters, self.OUTPUT_BED_TABLE, context)
-        if table:
-            write_bathymetry_summary_csv(table, bathys)
-            outputs[self.OUTPUT_BED_TABLE] = table
-        profile = self.parameterAsFileOutput(parameters, self.OUTPUT_PROFILE, context)
-        if profile:
-            write_profile_csv(profile, bathys)
-            outputs[self.OUTPUT_PROFILE] = profile
-        return outputs
+        for r in results:
+            b = r.bathymetry
+            if b is None:
+                continue
+            polys = group_polygons(trace_rings(b.water_mask))
+            polys_map = [
+                [ring_to_map(simplify_ring(ring), b.window_gt) for ring in poly]
+                for poly in polys
+            ]
+            geom = QgsGeometry.fromWkt(rings_to_multipolygon_wkt(polys_map))
+            geom = geom.makeValid().intersection(geoms[id(r)])
+            if QgsWkbTypes.flatType(geom.wkbType()) not in (
+                Qgis.WkbType.Polygon,
+                Qgis.WkbType.MultiPolygon,
+            ):
+                geom.convertGeometryCollectionToSubclass(Qgis.GeometryType.Polygon)
+            geom.convertToMultiType()
+            feat = QgsFeature(_fields(SURVEY_FIELDS))
+            feat.setGeometry(geom)
+            for name, _, _ in SURVEY_FIELDS:
+                value = b.attributes.get(name)
+                feat[name] = float(value) if isinstance(value, float) else value
+            sink.addFeature(feat, QgsFeatureSink.Flag.FastInsert)
+        return dest_id
 
-    def _register_style(self, context, dest_id, style_filename, **options):
-        """Attaches a saved QML style to an output layer via a post-processor
-        (kept alive on self._post_processors - Processing holds only a weak
-        reference). Skipped when the output is not being loaded."""
-        if not dest_id or not context.willLoadLayerOnCompletion(dest_id):
-            return
-        details = context.layerToLoadOnCompletionDetails(dest_id)
-        processor = _StylePostProcessor(STYLES_DIR / style_filename, **options)
-        details.setPostProcessor(processor)
-        self._post_processors.append(processor)
+    def _load(self, context, path, style_filename, **options):
+        """Loads a written file into the project when the run ends, with its
+        saved QML style (adapted to this run, see _StylePostProcessor)."""
+        name = Path(path).stem
+        details = QgsProcessingContext.LayerDetails(name, context.project(), name)
+        if style_filename:
+            processor = _StylePostProcessor(STYLES_DIR / style_filename, **options)
+            details.setPostProcessor(processor)
+            self._post_processors.append(processor)
+        context.addLayerToLoadOnCompletion(path, details)
 
     def _write_floor_points(self, parameters, context, results, crs):
-        sink, dest_id = self.parameterAsSink(
+        sink, dest_id = self._sink_target.parameterAsSink(
             parameters,
             self.OUTPUT_FLOOR,
             context,
@@ -1272,7 +1359,7 @@ class DemDepressionStageStorageAlgorithm(QgsProcessingAlgorithm):
         return dest_id
 
     def _write_spill_points(self, parameters, context, results, crs):
-        sink, dest_id = self.parameterAsSink(
+        sink, dest_id = self._sink_target.parameterAsSink(
             parameters,
             self.OUTPUT_SPILL,
             context,

@@ -127,16 +127,19 @@ def new_report_figure(height_cm: float, width_cm: float = REPORT_FIG_WIDTH_CM):
     return fig
 
 
-def save_report_figure(fig, path_stem: str | Path, formats=("png", "svg")) -> list[str]:
-    """Saves the figure at its exact size (no tight cropping). SVG keeps
-    text as text (font names, not outlines), so Word renders it in Arial."""
+def save_report_figure(
+    fig, path_stem: str | Path, formats=("png", "svg"), dpi: float = PNG_DPI
+) -> list[str]:
+    """Saves the figure at its exact size (no tight cropping), PNG at
+    ``dpi``. SVG keeps text as text (font names, not outlines), so Word
+    renders it in the house font."""
     import matplotlib
 
     written = []
     for fmt in formats:
         path = str(Path(path_stem).with_suffix("." + fmt))
         with matplotlib.rc_context({"svg.fonttype": "none", "pdf.fonttype": 42}):
-            fig.savefig(path, format=fmt, dpi=PNG_DPI, facecolor="white")
+            fig.savefig(path, format=fmt, dpi=dpi, facecolor="white")
         written.append(path)
     return written
 

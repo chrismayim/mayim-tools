@@ -37,6 +37,15 @@ from mayim_tools.hydrology.terrain_storage.bathymetry_export import (
 NODATA = -9999.0
 
 
+def _dict_rows(path):
+    """Rows of a CSV that starts with a '#' column key (UTF-8 with BOM)."""
+    raw = open(path, "rb").read()
+    assert raw.startswith(b"\xef\xbb\xbf")
+    lines = raw.decode("utf-8-sig").splitlines()
+    assert lines[0] == "# Column key"
+    return list(csv.DictReader(ln for ln in lines if not ln.startswith("#")))
+
+
 def grid(cell):
     return (1000.0, cell, 0.0, 5000.0, 0.0, -cell)
 
@@ -286,15 +295,13 @@ def test_mosaic_and_exports(tmp_path):
 
     path = tmp_path / "summary.csv"
     write_bathymetry_summary_csv(str(path), [res])
-    with open(path, newline="", encoding="utf-8") as f:
-        rows = list(csv.DictReader(f))
+    rows = _dict_rows(path)
     assert [r["name"] for r in rows[:3]] == ["low", "central", "high"]
     assert "," not in rows[1]["volume_m3"]  # no thousands separators
 
     path = tmp_path / "profile.csv"
     write_profile_csv(str(path), [res])
-    with open(path, newline="", encoding="utf-8") as f:
-        prof = list(csv.DictReader(f))
+    prof = _dict_rows(path)
     assert prof and prof[0]["storage_id"] == "Dam"
 
 
@@ -356,8 +363,7 @@ def test_stage_storage_with_bed_dam_and_csv(tmp_path):
     assert 112.0 - res.floor_z == pytest.approx(true_depth, rel=0.06)
     path = tmp_path / "table.csv"
     write_stage_table_csv(str(path), [res])
-    with open(path, newline="", encoding="utf-8") as f:
-        rows = list(csv.DictReader(f))
+    rows = _dict_rows(path)
     assert "volume_low_m3" in rows[0] and "volume_high_m3" in rows[0]
 
 
@@ -371,7 +377,11 @@ def test_stage_storage_csv_without_bed_has_no_range_columns(tmp_path):
     )
     path = tmp_path / "table.csv"
     write_stage_table_csv(str(path), [res])
-    header = path.read_text(encoding="utf-8").splitlines()[0]
+    header = [
+        ln
+        for ln in path.read_text(encoding="utf-8-sig").splitlines()
+        if not ln.startswith("#")
+    ][0]
     assert "volume_low_m3" not in header
 
 

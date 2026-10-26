@@ -237,12 +237,17 @@ def test_csv_outputs(tmp_path, dem):
     )
     p1 = tmp_path / "profile.csv"
     write_profile_csv(str(p1), [s])
-    rows = list(csv.DictReader(open(p1, encoding="utf-8")))
+    raw = p1.read_bytes()
+    assert raw.startswith(b"\xef\xbb\xbf")  # UTF-8 with BOM
+    lines = raw.decode("utf-8-sig").splitlines()
+    assert lines[0] == "# Column key"
+    rows = list(csv.DictReader(ln for ln in lines if not ln.startswith("#")))
     assert len(rows) == len(s.chainage)
     assert "wse_1_100_RAS_m" in rows[0]
     p2 = tmp_path / "m.csv"
     write_measurements_csv(str(p2), [_row(s)])
-    text = p2.read_text(encoding="utf-8")
+    text = p2.read_text(encoding="utf-8-sig")
+    assert text.startswith("# Column key\n# section: section label")
     assert "20.00" in text and "," in text
     assert column_tag("  ") == "event"
 
@@ -254,7 +259,7 @@ def test_no_thousands_separators(tmp_path):
     s = core.build_section("A", [(0, 5), (2999, 5)], big, [], 1.0)
     p = tmp_path / "p.csv"
     write_profile_csv(str(p), [s])
-    last = p.read_text(encoding="utf-8").strip().splitlines()[-1]
+    last = p.read_text(encoding="utf-8-sig").strip().splitlines()[-1]
     assert "2999.000" in last and "1,5" not in last
 
 
@@ -279,7 +284,9 @@ def test_figure_is_16_5_cm_wide_and_keeps_ve(tmp_path, dem):
     from matplotlib.image import imread
 
     img = imread(paths[0])
-    assert abs(img.shape[1] - 16.5 / 2.54 * 300) < 1.0
+    assert abs(img.shape[1] - 16.5 / 2.54 * 300) < 1.0  # default 300 dpi
+    p200 = save_report_figure(fig, tmp_path / "B", formats=("png",), dpi=200)
+    assert abs(imread(p200[0]).shape[1] - 16.5 / 2.54 * 200) < 1.0
     assert "font-family" in (tmp_path / "A.svg").read_text(encoding="utf-8")
 
 

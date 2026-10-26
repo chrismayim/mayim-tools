@@ -1,4 +1,8 @@
-"""Table writers for DEM depression stage-storage (no QGIS dependency)."""
+"""Table writers for DEM depression stage-storage (no QGIS dependency).
+
+The stage table CSV is UTF-8 with a byte-order mark and starts with a
+column key ('#' lines; read it in pandas with comment='#'). The HEC-RAS /
+HEC-HMS table is plain tab-delimited text for pasting."""
 
 from __future__ import annotations
 
@@ -18,6 +22,30 @@ TABLE_FIELDS = [
     "wet_cells",
 ]
 RANGE_FIELDS = ["area_low_m2", "volume_low_m3", "area_high_m2", "volume_high_m3"]
+CSV_ENCODING = "utf-8-sig"
+TABLE_KEY = {
+    "storage_id": "storage area name",
+    "stage_m": "water-surface elevation (stage), m",
+    "depth_m": "depth above the floor (lowest cell), m",
+    "area_m2": "water-surface area, m2",
+    "area_ha": "water-surface area, ha",
+    "volume_m3": "storage volume, m3",
+    "volume_ML": "storage volume, ML (megalitres)",
+    "inc_vol_m3": "volume added since the previous stage, m3",
+    "wet_cells": "number of wet DEM cells",
+    "area_low_m2": "bed estimate: water-surface area with the low (shallow) bed, m2",
+    "volume_low_m3": "bed estimate: storage volume with the low (shallow) bed, m3",
+    "area_high_m2": "bed estimate: water-surface area with the high (deep) bed, m2",
+    "volume_high_m3": "bed estimate: storage volume with the high (deep) bed, m3",
+}
+
+
+def write_key(f, key: dict, columns) -> None:
+    """'# Column key' then '# column: meaning' for the columns written."""
+    f.write("# Column key\n")
+    for col in columns:
+        if col in key:
+            f.write(f"# {col}: {key[col]}\n")
 
 
 def write_stage_table_csv(path: str, results: Sequence[StorageResult]) -> None:
@@ -27,7 +55,8 @@ def write_stage_table_csv(path: str, results: Sequence[StorageResult]) -> None:
     fields = ["storage_id", *TABLE_FIELDS]
     if any(r.range_tables for r in results):
         fields += RANGE_FIELDS
-    with open(path, "w", newline="", encoding="utf-8") as f:
+    with open(path, "w", newline="", encoding=CSV_ENCODING) as f:
+        write_key(f, TABLE_KEY, fields)
         writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
         for r in results:

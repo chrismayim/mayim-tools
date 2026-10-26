@@ -6,13 +6,17 @@ flood-to-property measurements and map layers out.
 
 Thin wrapper - all real logic lives in core.py and figure.py (zero QGIS
 dependency, independently testable; see tests/test_terrain_profile_core.py).
+
+Outputs follow the Mayim output standard: a tick box per output, figure,
+CSV and shapefile folders, files named <project number>_<description>; a
+locked file is reported and the other outputs are still written.
 """
 
 from __future__ import annotations
 
 import math
+import os
 import re
-from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -29,6 +33,7 @@ from qgis.core import (
     QgsMapRendererCustomPainterJob,
     QgsMapSettings,
     QgsMarkerSymbol,
+    QgsMemoryProviderUtils,
     QgsPalLayerSettings,
     QgsPointXY,
     QgsProcessing,
@@ -50,12 +55,19 @@ from qgis.core import (
     QgsRectangle,
     QgsRendererCategory,
     QgsTextFormat,
-    QgsVectorFileWriter,
     QgsVectorLayerSimpleLabeling,
 )
 from qgis.PyQt.QtCore import QMetaType, QSize
 from qgis.PyQt.QtGui import QColor, QFont, QIcon, QImage, QPainter
 
+from mayim_tools._common.output_files import (
+    CSV,
+    SHAPEFILE,
+    WORD,
+    OutputSpec,
+    clean_name_part,
+)
+from mayim_tools._common.report_figures import CHART_DPI
 from mayim_tools.hydrology._common.d8_network import GridError
 from mayim_tools.hydrology._common.depression import (
     polygon_window,
@@ -80,10 +92,10 @@ from .core import (
 )
 from .export import write_measurements_csv, write_profile_csv
 
-TOOL_VERSION = "0.3.2"
+TOOL_VERSION = "0.4.0"
 DISPLAY_NAME = "Flood Extent Terrain Profile"
 
-FORMAT_OPTIONS = ["PNG (300 dpi)", "SVG (text kept as Arial)", "PDF"]
+FORMAT_OPTIONS = ["PNG (200 dpi)", "SVG (text kept as text)", "PDF"]
 FORMAT_EXT = ["png", "svg", "pdf"]
 
 _S = QMetaType.Type.QString
@@ -114,7 +126,50 @@ PLAN_FIELDS = [
     ("wet_area_m2", _D, "flooded area inside the property, m2"),
 ]
 
-OWN_LAYER_STEMS = ("section_lines", "section_points", "plan_distance")
+# Selectable outputs. The figures go to the figure folder (the Word-report
+# folder kind), one file per section and format:
+# <project number>_Section_A.png, <project number>_Section_A_Plan.png.
+OUTPUT_SPECS = [
+    OutputSpec("OUTPUT_FIGURES", "Section figures (profile)", "Section", WORD),
+    OutputSpec(
+        "OUTPUT_PLAN_FIGURES",
+        "Section figures with a plan view above the profile (visible map layers)",
+        "Section Plan", WORD,
+    ),
+    OutputSpec("OUTPUT_PROFILES", "Sampled profiles (CSV)", "Terrain Profiles", CSV),
+    OutputSpec(
+        "OUTPUT_MEASUREMENTS", "Flood-to-property measurements (CSV)",
+        "Flood Property Measurements", CSV,
+    ),
+    OutputSpec(
+        "OUTPUT_SECTION_LINES", "Section lines (shapefile)", "Section Lines", SHAPEFILE
+    ),
+    OutputSpec(
+        "OUTPUT_SECTION_POINTS",
+        "Section points: ends, chainages, property boundary, flood edges (shapefile)",
+        "Section Points", SHAPEFILE,
+    ),
+    OutputSpec(
+        "OUTPUT_PLAN_DISTANCE", "Shortest plan distance lines (shapefile)",
+        "Plan Distance", SHAPEFILE,
+    ),
+]  # fmt: skip
+SPEC_BY_KEY = {spec.key: spec for spec in OUTPUT_SPECS}
+FOLDER_PARAMS = {
+    WORD: ("FOLDER_FIGURES", "Output folder for figures"),
+    CSV: ("FOLDER_CSV", "Output folder for CSV files"),
+    SHAPEFILE: ("FOLDER_SHP", "Output folder for vector layers (shapefiles)"),
+}
+LAYER_KEYS = ("OUTPUT_SECTION_LINES", "OUTPUT_SECTION_POINTS", "OUTPUT_PLAN_DISTANCE")
+
+
+def figure_stem(folder: str, project_number: str, label: str, plan: bool) -> Path:
+    """<folder>/<project number>_Section_<label>[_Plan] (no extension)."""
+    parts = [clean_name_part(project_number), "Section", _safe_name(label)]
+    if plan:
+        parts.append("Plan")
+    return Path(folder) / "_".join(p for p in parts if p)
+
 
 KIND_END = "section end"
 KIND_CHAINAGE = "chainage"
@@ -215,11 +270,10 @@ class TerrainProfileAlgorithm(QgsProcessingAlgorithm):
     SAMPLE_INTERVAL = "SAMPLE_INTERVAL"
     SEARCH_RADIUS = "SEARCH_RADIUS"
     FORMATS = "FORMATS"
-    PLAN_VIEW = "PLAN_VIEW"
     MIN_HEIGHT = "MIN_HEIGHT"
     MAX_HEIGHT = "MAX_HEIGHT"
     EDGE_EXTENSION = "EDGE_EXTENSION"
-    OUTPUT_FOLDER = "OUTPUT_FOLDER"
+    PROJECT_NUMBER = "PROJECT_NUMBER"
 
     def icon(self):
         return QIcon(
@@ -248,6 +302,18 @@ class TerrainProfileAlgorithm(QgsProcessingAlgorithm):
 
     def shortHelpString(self):
         glossary = "\n".join(f"  {n}: {d}" for n, d in MEASUREMENT_FIELDS)
+        files = "\n".join(
+            f"  {s.label}: <project number>_"
+            + (
+                "Section_<label>"
+                + ("_Plan" if s.key == "OUTPUT_PLAN_FIGURES" else "")
+                + ".png / .svg / .pdf"
+                if s.kind == WORD
+                else clean_name_part(s.description)
+                + (".csv" if s.kind == CSV else ".shp")
+            )
+            for s in OUTPUT_SPECS
+        )
         return (
             f"{DISPLAY_NAME} (version {TOOL_VERSION})\n"
             "\n"
@@ -286,32 +352,40 @@ class TerrainProfileAlgorithm(QgsProcessingAlgorithm):
             "figure is dimensioned for the first water surface; the CSV has "
             "every event.\n"
             "\n"
-            "FIGURES:\t16.5 cm wide, Arial (main text) and Arial Narrow (minor "
-            "text), drawn to scale at the vertical exaggeration (default "
+            "FIGURES:\t16.5 cm wide, Arial Narrow 9 pt (Mayim report and "
+            "figure standard), drawn to scale at the vertical exaggeration (default "
             "×10). The height follows from the exaggeration, kept between "
             "the minimum and maximum height: a flat section gets a wider "
             "elevation range, a steep one a smaller exaggeration (reported in "
             "the log). The profile is titled 'Section A\u2013A\u2032' below "
-            "its legend. Saved as PNG (300 dpi) and SVG at their final size - "
+            "its legend. Saved as PNG (200 dpi) and SVG at their final size - "
             "insert at 100 %.\n"
             "\n"
-            "PLAN VIEW:\tWith 'Also draw a plan view' (default), a second "
-            "figure per section, section_A_plan.png, has a plan above the "
-            "profile: the map layers visible in the project (in layer order), "
+            "PLAN VIEW:\tWith the plan-view figures ticked (default), a second "
+            "figure per section, <project number>_Section_A_Plan.png, has a "
+            "plan above the profile: the map layers visible in the project (in "
+            "layer order), "
             "fitted to the section, with the section line, chainage ticks, A "
             "and A\u2032, the property outline, the flood edges, the shortest "
-            "plan distance, a scale bar and a north arrow (grid north). The "
-            "profile on its own is always saved too. Set the map up as it "
-            "should appear (basemap, flood extent, cadastre) before running.\n"
+            "plan distance, a scale bar and a north arrow (grid north). Set "
+            "the map up as it should appear (basemap, flood extent, cadastre) "
+            "before running.\n"
             "\n"
-            "OUTPUT FOLDER:\tEverything is written to the folder: the figures "
-            "(section_A.png, section_A_plan.png ...), profiles.csv (every "
-            "sample), measurements.csv, "
-            "section_lines.gpkg and section_points.gpkg (both loaded into the "
-            "map, styled) and, with a property and water surfaces, "
-            "plan_distance.gpkg (shortest plan distance lines).\n"
-            "\n"
-            "MEASUREMENTS.CSV FIELDS:\n" + glossary
+            "OUTPUTS:\tTick the outputs wanted and choose the figure, CSV and "
+            "shapefile folders. Files are named <project number>_<description> "
+            "and replace files of the same name; a file that is open (a layer "
+            "loaded in QGIS, a CSV in Excel) cannot be replaced and is "
+            "reported, and the other outputs are still written. Figures: "
+            "<project number>_Section_A.png (and .svg / .pdf) and "
+            "<project number>_Section_A_Plan.png per section. The CSVs are UTF-8 "
+            "with a byte-order mark and start with a column key ('#' lines). "
+            "The section lines and points load into the map, styled; the "
+            "plan distance lines are written with a property and water "
+            "surfaces. Shapefile field names are at most 10 characters "
+            "(wet_area_m2 is written as wet_area_m).\n"
+            + files
+            + "\n\nMEASUREMENTS CSV FIELDS:\n"
+            + glossary
         )
 
     def initAlgorithm(self, config=None):
@@ -382,13 +456,6 @@ class TerrainProfileAlgorithm(QgsProcessingAlgorithm):
                 defaultValue=[0, 1],
             )
         )
-        self.addParameter(
-            QgsProcessingParameterBoolean(
-                self.PLAN_VIEW,
-                "Also draw a plan view above the profile (visible map layers)",
-                defaultValue=True,
-            )
-        )
         advanced = [
             QgsProcessingParameterNumber(
                 self.SAMPLE_INTERVAL,
@@ -430,10 +497,22 @@ class TerrainProfileAlgorithm(QgsProcessingAlgorithm):
             p.setFlags(p.flags() | Qgis.ProcessingParameterFlag.Advanced)
             self.addParameter(p)
         self.addParameter(
-            QgsProcessingParameterFolderDestination(
-                self.OUTPUT_FOLDER, "Output folder (figures, tables and layers)"
+            QgsProcessingParameterString(
+                self.PROJECT_NUMBER,
+                "Project number (file name prefix, optional)",
+                optional=True,
             )
         )
+        for spec in OUTPUT_SPECS:
+            self.addParameter(
+                QgsProcessingParameterBoolean(
+                    spec.key, f"Output: {spec.label}", defaultValue=spec.default
+                )
+            )
+        for name, label in FOLDER_PARAMS.values():
+            self.addParameter(
+                QgsProcessingParameterFolderDestination(name, label, optional=True)
+            )
 
     # ------------------------------------------------------------------
 
@@ -480,18 +559,15 @@ class TerrainProfileAlgorithm(QgsProcessingAlgorithm):
         ]
 
     @staticmethod
-    def _render_map(context, crs, extent, width_px, height_px, folder):
+    def _render_map(context, crs, extent, width_px, height_px, own_paths):
         """Renders the project's visible layers (in layer order, not this
-        tool's own earlier outputs) for the extent; returns (RGBA array,
-        extent used, layer names)."""
+        tool's own earlier outputs at ``own_paths``) for the extent; returns
+        (RGBA array, extent used, layer names)."""
         from .figure import PLAN_DPI
 
         project = context.project() or QgsProject.instance()
         root = project.layerTreeRoot()
-        own = {
-            str((Path(folder) / f"{stem}.gpkg").resolve()).lower()
-            for stem in OWN_LAYER_STEMS
-        }
+        own = {str(Path(p).resolve()).lower() for p in own_paths}
         layers = []
         for layer in root.layerOrder():
             node = root.findLayer(layer.id())
@@ -572,47 +648,27 @@ class TerrainProfileAlgorithm(QgsProcessingAlgorithm):
             raise QgsProcessingException("The section line needs two or more vertices.")
         return list(zip(section_labels(len(lines)), lines, strict=True))
 
-    @staticmethod
-    def _free_path(path: Path, feedback) -> Path:
-        """Overwrites an earlier output; when it is locked (still loaded in
-        QGIS) a time-stamped name is used instead."""
-        if not path.exists():
-            return path
-        try:
-            path.unlink()
-            return path
-        except OSError:
-            alt = path.with_name(
-                f"{path.stem}_{datetime.now():%Y%m%d_%H%M%S}{path.suffix}"
-            )
-            feedback.pushWarning(
-                f"{path.name} is in use (loaded in QGIS?) - written as {alt.name}."
-            )
-            return alt
-
-    def _write_gpkg(self, path, specs, wkb, crs, context, feedback, items):
-        """Writes [(geometry, {field: value}), ...] to a GeoPackage."""
-        path = self._free_path(path, feedback)
-        fields = _fields(specs)
-        options = QgsVectorFileWriter.SaveVectorOptions()
-        options.driverName = "GPKG"
-        options.layerName = path.stem
-        options.fileEncoding = "UTF-8"
-        writer = QgsVectorFileWriter.create(
-            str(path), fields, wkb, crs, context.transformContext(), options
+    def _write_shapefile(self, path, specs, wkb, crs, context, items) -> str:
+        """Writes [(geometry, {field: value}), ...] to a shapefile (replacing
+        an earlier one; raises when it is locked)."""
+        from mayim_tools.hydrology.catchment_delineation.qgis_outputs import (
+            save_shapefile,
         )
-        if writer.hasError() != QgsVectorFileWriter.WriterError.NoError:
-            raise QgsProcessingException(
-                f"Could not write {path.name}: {writer.errorMessage()}"
-            )
+
+        fields = _fields(specs)
+        layer = QgsMemoryProviderUtils.createMemoryLayer(
+            Path(path).stem, fields, wkb, crs
+        )
+        feats = []
         for geom, attrs in items:
             f = QgsFeature(fields)
             f.setGeometry(geom)
             for key, value in attrs.items():
                 f[key] = value
-            writer.addFeature(f)
-        del writer  # flushes and closes the file
-        return str(path)
+            feats.append(f)
+        layer.dataProvider().addFeatures(feats)
+        layer.updateExtents()
+        return save_shapefile(layer, str(path), context.transformContext())
 
     @staticmethod
     def _read_grid(path, bbox, pad=3):
@@ -670,13 +726,67 @@ class TerrainProfileAlgorithm(QgsProcessingAlgorithm):
                 "The maximum figure height is less than the minimum."
             )
         extension = self.parameterAsDouble(parameters, self.EDGE_EXTENSION, context)
-        want_plan = self.parameterAsBool(parameters, self.PLAN_VIEW, context)
         formats = [
             FORMAT_EXT[i]
             for i in self.parameterAsEnums(parameters, self.FORMATS, context)
         ] or ["png"]
-        folder = Path(self.parameterAsString(parameters, self.OUTPUT_FOLDER, context))
-        folder.mkdir(parents=True, exist_ok=True)
+        project_number = (
+            self.parameterAsString(parameters, self.PROJECT_NUMBER, context) or ""
+        ).strip()
+        want = [
+            spec.key
+            for spec in OUTPUT_SPECS
+            if self.parameterAsBoolean(parameters, spec.key, context)
+        ]
+        if not want:
+            raise QgsProcessingException("Tick at least one output.")
+        folders = {}
+        for kind in {SPEC_BY_KEY[key].kind for key in want}:
+            name, label = FOLDER_PARAMS[kind]
+            folder_path = self.parameterAsFileOutput(parameters, name, context)
+            if not folder_path:
+                raise QgsProcessingException(
+                    f"Choose the {label[0].lower() + label[1:]}."
+                )
+            os.makedirs(folder_path, exist_ok=True)
+            folders[kind] = folder_path
+        paths = {
+            key: SPEC_BY_KEY[key].path(folders, project_number)
+            for key in want
+            if SPEC_BY_KEY[key].kind != WORD
+        }
+        want_fig = "OUTPUT_FIGURES" in want
+        want_plan = "OUTPUT_PLAN_FIGURES" in want
+        # this tool's own layers (from an earlier run) are left out of the
+        # plan-view render; they are drawn on top of the plan anyway
+        own_paths = [
+            SPEC_BY_KEY[key].path(folders, project_number)
+            for key in LAYER_KEYS
+            if SHAPEFILE in folders
+        ]
+        written = []
+
+        def done(path):
+            written.append(path)
+            feedback.pushInfo(f"Written: {path}")
+
+        def failed(name, error):
+            feedback.reportError(
+                f"{name} could not be written ({error}). If it is open in QGIS, "
+                "Excel or another program, close it and run again.",
+                fatalError=False,
+            )
+
+        def save_figure(fig, stem):
+            out = []
+            for fmt in formats:
+                try:
+                    out += save_report_figure(fig, stem, [fmt], dpi=CHART_DPI)
+                except Exception as e:  # locked (open in a viewer or Word)
+                    failed(f"{stem.name}.{fmt}", e)
+            for path in out:
+                done(path)
+            return out
 
         sections_in = self._read_drawn_sections(parameters, crs, context)
         polygons = self._read_property(prop_source, crs, context)
@@ -788,16 +898,18 @@ class TerrainProfileAlgorithm(QgsProcessingAlgorithm):
                 source_note=note,
                 fonts=fonts,
             )
-            paths = save_report_figure(
-                fig, folder / f"section_{_safe_name(label)}", formats
-            )
-            figures[label] = paths
+            fig_paths = []
+            if want_fig:
+                fig_paths = save_figure(
+                    fig, figure_stem(folders[WORD], project_number, label, False)
+                )
+            figures[label] = fig_paths
             if want_plan:
                 try:
                     pv = plan_view(sec)
                     w, h = pv.pixels
                     pv.image, pv.extent, used = self._render_map(
-                        context, crs, pv.extent, w, h, folder
+                        context, crs, pv.extent, w, h, own_paths
                     )
                     if not used:
                         feedback.pushWarning(
@@ -824,13 +936,15 @@ class TerrainProfileAlgorithm(QgsProcessingAlgorithm):
                         fonts=fonts,
                         plan=pv,
                     )
-                    plan_paths = save_report_figure(
-                        fig2, folder / f"section_{_safe_name(label)}_plan", formats
+                    plan_paths = save_figure(
+                        fig2, figure_stem(folders[WORD], project_number, label, True)
                     )
-                    feedback.pushInfo(
-                        f"Section {label}: plan and profile (plan 1:{pv.scale:.0f}) "
-                        f"-> {Path(plan_paths[0]).name}"
-                    )
+                    if plan_paths:
+                        figures[label] = figures[label] or plan_paths
+                        feedback.pushInfo(
+                            f"Section {label}: plan and profile (plan "
+                            f"1:{pv.scale:.0f}) -> {Path(plan_paths[0]).name}"
+                        )
                 except Exception as e:  # the plan must never lose the profile
                     feedback.pushWarning(f"Section {label}: plan view skipped - {e}")
             if lay.ve_reduced:
@@ -844,14 +958,28 @@ class TerrainProfileAlgorithm(QgsProcessingAlgorithm):
             rows.extend(sec_rows)
             feedback.pushInfo(
                 f"Section {label}: {sec.length:.1f} m, figure {lay.height_cm:.1f} cm "
-                f"high -> {Path(paths[0]).name}"
+                "high" + (f" -> {Path(fig_paths[0]).name}" if fig_paths else "")
             )
         if not sections:
             raise QgsProcessingException("No section could be drawn.")
 
-        write_profile_csv(str(folder / "profiles.csv"), sections)
-        if rows:
-            write_measurements_csv(str(folder / "measurements.csv"), rows)
+        for key, writer, data in (
+            ("OUTPUT_PROFILES", write_profile_csv, sections),
+            ("OUTPUT_MEASUREMENTS", write_measurements_csv, rows),
+        ):
+            if key not in paths:
+                continue
+            if not data:
+                feedback.pushWarning(
+                    f"{SPEC_BY_KEY[key].label}: nothing to write (no water "
+                    "surfaces)."
+                )
+                continue
+            try:
+                writer(paths[key], data)
+                done(paths[key])
+            except Exception as e:
+                failed(Path(paths[key]).name, e)
         for label, pd in plans.items():
             if pd.distance_m is None:
                 feedback.pushInfo(f"{label}: {pd.status} ({radius:g} m).")
@@ -866,11 +994,17 @@ class TerrainProfileAlgorithm(QgsProcessingAlgorithm):
                     f"{pd.wet_area_in_property_m2:.0f} m2 flooded inside it."
                 )
 
-        outputs = {self.OUTPUT_FOLDER: str(folder)}
-        outputs.update(
-            self._write_layers(context, feedback, folder, crs, sections, plans, figures)
+        self._write_layers(
+            context, feedback, paths, crs, sections, plans, figures, done, failed
         )
+        if not written:
+            raise QgsProcessingException(
+                "No output could be written - see the errors above."
+            )
         feedback.setProgress(100)
+        outputs = {name: folders[kind] for kind, (name, _) in FOLDER_PARAMS.items()
+                   if kind in folders}  # fmt: skip
+        outputs.update({key: p for key, p in paths.items() if p in written})
         return outputs
 
     @staticmethod
@@ -889,9 +1023,28 @@ class TerrainProfileAlgorithm(QgsProcessingAlgorithm):
             )
         return head
 
-    def _write_layers(self, context, feedback, folder, crs, sections, plans, figures):
+    def _write_layers(
+        self, context, feedback, paths, crs, sections, plans, figures, done, failed
+    ):
         """Section lines and points (loaded into the map, styled) and the
-        plan-distance lines, as GeoPackages in the output folder."""
+        plan-distance lines, as shapefiles in the shapefile folder."""
+
+        def write(key, specs, wkb, items, name, kind):
+            if key not in paths:
+                return
+            if not items:
+                feedback.pushWarning(f"{SPEC_BY_KEY[key].label}: nothing to write.")
+                return
+            try:
+                path = self._write_shapefile(
+                    paths[key], specs, wkb, crs, context, items
+                )
+            except Exception as e:
+                failed(Path(paths[key]).name, e)
+                return
+            done(path)
+            self._load(context, path, name, kind)
+
         items = []
         for sec in sections:
             geom = QgsGeometry.fromPolylineXY(
@@ -905,20 +1058,18 @@ class TerrainProfileAlgorithm(QgsProcessingAlgorithm):
                         "start_lbl": sec.label,
                         "end_lbl": sec.label + PRIME,
                         "length_m": round(sec.length, 2),
-                        "figure": Path(figures[sec.label][0]).name,
+                        "figure": (
+                            Path(figures[sec.label][0]).name
+                            if figures.get(sec.label)
+                            else ""
+                        ),
                     },
                 )
             )
-        lines_path = self._write_gpkg(
-            folder / "section_lines.gpkg",
-            SECTION_FIELDS,
-            Qgis.WkbType.LineString,
-            crs,
-            context,
-            feedback,
-            items,
-        )
-        self._load(context, lines_path, "Section lines", "sections")
+        write(
+            "OUTPUT_SECTION_LINES", SECTION_FIELDS, Qgis.WkbType.LineString, items,
+            "Section lines", "sections",
+        )  # fmt: skip
 
         items = []
 
@@ -954,18 +1105,12 @@ class TerrainProfileAlgorithm(QgsProcessingAlgorithm):
                         ch, z, kind = w.edge(which)
                         if kind == EDGE_WATERLINE:
                             add(sec, KIND_EDGE, ch, z, "", ev.label)
-        points_path = self._write_gpkg(
-            folder / "section_points.gpkg",
-            POINT_FIELDS,
-            Qgis.WkbType.Point,
-            crs,
-            context,
-            feedback,
-            items,
-        )
-        self._load(context, points_path, "Section points", "points")
+        write(
+            "OUTPUT_SECTION_POINTS", POINT_FIELDS, Qgis.WkbType.Point, items,
+            "Section points", "points",
+        )  # fmt: skip
 
-        if plans:
+        if plans or "OUTPUT_PLAN_DISTANCE" in paths:
             plan_specs = PLAN_FIELDS + [("label", _S, "map label")]
             items = [
                 (
@@ -984,14 +1129,7 @@ class TerrainProfileAlgorithm(QgsProcessingAlgorithm):
                 for label, pd in plans.items()
                 if pd.property_xy is not None
             ]
-            if items:
-                self._write_gpkg(
-                    folder / "plan_distance.gpkg",
-                    plan_specs,
-                    Qgis.WkbType.LineString,
-                    crs,
-                    context,
-                    feedback,
-                    items,
-                )
-        return {}
+            write(
+                "OUTPUT_PLAN_DISTANCE", plan_specs, Qgis.WkbType.LineString, items,
+                "Plan distance", "plan",
+            )  # fmt: skip

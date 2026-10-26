@@ -1,10 +1,11 @@
-"""Word (.docx) report for the DEM depression stage-storage tool.
+"""Word (.docx) report for the DEM depression stage-storage tool, in the
+Mayim report and figure standard (title page, house text styles, charts
+16.5 cm wide in Arial Narrow 9 pt with the house colours).
 
 Zero QGIS dependency. Needs python-docx and matplotlib (both imported
 lazily, so the rest of the tool works without them). Figures use
 matplotlib's object API (no pyplot), which is safe on QGIS's Processing
-worker thread. Document and chart helpers are shared with the Catchment
-Delineation report (hydrology/_common/docx_report.py).
+worker thread.
 """
 
 from __future__ import annotations
@@ -12,26 +13,28 @@ from __future__ import annotations
 import io
 import math
 from collections.abc import Sequence
+from datetime import date
 
 import numpy as np
 
-from mayim_tools._common.docx_report import (
-    C_AQUA,
-    C_BLUE,
-    C_INK,
-    C_INK_2,
-    C_ORANGE,
-    Doc,
-    format_value,
-    new_figure,
-    png,
-    style_axes,
-)
+from mayim_tools._common.docx_report import Doc, format_value
+from mayim_tools._common.report_figures import CHART_COLOURS, CHART_INK
 
 from .core import StorageResult
 
 REPORT_TITLE = "DEM Depression Stage-Storage Assessment"
 MAX_REPORT_ROWS = 30
+
+# House content colours: blue for volume and water, red for area.
+C_VOLUME = CHART_COLOURS[4]
+C_AREA = CHART_COLOURS[0]
+C_SPILL = CHART_COLOURS[0]
+FILL_ALPHA = 0.12
+DATA_LW = 1.5
+REF_LW = 0.75
+REF_LS = "--"
+GROUND_LW = 1.0
+GROUND_LS = (0, (4, 2))
 
 # (quantity, symbol (unit), definition / equation)
 DEFINITIONS = [
@@ -213,68 +216,105 @@ def _area_scale(area_max: float):
     return 1.0, "Water-surface area (m²)"
 
 
-def figure_plan(r: StorageResult) -> io.BytesIO | None:
+def _style():
+    from mayim_tools._common.report_figures import ChartStyle
+
+    return ChartStyle()
+
+
+def figure_plan(r: StorageResult, style=None) -> io.BytesIO | None:
+    """Depth at the top stage in a map frame (scale bar, north arrow, legend
+    below, no gridlines)."""
+    from matplotlib.lines import Line2D
     from matplotlib.patches import PathPatch
     from matplotlib.path import Path
 
+    from mayim_tools._common.report_maps import north_arrow, scale_bar
+
     if r.window_gt is None or not np.isfinite(r.depth).any():
         return None
+    style = style or _style()
     gt = r.window_gt
     rows, cols = r.depth.shape
     extent = [gt[0], gt[0] + cols * gt[1], gt[3] + rows * gt[5], gt[3]]
-    fig = new_figure(12.0)
-    ax = fig.add_subplot(1, 1, 1)
-    depth = np.ma.masked_invalid(r.depth)
-    im = ax.imshow(depth, extent=extent, cmap="Blues", vmin=0, interpolation="nearest")
-    cbar = fig.colorbar(im, ax=ax, shrink=0.8, pad=0.02)
-    cbar.set_label(f"Depth at {r.top_stage:.2f} m (m)", fontsize=8, color=C_INK)
-    cbar.ax.tick_params(labelsize=7, colors=C_INK_2)
-    for poly in r.polygons:
-        verts, codes = [], []
-        for ring in poly:
-            if len(ring) < 3:
-                continue
-            verts.extend(ring)
-            codes.extend([Path.MOVETO] + [Path.LINETO] * (len(ring) - 2))
-            codes.append(Path.CLOSEPOLY)
-        if verts:
-            ax.add_patch(
-                PathPatch(
-                    Path(verts, codes), facecolor="none", edgecolor=C_INK, linewidth=0.8
-                )
-            )
-    ax.plot([], [], color=C_INK, linewidth=0.8, label="Storage polygon")
-    if r.contours:
-        for _, _, lines in r.contours:
-            for line in lines:
-                lx, ly = zip(*line, strict=True)
-                ax.plot(lx, ly, color=C_INK_2, linewidth=0.4, alpha=0.8)
-        ax.plot([], [], color=C_INK_2, linewidth=0.4, label="Water-edge contours")
-    ax.plot(
-        *r.floor_xy,
-        marker="v",
-        markersize=7,
-        color=C_INK,
-        linestyle="none",
-        label=f"Floor {r.floor_z:.2f} m",
-    )
-    if r.spill_xy is not None:
-        ax.plot(
-            *r.spill_xy,
-            marker="X",
-            markersize=8,
-            color=C_ORANGE,
-            linestyle="none",
-            label=f"Spill crest {r.spill_z:.2f} m",
+    aspect = (extent[3] - extent[2]) / max(extent[1] - extent[0], 1e-9)
+    height = min(max(13.0 * aspect, 6.0), 17.0) + 3.5
+    with style.context():
+        fig = style.figure(height)
+        ax = fig.add_subplot(1, 1, 1)
+        depth = np.ma.masked_invalid(r.depth)
+        im = ax.imshow(
+            depth, extent=extent, cmap="Blues", vmin=0, interpolation="nearest"
         )
-    ax.set_aspect("equal", adjustable="datalim")
-    ax.set_xlabel("Easting (m)")
-    ax.set_ylabel("Northing (m)")
-    style_axes(ax)
-    ax.grid(False)
-    ax.ticklabel_format(useOffset=False, style="plain")
-    ax.legend(fontsize=7, frameon=True, framealpha=0.85, loc="best")
-    return png(fig)
+        cbar = fig.colorbar(im, ax=ax, shrink=0.8, pad=0.02)
+        cbar.set_label(
+            f"Depth at {r.top_stage:.2f} m (m)",
+            fontproperties=style.font_props(weight="bold"),
+        )
+        cbar.outline.set_edgecolor(CHART_INK)
+        cbar.outline.set_linewidth(0.75)
+        for label in cbar.ax.get_yticklabels():
+            label.set_fontproperties(style.font_props())
+        handles = []
+        for poly in r.polygons:
+            verts, codes = [], []
+            for ring in poly:
+                if len(ring) < 3:
+                    continue
+                verts.extend(ring)
+                codes.extend([Path.MOVETO] + [Path.LINETO] * (len(ring) - 2))
+                codes.append(Path.CLOSEPOLY)
+            if verts:
+                ax.add_patch(
+                    PathPatch(
+                        Path(verts, codes), facecolor="none", edgecolor=CHART_INK,
+                        linewidth=1.0, linestyle=REF_LS,
+                    )
+                )  # fmt: skip
+        handles.append(
+            Line2D([], [], color=CHART_INK, linewidth=1.0, linestyle=REF_LS,
+                   label="Storage polygon")
+        )  # fmt: skip
+        if r.contours:
+            for _, _, lines in r.contours:
+                for line in lines:
+                    lx, ly = zip(*line, strict=True)
+                    ax.plot(lx, ly, color=CHART_INK, linewidth=0.4, alpha=0.6)
+            handles.append(
+                Line2D([], [], color=CHART_INK, linewidth=0.4, alpha=0.6,
+                       label="Water-edge contours")
+            )  # fmt: skip
+        ax.plot(
+            *r.floor_xy, marker="v", markersize=7, color=CHART_INK,
+            markeredgecolor="white", linestyle="none",
+        )  # fmt: skip
+        handles.append(
+            Line2D([], [], marker="v", color=CHART_INK, linestyle="none",
+                   label=f"Floor {r.floor_z:.2f} m")
+        )  # fmt: skip
+        if r.spill_xy is not None:
+            ax.plot(
+                *r.spill_xy, marker="X", markersize=8, color=C_SPILL,
+                markeredgecolor=CHART_INK, linestyle="none",
+            )  # fmt: skip
+            handles.append(
+                Line2D([], [], marker="X", color=C_SPILL, markeredgecolor=CHART_INK,
+                       linestyle="none", label=f"Spill crest {r.spill_z:.2f} m")
+            )  # fmt: skip
+        ax.set_xlim(extent[0], extent[1])
+        ax.set_ylim(extent[2], extent[3])
+        ax.set_aspect("equal", adjustable="box")
+        ax.set_xlabel("Easting (m)")
+        ax.set_ylabel("Northing (m)")
+        ax.ticklabel_format(useOffset=False, style="plain")
+        scale_bar(ax, (extent[0], extent[2], extent[1], extent[3]))
+        north_arrow(ax)
+        style.axes(ax, grid=False)
+        style.legend(
+            ax, handles=handles, loc="upper center", bbox_to_anchor=(0.5, -0.12),
+            ncols=2,
+        )  # fmt: skip
+        return style.png(fig)
 
 
 def _range_band(ax, r: StorageResult, scale: float) -> None:
@@ -290,25 +330,34 @@ def _range_band(ax, r: StorageResult, scale: float) -> None:
             h,
             np.nan_to_num(lo) / scale,
             np.nan_to_num(hi) / scale,
-            color=C_BLUE,
-            alpha=0.15,
+            color=C_VOLUME,
+            alpha=FILL_ALPHA,
             linewidth=0,
             label="Bed estimate: low - high",
         )
     ax.axhline(
         r.bathymetry.water_level,
-        color=C_INK_2,
-        linewidth=0.8,
-        linestyle="--",
+        color=CHART_INK,
+        linewidth=REF_LW,
+        linestyle=REF_LS,
         label=f"Surveyed water level {r.bathymetry.water_level:.2f} m",
     )
 
 
-def figure_bed_profile(r: StorageResult) -> io.BytesIO | None:
-    """DEM and estimated bed along the stream centreline (built dams)."""
+def _legend_below(style, ax, handles=None, ncols=2):
+    kw = {"loc": "upper center", "bbox_to_anchor": (0.5, -0.2), "ncols": ncols}
+    if handles is not None:
+        kw["handles"] = handles
+    style.legend(ax, **kw)
+
+
+def figure_bed_profile(r: StorageResult, style=None) -> io.BytesIO | None:
+    """DEM (natural ground) and estimated bed along the stream centreline
+    (built dams)."""
     b = r.bathymetry
     if b is None or not b.profile:
         return None
+    style = style or _style()
     x = np.array([row["from_entry_m"] for row in b.profile], dtype=float)
     order = np.argsort(x)
     x = x[order]
@@ -319,126 +368,128 @@ def figure_bed_profile(r: StorageResult) -> io.BytesIO | None:
             dtype=float,
         )[order]
 
-    fig = new_figure(7.5)
-    ax = fig.add_subplot(1, 1, 1)
-    ax.fill_between(
-        x,
-        col("bed_low"),
-        col("bed_high"),
-        color=C_BLUE,
-        alpha=0.15,
-        linewidth=0,
-        label="Estimated bed: low - high",
-    )
-    ax.plot(x, col("dem_z"), color=C_INK, linewidth=1.0, label="DEM")
-    ax.plot(
-        x,
-        col("bed_central"),
-        color=C_BLUE,
-        linewidth=1.6,
-        label="Estimated bed (central)",
-    )
-    ax.axhline(
-        b.water_level,
-        color=C_INK_2,
-        linewidth=0.8,
-        linestyle="--",
-        label=f"Surveyed water level {b.water_level:.2f} m",
-    )
-    ax.set_xlabel("Distance downstream from where the river enters the water (m)")
-    ax.set_ylabel("Elevation (m)")
-    style_axes(ax)
-    ax.legend(fontsize=7, frameon=False, loc="best")
-    return png(fig)
+    with style.context():
+        fig = style.figure(8.5)
+        ax = fig.add_subplot(1, 1, 1)
+        ax.fill_between(
+            x, col("bed_low"), col("bed_high"), color=C_VOLUME, alpha=FILL_ALPHA,
+            linewidth=0, label="Estimated bed: low - high",
+        )  # fmt: skip
+        ax.plot(
+            x, col("dem_z"), color=CHART_INK, linewidth=GROUND_LW,
+            linestyle=GROUND_LS, label="Natural ground (DEM)",
+        )  # fmt: skip
+        ax.plot(
+            x, col("bed_central"), color=C_VOLUME, linewidth=DATA_LW,
+            label="Estimated bed (central)",
+        )  # fmt: skip
+        ax.axhline(
+            b.water_level, color=CHART_INK, linewidth=REF_LW, linestyle=REF_LS,
+            label=f"Surveyed water level {b.water_level:.2f} m",
+        )  # fmt: skip
+        ax.set_xlabel("Distance downstream from where the river enters the water (m)")
+        ax.set_ylabel("Elevation (m)")
+        ax.ticklabel_format(useOffset=False, style="plain")
+        style.axes(ax)
+        _legend_below(style, ax)
+        return style.png(fig)
 
 
-def figure_elevation_area_capacity(r: StorageResult) -> io.BytesIO:
+def figure_elevation_area_capacity(r: StorageResult, style=None) -> io.BytesIO:
     """Classic reservoir chart: stage on y, volume on the bottom x axis and
     area on a reversed top x axis."""
+    style = style or _style()
     h, _, area, vol = _arrays(r)
     vs, vlabel = _vol_scale(vol.max())
     as_, alabel = _area_scale(area.max())
-    fig = new_figure(9.0)
-    ax = fig.add_subplot(1, 1, 1)
-    ax.plot(vol / vs, h, color=C_BLUE, linewidth=1.8, label="Storage volume")
-    _range_band(ax, r, vs)
-    ax.set_xlabel(vlabel)
-    ax.set_ylabel("Stage (m)")
-    ax.set_xlim(left=0)
-    style_axes(ax)
-    top = ax.twiny()
-    top.plot(area / as_, h, color=C_ORANGE, linewidth=1.8, label="Water-surface area")
-    top.set_xlim(left=0)
-    top.invert_xaxis()
-    top.set_xlabel(alabel, fontsize=8, color=C_INK)
-    top.tick_params(colors=C_INK_2, labelsize=7, width=0.6)
-    for side in ("right", "left", "bottom"):
-        top.spines[side].set_visible(False)
-    top.spines["top"].set_color(C_INK_2)
-    top.spines["top"].set_linewidth(0.6)
-    handles = ax.get_legend_handles_labels()[0] + top.get_legend_handles_labels()[0]
-    ax.legend(handles=handles, fontsize=7, frameon=False, loc="lower center")
-    ax.set_ylim(h.min(), h.max())
-    return png(fig)
-
-
-def _xy_figure(x, y, xlabel, ylabel, color, fill=False, fit=None, fit_label=None):
-    fig = new_figure(7.5)
-    ax = fig.add_subplot(1, 1, 1)
-    if fill:
-        ax.fill_between(x, y, color=color, alpha=0.12, linewidth=0)
-    ax.plot(x, y, color=color, linewidth=1.8, label="DEM")
-    if fit is not None:
-        xs = np.linspace(max(x.min(), 1e-6), x.max(), 100)
-        ax.plot(
-            xs,
-            fit(xs),
-            color=C_INK_2,
-            linewidth=1.0,
-            linestyle="--",
-            label=fit_label,
+    with style.context():
+        fig = style.figure(10.0)
+        ax = fig.add_subplot(1, 1, 1)
+        ax.plot(vol / vs, h, color=C_VOLUME, linewidth=DATA_LW, label="Storage volume")
+        _range_band(ax, r, vs)
+        ax.set_xlabel(vlabel)
+        ax.set_ylabel("Stage (m)")
+        ax.set_xlim(left=0)
+        ax.set_ylim(h.min(), h.max())
+        ax.ticklabel_format(axis="y", useOffset=False, style="plain")
+        style.axes(ax)
+        top = ax.twiny()
+        top.plot(
+            area / as_, h, color=C_AREA, linewidth=DATA_LW, label="Water-surface area"
         )
-        ax.legend(fontsize=7, frameon=False, loc="upper left")
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel(ylabel)
-    ax.set_xlim(left=min(0.0, float(x.min())))
-    ax.set_ylim(bottom=0)
-    style_axes(ax)
-    return png(fig)
+        top.set_xlim(left=0)
+        top.invert_xaxis()
+        top.set_xlabel(alabel)
+        style.axes(top, grid=False)
+        handles = ax.get_legend_handles_labels()[0] + top.get_legend_handles_labels()[0]
+        _legend_below(style, ax, handles=handles)
+        return style.png(fig)
 
 
-def figure_stage_storage(r: StorageResult) -> io.BytesIO:
+def _xy_figure(
+    style, x, y, xlabel, ylabel, color, fill=False, fit=None, fit_label=None
+):
+    with style.context():
+        fig = style.figure(8.0)
+        ax = fig.add_subplot(1, 1, 1)
+        if fill:
+            ax.fill_between(x, y, color=color, alpha=FILL_ALPHA, linewidth=0)
+        ax.plot(x, y, color=color, linewidth=DATA_LW, label="From the DEM")
+        if fit is not None:
+            xs = np.linspace(max(x.min(), 1e-6), x.max(), 100)
+            ax.plot(
+                xs, fit(xs), color=CHART_INK, linewidth=REF_LW, linestyle=REF_LS,
+                label=fit_label,
+            )  # fmt: skip
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+        ax.set_xlim(left=min(0.0, float(x.min())))
+        ax.set_ylim(bottom=0)
+        style.axes(ax)
+        if fit is not None:
+            _legend_below(style, ax)
+        return style.png(fig)
+
+
+def figure_stage_storage(r: StorageResult, style=None) -> io.BytesIO:
+    style = style or _style()
     h, _, _, vol = _arrays(r)
     vs, vlabel = _vol_scale(vol.max())
-    fig = new_figure(7.5)
-    ax = fig.add_subplot(1, 1, 1)
-    ax.plot(vol / vs, h, color=C_BLUE, linewidth=1.8, label="Storage volume")
-    _range_band(ax, r, vs)
-    ax.set_xlabel(vlabel)
-    ax.set_ylabel("Stage (m)")
-    ax.set_xlim(left=0)
-    ax.set_ylim(h.min(), h.max())
-    style_axes(ax)
-    if r.bathymetry is not None:
-        ax.legend(fontsize=7, frameon=False, loc="lower right")
-    return png(fig)
+    with style.context():
+        fig = style.figure(8.0)
+        ax = fig.add_subplot(1, 1, 1)
+        ax.plot(vol / vs, h, color=C_VOLUME, linewidth=DATA_LW, label="Storage volume")
+        _range_band(ax, r, vs)
+        ax.set_xlabel(vlabel)
+        ax.set_ylabel("Stage (m)")
+        ax.set_xlim(left=0)
+        ax.set_ylim(h.min(), h.max())
+        ax.ticklabel_format(axis="y", useOffset=False, style="plain")
+        style.axes(ax)
+        if r.bathymetry is not None:
+            _legend_below(style, ax)
+        return style.png(fig)
 
 
-def figure_stage_area(r: StorageResult) -> io.BytesIO:
+def figure_stage_area(r: StorageResult, style=None) -> io.BytesIO:
+    style = style or _style()
     h, _, area, _ = _arrays(r)
     as_, alabel = _area_scale(area.max())
-    fig = new_figure(7.5)
-    ax = fig.add_subplot(1, 1, 1)
-    ax.plot(area / as_, h, color=C_ORANGE, linewidth=1.8)
-    ax.set_xlabel(alabel)
-    ax.set_ylabel("Stage (m)")
-    ax.set_xlim(left=0)
-    ax.set_ylim(h.min(), h.max())
-    style_axes(ax)
-    return png(fig)
+    with style.context():
+        fig = style.figure(7.5)
+        ax = fig.add_subplot(1, 1, 1)
+        ax.plot(area / as_, h, color=C_AREA, linewidth=DATA_LW)
+        ax.set_xlabel(alabel)
+        ax.set_ylabel("Stage (m)")
+        ax.set_xlim(left=0)
+        ax.set_ylim(h.min(), h.max())
+        ax.ticklabel_format(axis="y", useOffset=False, style="plain")
+        style.axes(ax)
+        return style.png(fig)
 
 
-def figure_depth_area(r: StorageResult) -> io.BytesIO:
+def figure_depth_area(r: StorageResult, style=None) -> io.BytesIO:
+    style = style or _style()
     _, d, area, _ = _arrays(r)
     as_, alabel = _area_scale(area.max())
     fit = r.detail.get("fit_area")
@@ -449,10 +500,13 @@ def figure_depth_area(r: StorageResult) -> io.BytesIO:
             return fit["a"] * x ** fit["b"] / as_
 
         label = f"A = {fit['a']:.4g} d^{fit['b']:.2f} (R² = {fit['r2']:.3f})"
-    return _xy_figure(d, area / as_, "Depth d (m)", alabel, C_ORANGE, True, fn, label)
+    return _xy_figure(
+        style, d, area / as_, "Depth d (m)", alabel, C_AREA, True, fn, label
+    )
 
 
-def figure_depth_volume(r: StorageResult) -> io.BytesIO:
+def figure_depth_volume(r: StorageResult, style=None) -> io.BytesIO:
+    style = style or _style()
     _, d, _, vol = _arrays(r)
     vs, vlabel = _vol_scale(vol.max())
     fit = r.detail.get("fit_volume")
@@ -463,28 +517,32 @@ def figure_depth_volume(r: StorageResult) -> io.BytesIO:
             return fit["a"] * x ** fit["b"] / vs
 
         label = f"V = {fit['a']:.4g} d^{fit['b']:.2f} (R² = {fit['r2']:.3f})"
-    return _xy_figure(d, vol / vs, "Depth d (m)", vlabel, C_BLUE, True, fn, label)
+    return _xy_figure(
+        style, d, vol / vs, "Depth d (m)", vlabel, C_VOLUME, True, fn, label
+    )
 
 
-def figure_depth_distribution(r: StorageResult) -> io.BytesIO | None:
+def figure_depth_distribution(r: StorageResult, style=None) -> io.BytesIO | None:
     bins = r.detail.get("depth_hist") or []
     if not bins:
         return None
-    fig = new_figure(7.0)
-    ax = fig.add_subplot(1, 1, 1)
-    ax.bar(
-        [b["from_m"] for b in bins],
-        [b["pct"] for b in bins],
-        width=[b["to_m"] - b["from_m"] for b in bins],
-        align="edge",
-        color=C_AQUA,
-        edgecolor="white",
-        linewidth=1.0,
-    )
-    ax.set_xlabel(f"Depth at {r.top_stage:.2f} m (m)")
-    ax.set_ylabel("Share of water-surface area (%)")
-    style_axes(ax)
-    return png(fig)
+    style = style or _style()
+    with style.context():
+        fig = style.figure(7.5)
+        ax = fig.add_subplot(1, 1, 1)
+        ax.bar(
+            [b["from_m"] for b in bins],
+            [b["pct"] for b in bins],
+            width=[b["to_m"] - b["from_m"] for b in bins],
+            align="edge",
+            color=C_VOLUME,
+            edgecolor=CHART_INK,
+            linewidth=0.75,
+        )
+        ax.set_xlabel(f"Depth at {r.top_stage:.2f} m (m)")
+        ax.set_ylabel("Share of water-surface area (%)")
+        style.axes(ax)
+        return style.png(fig)
 
 
 # ---------------------------------------------------------------------------
@@ -510,7 +568,7 @@ METHOD_ROWS = (
 )
 
 
-def _bed_section(d, r: StorageResult, include_figures: bool) -> None:
+def _bed_section(d, r: StorageResult, include_figures: bool, style=None) -> None:
     b = r.bathymetry
     a = b.attributes
     c = b.scenarios["central"]
@@ -582,7 +640,7 @@ def _bed_section(d, r: StorageResult, include_figures: bool) -> None:
     if extra:
         d.para("Supporting values: " + "; ".join(extra) + ".")
     if include_figures:
-        stream = figure_bed_profile(r)
+        stream = figure_bed_profile(r, style)
         if stream is not None:
             d.picture(
                 stream,
@@ -596,27 +654,55 @@ def _bed_section(d, r: StorageResult, include_figures: bool) -> None:
 # ---------------------------------------------------------------------------
 
 
+def title_details(context: dict) -> list[tuple[str, str]]:
+    tool = context.get("tool", "DEM depression stage-storage")
+    version = context.get("version")
+    return [
+        ("Project number", context.get("project_number") or "-"),
+        ("Project / site", context.get("project_name") or "-"),
+        ("Prepared by", context.get("prepared_by") or "Mayim Consulting"),
+        ("Tool and version", f"{tool}, version {version}" if version else tool),
+        ("Software", context.get("software") or "-"),
+        ("Report date", context.get("report_date") or date.today().isoformat()),
+        ("Document status", context.get("status") or "Draft"),
+    ]
+
+
 def write_report_docx(
     path: str,
     results: Sequence[StorageResult],
     context: dict,
     include_figures: bool = True,
-) -> None:
-    """Writes the report. ``context`` describes the run (see the QGIS
-    wrapper): tool/version/run time, inputs, settings, outputs and
-    processing warnings."""
-    d = Doc()
+) -> list[str]:
+    """Writes the report and returns messages for the run log (e.g. a
+    substituted font). ``context`` describes the run (see the QGIS
+    wrapper): tool, version, software, project_number, project_name, run
+    time, inputs, settings, outputs and processing warnings."""
+    d = Doc(house_style=True)
     ctx = context or {}
+    messages: list[str] = []
+    style = None
     if include_figures:
         try:
-            import matplotlib  # noqa: F401
+            style = _style()
+            messages.extend(style.warnings)
         except ImportError:
             include_figures = False
     dem = ctx.get("dem", {})
     mode = ctx.get("mode", "connected")
     n = len(results)
 
-    d.heading(REPORT_TITLE, 1)
+    d.title_page(
+        REPORT_TITLE,
+        purpose=(
+            "This report gives the stage-storage (elevation-area-volume) "
+            f"relationship of {n} storage area{'s' if n != 1 else ''} read from "
+            "the digital elevation model, with the levels, tables and curves "
+            "needed to model them as storage areas or reservoirs."
+        ),
+        details=title_details(ctx),
+        subtitle=ctx.get("project_name") or None,
+    )
 
     # 1. Summary ---------------------------------------------------------------
     d.heading("1. Summary", 2)
@@ -625,8 +711,8 @@ def write_report_docx(
         f"relationship of {n} storage area{'s' if n != 1 else ''} read from a "
         f"digital elevation model (DEM) with a {dem.get('cell_x', 0):g} m x "
         f"{dem.get('cell_y', 0):g} m cell size, using the "
-        f"{ctx.get('tool', 'DEM depression stage-storage')} tool (Mayim Tools, "
-        f"version {ctx.get('version', '-')}). Cells were counted when "
+        f"{ctx.get('tool', 'DEM depression stage-storage')} tool (version "
+        f"{ctx.get('version', '-')}). Cells were counted when "
         f"{MODE_TEXT.get(mode, mode)}. For each storage area it gives the "
         "levels, the stage-area-volume table, the depth distribution and the "
         "stage-storage, stage-area, depth-area and depth-volume curves."
@@ -753,8 +839,8 @@ def write_report_docx(
         "the depressions this tool measures."
     )
 
-    # 4. Definitions ------------------------------------------------------------
-    d.heading("4. Definitions", 2)
+    # 4. Parameters and calculations ---------------------------------------------
+    d.heading("4. Parameters and calculations", 2)
     d.caption("Table", "Quantities and equations")
     d.table(
         ["Quantity", "Symbol (unit)", "Definition / equation"],
@@ -763,7 +849,7 @@ def write_report_docx(
     )
 
     # 5. Results -----------------------------------------------------------------
-    d.heading("5. Storage area results", 2)
+    d.heading("5. Results", 2)
     for i, r in enumerate(results, start=1):
         a = r.attributes
         d.heading(f"5.{i} Storage area {r.storage_id}", 3)
@@ -795,7 +881,7 @@ def write_report_docx(
         d.caption("Table", f"Key results, storage area {r.storage_id}")
         d.table(["Quantity", "Value"], rows, widths_cm=[9.0, 7.0], group_rows=groups)
         if r.bathymetry is not None:
-            _bed_section(d, r, include_figures)
+            _bed_section(d, r, include_figures, style)
 
         shown = report_rows(r.table)
         d.caption(
@@ -870,16 +956,26 @@ def write_report_docx(
                 (figure_depth_volume, "depth-volume curve"),
                 (figure_depth_distribution, "distribution of depth at the top stage"),
             ):
-                stream = maker(r)
+                stream = maker(r, style)
                 if stream is not None:
                     d.picture(stream, f"Storage area {sid}: {cap}")
 
     # 6. Outputs ------------------------------------------------------------------
+    d.heading("6. Outputs", 2)
     outputs = ctx.get("outputs", [])
     if outputs:
-        d.heading("6. Outputs", 2)
         d.caption("Table", "Files produced by the tool")
-        d.table(["Output", "Location"], [list(o) for o in outputs], widths_cm=[5, 11])
+        d.table(
+            ["Output", "Location"], [list(o) for o in outputs], widths_cm=[5.0, 11.5]
+        )
+    else:
+        d.para("No files were recorded for this run.")
+    d.para(
+        "The CSV files are UTF-8 with a byte-order mark and start with a column "
+        "key ('#' lines). The HEC-RAS / HEC-HMS table is tab-delimited text "
+        "with elevation (m), volume (1000 m³) and area (1000 m²) per storage "
+        "area, ready to paste."
+    )
 
     # 7. Notes ---------------------------------------------------------------------
     d.heading("7. Notes and limitations", 2)
@@ -914,11 +1010,14 @@ def write_report_docx(
             "statistical confidence interval.",
         ]:
             d.bullet(note)
-    warnings = ctx.get("warnings", [])
+    warnings = list(dict.fromkeys(list(ctx.get("warnings", [])) + messages))
+    d.label("Processing messages")
     if warnings:
-        d.para("Processing messages recorded during this run:")
+        d.para("Messages recorded during this run:")
         for w in warnings:
             d.bullet(w)
+    else:
+        d.para("No warnings were recorded during this run.")
 
     # 8. References ----------------------------------------------------------------
     d.heading("8. References", 2)
@@ -926,6 +1025,7 @@ def write_report_docx(
     if any(r.bathymetry is not None for r in results):
         refs += BED_REFERENCES
     for ref in sorted(refs):
-        d.para(ref)
+        d.para(ref.replace(" & ", " and "))
 
     d.doc.save(path)
+    return messages

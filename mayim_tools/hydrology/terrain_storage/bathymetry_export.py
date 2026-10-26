@@ -1,5 +1,6 @@
 """CSV writers for the bathymetry estimate of DEM depression stage-storage
-(no QGIS dependency)."""
+(no QGIS dependency). UTF-8 with a byte-order mark, starting with a column
+key ('#' lines)."""
 
 from __future__ import annotations
 
@@ -7,6 +8,31 @@ import csv
 from collections.abc import Sequence
 
 from .bathymetry import SCENARIOS, BathymetryResult
+from .export import CSV_ENCODING, write_key
+
+SUMMARY_KEY = {
+    "storage_id": "storage area name",
+    "row_type": "scenario (low / central / high bed) or method",
+    "name": "scenario or method name",
+    "water_level_m": "surveyed water level, m",
+    "water_area_m2": "surveyed water-surface area, m2",
+    "max_depth_m": "maximum depth below the water level, m",
+    "mean_depth_m": "mean depth below the water level, m",
+    "volume_m3": "volume below the surveyed water surface, m3",
+    "status_or_basis": "basis of the scenario, or the method's status",
+}
+PROFILE_KEY = {
+    "storage_id": "storage area name",
+    "chainage_m": "distance along the centreline from its start, m",
+    "from_entry_m": "distance downstream from where the river enters the water, m",
+    "x": "easting, m",
+    "y": "northing, m",
+    "in_water": "1 inside the surveyed water surface, else 0",
+    "dem_z": "DEM level, m",
+    "bed_low": "estimated bed level - low (shallow), m",
+    "bed_central": "estimated bed level - central, m",
+    "bed_high": "estimated bed level - high (deep), m",
+}
 
 METHOD_LABELS = {
     "slope": "Shoreline slope (Hollister et al., 2011)",
@@ -38,7 +64,8 @@ def write_bathymetry_summary_csv(
         "volume_m3",
         "status_or_basis",
     ]
-    with open(path, "w", newline="", encoding="utf-8") as f:
+    with open(path, "w", newline="", encoding=CSV_ENCODING) as f:
+        write_key(f, SUMMARY_KEY, fields)
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
         for r in results:
@@ -89,7 +116,8 @@ def write_profile_csv(path: str, results: Sequence[BathymetryResult]) -> None:
         "bed_central",
         "bed_high",
     ]
-    with open(path, "w", newline="", encoding="utf-8") as f:
+    with open(path, "w", newline="", encoding=CSV_ENCODING) as f:
+        write_key(f, PROFILE_KEY, fields)
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
         for r in results:

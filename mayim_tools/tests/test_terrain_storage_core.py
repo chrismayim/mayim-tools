@@ -436,8 +436,11 @@ def test_exports(tmp_path):
     res = run(z, [[rect(1, 1, 10, 10)]], interval=2.0)
     csv_path = tmp_path / "stage.csv"
     write_stage_table_csv(str(csv_path), [res])
-    with open(csv_path, newline="", encoding="utf-8") as f:
-        rows = list(csv.DictReader(f))
+    raw = csv_path.read_bytes()
+    assert raw.startswith(b"\xef\xbb\xbf")  # UTF-8 with BOM
+    lines = raw.decode("utf-8-sig").splitlines()
+    assert lines[0] == "# Column key" and lines[1].startswith("# storage_id:")
+    rows = list(csv.DictReader(ln for ln in lines if not ln.startswith("#")))
     assert [r["stage_m"] for r in rows] == ["0.0", "2.0", "4.0", "6.0"]
     assert rows[0]["storage_id"] == "S1"
     assert math.isclose(float(rows[-1]["volume_m3"]), 25 * CELL**2 * 6)
