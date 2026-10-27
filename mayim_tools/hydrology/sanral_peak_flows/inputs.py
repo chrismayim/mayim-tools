@@ -10,6 +10,12 @@ from .rainfall import TR102_DAYS, TR102Station
 from .tables import RETURN_PERIODS
 
 C_COLUMNS = ("catchment_id", "alpha", "c1", "ft_class", "beta", "c2", "gamma", "c3")
+# Optional C1 breakdown (written by the Rational C tool), shown on the
+# calculation sheets only: % of the rural area per Table 3.7 class, the
+# components, C1 before the dolomite reduction, dolomite % and factor, MAP.
+C_DETAIL_COLUMNS = tuple(
+    f"{p}{i}_pct" for p in ("cs", "cp", "cv") for i in range(1, 5)
+) + ("cs", "cp", "cv", "c1_base", "d_pct", "d_factor", "map_mm")
 FT_CLASS_ALIASES = {
     "steep_impermeable": "steep_impermeable",
     "steep": "steep_impermeable",
@@ -96,7 +102,18 @@ def read_c_csv(path) -> dict[str, RunoffCoefficients]:
             c2=get("c2"),
             gamma=get("gamma"),
             c3=get("c3"),
+            detail=_detail(r, header, cid),
         )
+    return out
+
+
+def _detail(row, header, cid) -> dict:
+    out = {}
+    for name in C_DETAIL_COLUMNS:
+        if name in header:
+            text = row[header.index(name)].strip()
+            if text:
+                out[name] = _num(text, name, cid)
     return out
 
 

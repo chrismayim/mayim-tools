@@ -215,7 +215,9 @@ class RationalCAlgorithm(QgsProcessingAlgorithm):
             "OUTPUTS:\tSelect with the tick boxes; files are named <project "
             "number>_<description> in the raster, shapefile, CSV and Word folders. "
             "The C CSV has catchment_id, alpha, c1 (= C1D, after dolomite), "
-            "ft_class, beta, c2, gamma, c3.\n"
+            "ft_class, beta, c2, gamma, c3, followed by the C1 breakdown (class "
+            "shares cs1_pct - cv4_pct, cs, cp, cv, c1_base before dolomite, d_pct, "
+            "d_factor, map_mm) for the SANRAL calculation sheets.\n"
             "\n"
             f"CATCHMENT LAYER FIELDS:\n{fields}\n"
         )

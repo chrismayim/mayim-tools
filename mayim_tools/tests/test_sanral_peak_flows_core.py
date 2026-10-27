@@ -483,3 +483,71 @@ def test_word_report(tmp_path):
     assert "MC2025_014" in cells and "Table 1:" in text
     assert not re.search(r"\d,\d{3}", cells)  # no thousands separators
     assert not re.search(r"\d,\d", cells)  # no decimal commas
+
+
+def test_calculation_sheets(tmp_path):
+    pytest.importorskip("docx")
+    import dataclasses
+    import re
+
+    from docx import Document
+
+    from mayim_tools.hydrology.sanral_peak_flows.report import q_text
+    from mayim_tools.hydrology.sanral_peak_flows.sheets import sheets_for, write_sheets
+
+    run_ = _full_run()
+    item = run_.items[0]
+    assert sheets_for(item, run_.settings.methods) == [
+        "rational_alt2",
+        "rational_alt3",
+        "sdf",
+        "empirical",
+        "capa",
+    ]
+    assert item.stations["rational_alt2"] is item.stations["sdf"]
+    # C1 breakdown from the Rational C tool's C CSV
+    detail = {"cs1_pct": 10.0, "cs2_pct": 40.0, "cs3_pct": 50.0, "cs4_pct": 0.0,
+              "cs": 0.142, "cp": 0.08, "cv": 0.115, "c1_base": 0.337,
+              "d_pct": 0.0, "map_mm": 700.0}  # fmt: skip
+    item.coeffs = dataclasses.replace(item.coeffs, detail=detail)
+
+    p = tmp_path / "sheets.docx"
+    notes = write_sheets(
+        p,
+        run_,
+        {"tool": "SANRAL Deterministic Peak Flows", "version": "0.3.0"},
+        context={"project_number": "MC2025_014", "project_name": "Riverside Estate"},
+    )
+    assert notes == []
+    doc = Document(str(p))
+    heads = [x.text for x in doc.paragraphs if x.style.name == "Heading 1"]
+    assert heads == [
+        "Summary",
+        "Calculation sheets",
+        "Notes and limitations",
+        "References",
+    ]
+    h2 = [x.text for x in doc.paragraphs if x.style.name == "Heading 2"]
+    assert "Catchment C1: form R2, Rational method (Alternative 2)" in h2
+    assert "Catchment C1: form E, Empirical methods" in h2
+    # C2 has no C row: no Rational sheets, but the others
+    assert not any(h.startswith("Catchment C2: form R") for h in h2)
+    assert "Catchment C2: form S, Standard Design Flood method" in h2
+    cells = "\n".join(c.text for t in doc.tables for r in t.rows for c in r.cells)
+    assert "Vleis and pans (< 3 %)" in cells and "0.0800" in cells  # 40 % x 0.08
+    assert "C1T (= C1D x Ft)" in cells and "1 day" in cells
+    r2 = {r.return_period: r for r in item.results if r.method == "rational_alt2"}
+    assert q_text(r2[100].q_m3s) in cells
+    assert not re.search(r"\d,\d", cells)  # no decimal commas or separators
+
+
+def test_calculation_sheets_without_c1_breakdown(tmp_path):
+    pytest.importorskip("docx")
+    from docx import Document
+
+    from mayim_tools.hydrology.sanral_peak_flows.sheets import write_sheets
+
+    p = tmp_path / "sheets.docx"
+    write_sheets(p, _full_run(), {"version": "0.3.0"})
+    text = "\n".join(x.text for x in Document(str(p)).paragraphs)
+    assert "without the Cs, Cp and Cv breakdown" in text

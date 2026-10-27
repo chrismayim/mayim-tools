@@ -64,6 +64,10 @@ class RunoffCoefficients:
     c2: float = 0.0
     gamma: float = 0.0
     c3: float = 0.0
+    # Optional C1 breakdown from the C CSV (Rational C tool): class shares
+    # cs1_pct..cv4_pct, cs, cp, cv, c1_base (before dolomite), d_pct,
+    # d_factor, map_mm. Used only by the calculation sheets.
+    detail: dict = field(default_factory=dict, compare=False, repr=False)
 
     def ft(self, T: int) -> float:
         if T == 200:

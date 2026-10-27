@@ -16,6 +16,12 @@ from . import tables as tb
 from .core import METHODS, TOOL_NAME, TOOL_VERSION, CatchmentResult, RunResult
 
 C_COLUMNS = ("catchment_id", "alpha", "c1", "ft_class", "beta", "c2", "gamma", "c3")
+# C1 breakdown after the core columns, for the SANRAL Deterministic Peak
+# Flows calculation sheets (that tool reads only the core columns for the
+# calculation).
+C_DETAIL_COLUMNS = tuple(
+    f"{p}{i}_pct" for p in ("cs", "cp", "cv") for i in range(1, 5)
+) + ("cs", "cp", "cv", "c1_base", "d_pct", "d_factor", "map_mm")
 SHORT = ("vlei", "flat", "hill", "steep")
 PERIOD_FIELDS = [(t, f"C_{t}") for t in tb.RETURN_PERIODS] + [("PMF", "C_PMF")]
 
@@ -129,12 +135,25 @@ def attributes(cr: CatchmentResult) -> dict:
 
 
 def c_rows(r: RunResult) -> list[list]:
-    """Rows of the C CSV (SANRAL Deterministic Peak Flows): c1 is C1D."""
+    """Rows of the C CSV (SANRAL Deterministic Peak Flows): c1 is C1D,
+    followed by the C1 breakdown (C_DETAIL_COLUMNS)."""
     rows = []
     for cr in r.catchments:
         k = cr.coeff
         if k is None:
             continue
+        sh = cr.shares
+        rural = k.alpha > 0 and sh is not None
+        detail = []
+        for vals in (sh.slope, sh.perm, sh.veg) if rural else ((None,) * 4,) * 3:
+            detail += [None if v is None else _r(100 * v, 2) for v in vals]
+        detail += (
+            [_r(k.cs), _r(k.cp), _r(k.cv), _r(k.c1), _r(100 * k.d_fraction, 2),
+             _r(k.d_factor)]
+            if rural
+            else [None] * 6
+        )  # fmt: skip
+        detail.append(_r(k.map_mm, 1))
         rows.append(
             [
                 cr.cid,
@@ -146,6 +165,7 @@ def c_rows(r: RunResult) -> list[list]:
                 _r(k.gamma),
                 _r(k.c3, 3) if k.gamma > 0 else 0,
             ]
+            + detail
         )
     return rows
 
@@ -153,7 +173,7 @@ def c_rows(r: RunResult) -> list[list]:
 def write_c_csv(path: str, r: RunResult) -> None:
     with open(path, "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f)
-        w.writerow(C_COLUMNS)
+        w.writerow(C_COLUMNS + C_DETAIL_COLUMNS)
         for row in c_rows(r):
             w.writerow(["" if v is None else v for v in row])
 

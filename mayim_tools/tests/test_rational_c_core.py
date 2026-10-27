@@ -403,6 +403,17 @@ def test_c_csv_round_trip_and_results_csv(synthetic):
     assert c.c1 == pytest.approx(k.c1d, abs=1e-4)
     assert c.c2 == pytest.approx(k.c2, abs=1e-4)
     assert c.alpha + c.beta + c.gamma == pytest.approx(1, abs=1e-3)
+    # C1 breakdown for the SANRAL calculation sheets
+    sh = r.catchments[0].shares
+    assert c.detail["c1_base"] == pytest.approx(k.c1, abs=1e-4)
+    assert c.detail["cs"] + c.detail["cp"] + c.detail["cv"] == pytest.approx(
+        k.c1, abs=1e-3
+    )
+    assert c.detail["cs1_pct"] == pytest.approx(100 * sh.slope[0], abs=0.01)
+    assert sum(c.detail[f"cv{i}_pct"] for i in range(1, 5)) == pytest.approx(
+        100, abs=0.1
+    )
+    assert c.detail["map_mm"] == pytest.approx(700)
     q = d / "results.csv"
     ex.write_results_csv(str(q), r, [("MAP (mm)", 700)])
     text = q.read_text(encoding="utf-8-sig")

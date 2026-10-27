@@ -29,7 +29,7 @@ from . import lookup as lk
 from . import tables as tb
 
 TOOL_NAME = "Run-off Coefficients (SANRAL Deterministic)"
-TOOL_VERSION = "0.1.0"
+TOOL_VERSION = "0.1.1"
 NODATA_F = -9999.0
 NODATA_U8 = 255
 DEFAULT_CELL_M = 20.0

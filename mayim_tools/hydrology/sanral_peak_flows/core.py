@@ -24,7 +24,7 @@ from .methods import (
 )
 from .rainfall import TR102Station, basin_station
 
-TOOL_VERSION = "0.2.0"
+TOOL_VERSION = "0.3.0"
 
 
 @dataclass
@@ -67,6 +67,9 @@ class CatchmentResult:
     catchment: CatchmentInput
     results: list = field(default_factory=list)  # MethodResult
     notes: list = field(default_factory=list)  # catchment-level notes
+    # inputs used, for the calculation sheets
+    coeffs: RunoffCoefficients | None = None
+    stations: dict = field(default_factory=dict)  # method -> TR102Station
 
     def by_field(self) -> dict:
         return {r.field_name: r.q_m3s for r in self.results}
@@ -125,6 +128,7 @@ def run_catchment(
         if mid not in wanted:
             continue
         coeffs = (c_values or {}).get(c.catchment_id)
+        cr.coeffs = coeffs
         if coeffs is None:
             _skip(cr, mid, "no row in the C CSV")
             continue
@@ -138,6 +142,8 @@ def run_catchment(
         if alt == 3 and ddf is None:
             _skip(cr, mid, "no DDF table")
             continue
+        if alt == 2:
+            cr.stations[mid] = rain_station
         cr.results += rational(
             alt,
             a,
@@ -158,6 +164,7 @@ def run_catchment(
         elif not (c.lfp_km and c.s1085 and c.s1085 > 0):
             _skip(cr, "sdf", "no watercourse length or 10-85 slope")
         else:
+            cr.stations["sdf"] = station
             cr.results += sdf(a, c.lfp_km, c.s1085, c.sdf_basin, station, rps)
 
     if "midgley_pitman" in wanted:

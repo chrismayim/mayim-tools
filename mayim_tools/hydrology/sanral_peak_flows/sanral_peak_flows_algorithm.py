@@ -95,6 +95,10 @@ OUTPUT_SPECS = [
     OutputSpec("OUTPUT_CSV", "Peak flow calculations (CSV)", "Peak Flow Calculations", CSV),
     OutputSpec("OUTPUT_DOCX", "Peak flow annexure (Word)", "Peak Flow Annexure", WORD),
     OutputSpec(
+        "OUTPUT_SHEETS", "Peak flow calculation sheets per method (Word)",
+        "Peak Flow Calculation Sheets", WORD,
+    ),
+    OutputSpec(
         "OUTPUT_JSON", "Results for the report compiler (results.json)",
         "Peak Flow Results", CSV, False,
     ),
@@ -187,6 +191,7 @@ class SanralPeakFlowsAlgorithm(QgsProcessingAlgorithm):
     OUTPUT_CSV = "OUTPUT_CSV"
     OUTPUT_JSON = "OUTPUT_JSON"
     OUTPUT_DOCX = "OUTPUT_DOCX"
+    OUTPUT_SHEETS = "OUTPUT_SHEETS"
     PROJECT_NUMBER = "PROJECT_NUMBER"
     PROJECT_NAME = "PROJECT_NAME"
 
@@ -232,7 +237,9 @@ class SanralPeakFlowsAlgorithm(QgsProcessingAlgorithm):
             "INPUTS:\tCatchment polygons with area, longest flow path, 10-85 "
             "slope, Lc, mean slope (%) and Tc (min) - the Catchment Delineation "
             "field names are the defaults. Rational: a C CSV (catchment_id, alpha, "
-            "C1, Ft_class, beta, C2, gamma, C3) and, for Alternative 3, the "
+            "C1, Ft_class, beta, C2, gamma, C3; the C1 breakdown columns of the "
+            "Rational C tool are shown on the calculation sheets) and, for "
+            "Alternative 3, the "
             "design rainfall DDF CSV (Design Rainfall Estimation or Precipitation "
             "data to DDF). Regions (SDF basin, veld zone, Kovacs region, ARF "
             "region) and MAP apply to all catchments, or per catchment from a "
@@ -263,7 +270,9 @@ class SanralPeakFlowsAlgorithm(QgsProcessingAlgorithm):
             "(loaded with the catchment style); the sectioned CSV (UTF-8 with a "
             "byte-order mark) starts with the abbreviations; the Word annexure "
             "follows the Mayim report standard (needs python-docx and "
-            "matplotlib); results.json (schema mayim.results/1, for the report "
+            "matplotlib); the calculation sheets (Word) give one sheet per "
+            "catchment and method after the Drainage Manual Appendix 3C forms "
+            "(R2, R3, S and E, plus CAPA); results.json (schema mayim.results/1, for the report "
             "compiler, not ticked by default) goes to the CSV folder. Files are "
             "named <project number>_<description> and replace files of the same "
             "name; a file that is open cannot be replaced and is reported, and "
@@ -780,6 +789,25 @@ class SanralPeakFlowsAlgorithm(QgsProcessingAlgorithm):
                                         n: field_definition(n) for n in names}}},
                 ),
             )  # fmt: skip
+        if self.OUTPUT_SHEETS in paths:
+            feedback.setProgressText("Writing the calculation sheets")
+
+            def write_sheets_docx(p):
+                from .sheets import write_sheets
+
+                for note in write_sheets(
+                    p,
+                    result,
+                    run_info,
+                    context={
+                        "project_number": project_number,
+                        "project_name": project_name,
+                        "software": _software_version(),
+                    },
+                ):
+                    feedback.pushInfo(note)
+
+            save(self.OUTPUT_SHEETS, write_sheets_docx)
         if self.OUTPUT_DOCX in paths:
             feedback.setProgressText("Writing the Word annexure")
             docx_path = paths[self.OUTPUT_DOCX]
