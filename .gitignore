@@ -63,4 +63,4 @@ docs/build/
 # Large data files — excluded from version control
 mayim_tools/design_rainfall/data/*.gpkg
 mayim_tools/design_rainfall/data/*.db
-mayim_tools/design_rainfall/data/*.sqlite
+mayim_tools/design_rainfall/data/*.sqlite.qgis-settings/

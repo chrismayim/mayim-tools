@@ -4,13 +4,7 @@
 
 ## 1. Tools under development and testing
 
-### 1.1 SANRAL deterministic tools
 
-Run, test, and refine.
-
-### 1.2 SANRAL C-factor
-
-Run, test, and refine.
 
 
 
