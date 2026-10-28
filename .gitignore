@@ -64,3 +64,4 @@ docs/build/
 mayim_tools/design_rainfall/data/*.gpkg
 mayim_tools/design_rainfall/data/*.db
 mayim_tools/design_rainfall/data/*.sqlite.qgis-settings/
+
