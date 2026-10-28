@@ -5,9 +5,11 @@ Builds a HEC-HMS 4.14 (or 4.13) project (basin model, meteorologic models, contr
 specifications, simulation runs, precipitation gages, terrain and the
 basin geometry) from GIS outputs:
 
-- sub-catchments -> Subbasin elements (area, SCS curve number loss,
-  SCS unit hydrograph or Clark transform from Tc);
-- stream reaches -> Reach elements (Muskingum, Lag or Muskingum-Cunge);
+- sub-catchments -> Subbasin elements (area; SCS curve number, Initial and
+  Constant, Deficit and Constant or Green and Ampt loss; SCS unit
+  hydrograph, Clark or Snyder transform from Tc - see methods.py);
+- stream reaches -> Reach elements (Muskingum, Lag, Muskingum-Cunge, Lag
+  and K or Kinematic Wave);
 - stream nodes -> Junction elements; a node with no reach leaving it is
   the outlet of its system and becomes a Sink.
 
@@ -32,14 +34,19 @@ from datetime import datetime, timedelta
 
 import numpy as np
 
+from . import methods as mth
+
 TOOL_NAME = "Prepare HEC-HMS project"
-TOOL_VERSION = "0.4.0"
+TOOL_VERSION = "0.5.0"
 HMS_VERSION = "4.14"  # default; 4.13 is also supported
 HMS_VERSIONS = ["4.14", "4.13"]
 
 LOSS_SCS = "scs"
 TRANSFORM_SCS = "scs"
 TRANSFORM_CLARK = "clark"
+TRANSFORM_SNYDER = mth.TRANSFORM_SNYDER
+ROUTE_LAGK = mth.ROUTE_LAGK
+ROUTE_KW = mth.ROUTE_KW
 ROUTE_MUSKINGUM = "muskingum"
 ROUTE_LAG = "lag"
 ROUTE_MC = "muskingum_cunge"
@@ -82,6 +89,8 @@ class SubIn:
     wkb: bytes | None = None
     sub_type: str = ""
     bank: str = ""
+    attrs: dict | None = None  # numeric fields of the layer (parameter overrides)
+    soil: dict | None = None  # zonal soil parameters (methods.SOIL_CODES)
 
 
 @dataclass
@@ -97,6 +106,7 @@ class ReachIn:
     musk_x: float | None = None
     tt_min: float | None = None
     wkb: bytes | None = None
+    attrs: dict | None = None  # numeric fields of the layer (parameter overrides)
 
 
 @dataclass
@@ -137,6 +147,8 @@ class Settings:
     tail_h: float | None = None  # None: automatic
     start: datetime = datetime(2000, 1, 1, 0, 0)
     time_zone: str = "UTC"
+    # loss / transform / routing method details (methods.py)
+    methods: mth.MethodSettings = field(default_factory=mth.MethodSettings)
     # rainfall
     storm_area_km2: float | None = None
     # one HEC-HMS ensemble analysis per storm method and return period; the
@@ -617,17 +629,35 @@ def subbasin_parameters(e: Element, x: SubIn, s: Settings) -> list[str]:
     warns = []
     p = e.params
     p["area_km2"] = x.area_km2
-    if x.cn is None or not (0 < x.cn <= 100):
+    ms = s.methods
+    p["loss"] = ms.loss
+    sources = p.setdefault("sources", {})
+    has_cn = x.cn is not None and 0 < x.cn <= 100
+    if not has_cn and ms.loss == mth.LOSS_SCS:
         raise HmsProjectError(f"Sub-catchment {x.name} has no curve number.")
-    cn = min(max(float(x.cn), 30.0), 99.0)
-    if cn != x.cn:
-        warns.append(f"{x.name}: CN {x.cn:.1f} limited to {cn:g}.")
-    p["cn"] = round(cn, 1)
-    p["s_mm"] = potential_retention(p["cn"])
-    p["ia_mm"] = s.lambda_ia * p["s_mm"]
+    if has_cn:
+        cn = min(max(float(x.cn), 30.0), 99.0)
+        if cn != x.cn:
+            warns.append(f"{x.name}: CN {x.cn:.1f} limited to {cn:g}.")
+        p["cn"] = round(cn, 1)
+        p["s_mm"] = potential_retention(p["cn"])
+        p["ia_mm"] = s.lambda_ia * p["s_mm"]
     p["imperv_pct"] = min(max(float(x.imperv_pct or 0.0), 0.0), 100.0)
     if x.cn_stats:
         p.update({k: v for k, v in x.cn_stats.items() if k != "cn"})
+    for code, v in (x.soil or {}).items():
+        if v is not None:
+            p[f"soil_{code}"] = v
+    if ms.loss != mth.LOSS_SCS:
+        try:
+            lp, src, w = mth.loss_parameters(
+                x.name, x.attrs, x.soil, p.get("cn"), p.get("ia_mm"), p.get("s_mm"), ms
+            )
+        except mth.MethodError as err:
+            raise HmsProjectError(str(err)) from err
+        p.update(lp)
+        sources.update(src)
+        warns += w
     tc = x.tc_min
     if tc is None or not math.isfinite(tc) or tc <= 0:
         raise HmsProjectError(f"Sub-catchment {x.name} has no time of concentration.")
@@ -641,6 +671,12 @@ def subbasin_parameters(e: Element, x: SubIn, s: Settings) -> list[str]:
         p["clark_tc_h"] = tc / 60.0
         p["clark_r_h"] = ratio / (1.0 - ratio) * tc / 60.0
         p["lag_min"] = 0.6 * tc
+    elif s.transform == TRANSFORM_SNYDER:
+        sp, src, w = mth.snyder_parameters(x.name, x.attrs, tc, ms)
+        p.update(sp)
+        sources.update(src)
+        warns += w
+        p["lag_min"] = sp["snyder_tp_h"] * 60.0
     else:
         p["lag_min"] = 0.6 * tc
     return warns
@@ -666,7 +702,7 @@ def reach_parameters(e: Element, r: ReachIn, s: Settings, dt: float) -> list[str
         p["k_source"] = f"length / {v:g} m/s"
     p["travel_min"] = k_min
     method = s.routing
-    if method == ROUTE_MC:
+    if method in (ROUTE_MC, ROUTE_KW):
         slope = r.slope
         if slope is None or not math.isfinite(slope):
             raise HmsProjectError(
@@ -677,17 +713,34 @@ def reach_parameters(e: Element, r: ReachIn, s: Settings, dt: float) -> list[str
             slope = s.min_slope
         if not length:
             raise HmsProjectError(f"Reach {r.name} has no length.")
+        sources = p.setdefault("sources", {})
+        n_val, width = s.mc_n, s.mc_width_m
+        if method == ROUTE_KW:
+            fn, fw = mth.field_value(r.attrs, "kw_n"), mth.field_value(
+                r.attrs, "kw_width_m"
+            )
+            if fn is not None and fn > 0:
+                n_val, sources["n"] = fn, "field kw_n"
+            if fw is not None and fw >= 0:
+                width, sources["width_m"] = fw, "field kw_width_m"
         p.update(
-            method=ROUTE_MC,
+            method=method,
             slope=slope,
-            n=s.mc_n,
-            width_m=s.mc_width_m,
+            n=n_val,
+            width_m=width,
             side_slope=s.mc_side_slope,
             celerity_ms=v,
         )
+        if method == ROUTE_KW:
+            p["subreaches"] = mth.kw_subreaches(length, v, dt)
         return warns
     if k_min is None:
         raise HmsProjectError(f"Reach {r.name} has no travel time or length.")
+    if method == ROUTE_LAGK:
+        lp, src = mth.lagk_parameters(r.attrs, k_min, s.methods)
+        p.update(method=ROUTE_LAGK, **lp)
+        p.setdefault("sources", {}).update(src)
+        return warns
     if method == ROUTE_MUSKINGUM:
         x = r.musk_x if (r.musk_x is not None and 0 <= r.musk_x <= 0.5) else s.musk_x
         n = muskingum_steps(k_min, x, dt)

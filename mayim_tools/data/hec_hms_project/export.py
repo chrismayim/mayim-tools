@@ -9,6 +9,7 @@ from __future__ import annotations
 import csv
 import math
 
+from . import methods as mth
 from .core import ROUTE_LAG, ROUTE_MC, ROUTE_MUSKINGUM, TRANSFORM_CLARK, ProjectResult
 from .storms import SOURCE_LABELS, ari_label, duration_label
 
@@ -24,11 +25,28 @@ SUBBASIN_FIELDS = [
     ("s_mm", "mm", "potential maximum retention S = 25400/CN - 254"),
     ("ia_mm", "mm", "initial abstraction Ia = lambda S"),
     ("imperv_pct", "%", "directly connected impervious area"),
+    ("loss", "-", "loss method"),
+    ("initial_loss_mm", "mm", "Initial and Constant: initial loss"),
+    ("constant_rate_mmh", "mm/h", "Initial / Deficit and Constant: constant rate"),
+    ("initial_deficit_mm", "mm", "Deficit and Constant: initial deficit"),
+    ("max_deficit_mm", "mm", "Deficit and Constant: maximum deficit"),
+    ("ga_ks_mmh", "mm/h", "Green and Ampt: hydraulic conductivity"),
+    ("ga_psi_mm", "mm", "Green and Ampt: wetting front suction"),
+    ("ga_ts", "m3/m3", "Green and Ampt: saturated content"),
+    ("ga_ti", "m3/m3", "Green and Ampt: initial content"),
+    ("soil_ksat", "mm/h", "soil rasters: Ksat 0-30 cm (geometric mean)"),
+    ("soil_psi_f", "mm", "soil rasters: wetting front suction 0-30 cm"),
+    ("soil_theta_s", "m3/m3", "soil rasters: saturated content 0-30 cm"),
+    ("soil_theta_fc", "m3/m3", "soil rasters: field capacity 0-30 cm"),
+    ("soil_theta_wp", "m3/m3", "soil rasters: wilting point 0-30 cm"),
     ("tc_raw_min", "min", "time of concentration from the input"),
     ("tc_min", "min", "time of concentration used (after the minimum)"),
     ("lag_min", "min", "SCS lag = 0.6 Tc"),
     ("clark_tc_h", "h", "Clark time of concentration"),
     ("clark_r_h", "h", "Clark storage coefficient R"),
+    ("snyder_tp_h", "h", "Snyder standard lag Tp"),
+    ("snyder_cp", "-", "Snyder peaking coefficient Cp"),
+    ("sources", "-", "where each estimated parameter came from"),
     ("lat", "deg", "centroid latitude"),
     ("lon", "deg", "centroid longitude"),
     ("flags", "-", "tc_floor: Tc raised to the minimum"),
@@ -45,10 +63,14 @@ REACH_FIELDS = [
     ("x", "-", "Muskingum X"),
     ("steps", "-", "Muskingum sub-reaches for the time step"),
     ("lag_min", "min", "Lag routing lag"),
-    ("n", "-", "Manning n (Muskingum-Cunge)"),
-    ("width_m", "m", "bottom width (Muskingum-Cunge trapezoid)"),
-    ("side_slope", "H:V", "side slope (Muskingum-Cunge trapezoid)"),
-    ("celerity_ms", "m/s", "index celerity (Muskingum-Cunge)"),
+    ("lagk_lag_h", "h", "Lag and K: constant lag"),
+    ("lagk_k_h", "h", "Lag and K: constant K"),
+    ("subreaches", "-", "kinematic wave sub-reaches (dx about celerity x time step)"),
+    ("n", "-", "Manning n (Muskingum-Cunge / kinematic wave)"),
+    ("width_m", "m", "bottom width (trapezoid)"),
+    ("side_slope", "H:V", "side slope (trapezoid)"),
+    ("celerity_ms", "m/s", "index celerity (Muskingum-Cunge / kinematic wave)"),
+    ("sources", "-", "where each estimated parameter came from"),
     ("flags", "-", "lag_fallback: too short for Muskingum; min_slope: slope raised"),
 ]
 STORM_FIELDS = [
@@ -100,6 +122,8 @@ def _v(v):
         return f"{v:.6g}" if abs(v) < 1e5 else f"{v:.1f}"
     if isinstance(v, (list, tuple)):
         return ";".join(str(x) for x in v)
+    if isinstance(v, dict):
+        return "; ".join(f"{k}: {x}" for k, x in v.items())
     return v
 
 
@@ -110,14 +134,23 @@ def method_labels(r: ProjectResult) -> dict:
         ROUTE_MUSKINGUM: "Muskingum",
         ROUTE_LAG: "Lag",
         ROUTE_MC: "Muskingum-Cunge",
+        mth.ROUTE_LAGK: "Lag and K",
+        mth.ROUTE_KW: "Kinematic Wave",
     }
+    ms = s.methods
+    if ms.loss == mth.LOSS_SCS:
+        loss = f"SCS curve number, Ia = {s.lambda_ia:g} S"
+    else:
+        loss = mth.LOSS_LABELS[ms.loss]
+    if s.transform == TRANSFORM_CLARK:
+        transform = f"Clark unit hydrograph, R/(Tc+R) = {s.clark_ratio:g}"
+    elif s.transform == mth.TRANSFORM_SNYDER:
+        transform = "Snyder unit hydrograph (standard)"
+    else:
+        transform = "SCS unit hydrograph, lag = 0.6 Tc"
     return {
-        "loss": f"SCS curve number, Ia = {s.lambda_ia:g} S",
-        "transform": (
-            f"Clark unit hydrograph, R/(Tc+R) = {s.clark_ratio:g}"
-            if s.transform == TRANSFORM_CLARK
-            else "SCS unit hydrograph, lag = 0.6 Tc"
-        ),
+        "loss": loss,
+        "transform": transform,
         "routing": ", ".join(names.get(m, m) for m in routes) or "-",
         "cn": (
             f"runoff-equivalent CN at {s.cn_design_depth_mm:g} mm"

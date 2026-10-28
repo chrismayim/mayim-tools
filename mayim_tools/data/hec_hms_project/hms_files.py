@@ -27,6 +27,7 @@ import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from . import methods as mth
 from .core import (
     HMS_VERSION,
     ROUTE_MC,
@@ -212,12 +213,21 @@ def basin_text(
             b.blank().kv("Canopy", "None")
             b.kv("Allow Simultaneous Precip Et", "No").kv("Plant Uptake Method", "None")
             b.blank().kv("Surface", "None")
-            b.blank().kv("LossRate", "SCS")
+            loss = p.get("loss", mth.LOSS_SCS)
+            b.blank().kv("LossRate", mth.HMS_LOSS_NAMES[loss])
             b.kv("Percent Impervious Area", num(p["imperv_pct"], 2))
-            b.kv("Curve Number", num(p["cn"], 2))
-            b.kv("Initial Abstraction", num(p["ia_mm"], 3))
+            if loss == mth.LOSS_SCS:
+                b.kv("Curve Number", num(p["cn"], 2))
+                b.kv("Initial Abstraction", num(p["ia_mm"], 3))
+            else:
+                for key, val in mth.loss_lines(loss, p, num):
+                    b.kv(key, val)
             b.blank()
-            if s.transform == TRANSFORM_CLARK:
+            if s.transform == mth.TRANSFORM_SNYDER:
+                b.kv("Transform", "Snyder").kv("Snyder Method", "Standard")
+                b.kv("Snyder Tp", num(p["snyder_tp_h"], 4))
+                b.kv("Snyder Cp", num(p["snyder_cp"], 3))
+            elif s.transform == TRANSFORM_CLARK:
                 b.kv("Transform", "Clark").kv("Clark Method", "Specified")
                 b.kv("Time of Concentration", num(p["clark_tc_h"], 4))
                 b.kv("Storage Coefficient", num(p["clark_r_h"], 4))
@@ -237,6 +247,27 @@ def basin_text(
                 b.kv("Route", "Muskingum").kv("Initial Variable", "Combined Inflow")
                 b.kv("Muskingum K", num(p["k_h"], 4)).kv("Muskingum x", num(p["x"], 3))
                 b.kv("Muskingum Steps", int(p["steps"]))
+            elif m == mth.ROUTE_LAGK:
+                # Lag and K: constant lag and K in hours (checked in HEC-HMS 4.14)
+                b.kv("Route", "Lag & K").kv("Initial Variable", "Combined Inflow")
+                b.kv("Use Constant Lag", "Yes").kv("Use Constant K", "Yes")
+                b.kv("Constant Lag", num(p["lagk_lag_h"], 4))
+                b.kv("Constant K", num(p["lagk_k_h"], 4))
+            elif m == mth.ROUTE_KW:
+                # "Shape: Trapezoid" then "Width" straight after it: HEC-HMS 4.13
+                # reads the width only there (4.14 also reads it and saves it as
+                # "Bottom Width"); checked by computing in both versions
+                b.kv("Route", "Kinematic Wave").kv("Channel", "Kinematic Wave")
+                b.kv("Length", num(p["length_m"], 2))
+                b.kv("Energy Slope", num(p["slope"], 6))
+                b.kv("Mannings n", num(p["n"], 4))
+                b.kv("Shape", "Trapezoid")
+                b.kv("Width", num(p["width_m"], 3))
+                b.kv("Number of Subreaches", int(p["subreaches"]))
+                b.kv("Side Slope", num(p["side_slope"], 3))
+                b.kv("Initial Variable", "Combined Inflow")
+                b.kv("Index Parameter Type", "Index Celerity")
+                b.kv("Index Celerity", num(p["celerity_ms"], 3))
             elif m == ROUTE_MC:
                 b.kv("Route", "Muskingum Cunge").kv("Channel", "Trapezoid")
                 b.kv("Length", num(p["length_m"], 2))

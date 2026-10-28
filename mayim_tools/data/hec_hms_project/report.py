@@ -13,6 +13,7 @@ from datetime import datetime
 
 from mayim_tools._common.docx_report import Doc
 
+from . import methods as mth
 from .core import TOOL_NAME, TOOL_VERSION, TRANSFORM_CLARK, ProjectResult
 from .export import ensemble_rows, method_labels, peak_table
 from .storms import (
@@ -75,6 +76,118 @@ def arf_references(arf) -> list[str]:
     if arf.method == "pietersen":
         refs = ARF_REFERENCES["eq310"] + refs
     return refs
+
+
+LOSS_COLUMNS = {
+    mth.LOSS_SCS: [("CN", "cn", 1), ("Ia (mm)", "ia_mm", 2)],
+    mth.LOSS_IC: [
+        ("Initial loss (mm)", "initial_loss_mm", 2),
+        ("Constant rate (mm/h)", "constant_rate_mmh", 2),
+    ],
+    mth.LOSS_DC: [
+        ("Initial deficit (mm)", "initial_deficit_mm", 1),
+        ("Max deficit (mm)", "max_deficit_mm", 1),
+        ("Constant rate (mm/h)", "constant_rate_mmh", 2),
+    ],
+    mth.LOSS_GA: [
+        ("Ks (mm/h)", "ga_ks_mmh", 2),
+        ("Suction (mm)", "ga_psi_mm", 0),
+        ("theta s", "ga_ts", 3),
+        ("theta i", "ga_ti", 3),
+    ],
+}
+
+
+def method_references(s) -> list[str]:
+    refs = []
+    if s.methods.loss == mth.LOSS_GA:
+        refs += [
+            "Green, W.H. and Ampt, G.A. (1911). Studies on soil physics, 1. The flow "
+            "of air and water through soils. Journal of Agricultural Science 4: 1-24.",
+            "Rawls, W.J., Brakensiek, D.L. and Miller, N. (1983). Green-Ampt "
+            "infiltration parameters from soils data. Journal of Hydraulic "
+            "Engineering 109(1): 62-70.",
+        ]
+    if s.transform == mth.TRANSFORM_SNYDER:
+        refs.append(
+            "Snyder, F.F. (1938). Synthetic unit-graphs. Transactions of the "
+            "American Geophysical Union 19: 447-454."
+        )
+    return refs
+
+
+def _source_rows(subs) -> list[list[str]]:
+    """[parameter, source, number of sub-basins] from params['sources']."""
+    count: dict[tuple[str, str], int] = {}
+    for e in subs:
+        for k, v in (e.params.get("sources") or {}).items():
+            count[(k, v)] = count.get((k, v), 0) + 1
+    return [[k, v, str(n)] for (k, v), n in sorted(count.items())]
+
+
+def _loss_methods_text(d, s, m) -> None:
+    ms = s.methods
+    imp = (
+        "Impervious areas are taken as included in the CN unless a percentage "
+        "field was given."
+        if ms.loss == mth.LOSS_SCS
+        else "Rain on the impervious percentage (field, if given) runs off without "
+        "loss."
+    )
+    if ms.loss == mth.LOSS_SCS:
+        d.heading("Losses: SCS curve number", 2)
+        d.para(
+            "Direct runoff Q = (P - Ia)^2 / (P - Ia + S) for P > Ia, with the potential "
+            f"maximum retention S = 25400/CN - 254 (mm) and Ia = {s.lambda_ia:g} S. "
+            f"Each sub-basin's curve number is the {m['cn']} of the CN raster cells "
+            "within it (or the CN field given). The antecedent moisture condition is "
+            "that of the CN raster. " + imp
+        )
+        return
+    ks = (
+        "the saturated hydraulic conductivity Ksat of the Regional Soil "
+        "Parameterisation rasters (0-30 cm P50, geometric mean over the sub-basin"
+        + (f", x {ms.ksat_factor:g}" if ms.ksat_factor != 1 else "")
+        + ")"
+    )
+    if ms.loss == mth.LOSS_IC:
+        d.heading("Losses: Initial and Constant", 2)
+        d.para(
+            "Rainfall is lost entirely until the initial loss is satisfied, then at "
+            "the constant rate (HEC-HMS Technical Reference Manual). Initial loss: "
+            f"an il_mm field, else Ia = {s.lambda_ia:g} S from the curve number, "
+            f"else {ms.initial_loss_mm:g} mm. Constant rate: a cl_mmh field, else "
+            f"{ks}, else {ms.constant_rate_mmh:g} mm/h. " + imp
+        )
+    elif ms.loss == mth.LOSS_DC:
+        d.heading("Losses: Deficit and Constant", 2)
+        d.para(
+            "A single soil layer with a moisture deficit: rainfall fills the "
+            "deficit, then infiltrates at the constant rate (HEC-HMS Technical "
+            "Reference Manual). Maximum deficit = (theta_s - theta_wp) x "
+            f"{ms.soil_depth_mm:g} mm from the soil rasters (else S from the CN, "
+            "or an md_mm field); initial deficit = (theta_s - theta_i) x the same "
+            f"depth with the initial content at {mth.antecedent_label(ms)} (else "
+            "Ia from the CN, or an id_mm field). Constant rate: a cl_mmh field, "
+            f"else {ks}, else {ms.constant_rate_mmh:g} mm/h. Recovery factor 1 "
+            "(no recovery is significant within a design storm). " + imp
+        )
+    else:
+        d.heading("Losses: Green and Ampt", 2)
+        d.para(
+            "Green and Ampt infiltration with the hydraulic conductivity K, the "
+            "wetting front suction psi_f, the saturated content theta_s and the "
+            "initial content theta_i (HEC-HMS Technical Reference Manual; Green and "
+            "Ampt 1911; Rawls et al. 1983). K is "
+            f"{ks}; psi_f, theta_s and theta_i are the sub-basin means of the "
+            f"same rasters, with theta_i at {mth.antecedent_label(ms)}. Fields "
+            "ga_ks_mmh, ga_psi_mm, ga_ts and ga_ti override them. " + imp
+        )
+    d.para(
+        "The table 'Where the estimated sub-basin parameters came from' lists the "
+        "source of every value. Soil-derived values are first estimates from "
+        "global soil data; check them against site data or calibrate."
+    )
 
 
 def add_arf_sections(
@@ -369,17 +482,27 @@ def write_report(
 
     # ------------------------------------------------------------ methods
     d.heading("Methods", 1)
-    d.heading("Losses: SCS curve number", 2)
-    d.para(
-        "Direct runoff Q = (P - Ia)^2 / (P - Ia + S) for P > Ia, with the potential "
-        f"maximum retention S = 25400/CN - 254 (mm) and Ia = {s.lambda_ia:g} S. "
-        f"Each sub-basin's curve number is the {m['cn']} of the CN raster cells "
-        "within it (or the CN field given). The antecedent moisture condition is "
-        "that of the CN raster. Impervious areas are taken as included in the CN "
-        "unless a percentage field was given."
-    )
+    _loss_methods_text(d, s, m)
     d.heading("Transform", 2)
-    if s.transform == TRANSFORM_CLARK:
+    if s.transform == mth.TRANSFORM_SNYDER:
+        ms = s.methods
+        d.para(
+            "Snyder unit hydrograph (standard): the standard lag Tp and the peaking "
+            "coefficient Cp of each sub-basin define the peak of the unit "
+            "hydrograph, qp = 2.75 Cp / Tp (m3/s per km2 per cm; Chow et al. 1988). "
+            + (
+                "Tp = 0.75 Ct (L Lca)^0.3 h, with the longest flow path L and the "
+                "centroid distance Lca (km) of Catchment Delineation and "
+                f"Ct = {ms.snyder_ct:g}; "
+                if ms.snyder_tp == mth.SNYDER_TP_CT
+                else "Tp = 0.6 Tc (the SCS lag); "
+            )
+            + f"Cp = {ms.snyder_cp:g} unless a snyder_cp field is given. Ct and Cp "
+            "are regional coefficients (Snyder's Appalachian Ct 1.8 - 2.2 and Cp "
+            "0.56 - 0.69; Cp generally 0.4 - 0.8); calibrate them or take them "
+            "from regional guidance (for South Africa HRU 1/72)."
+        )
+    elif s.transform == TRANSFORM_CLARK:
         d.para(
             "Clark unit hydrograph with the time of concentration Tc of each "
             f"sub-basin and a storage coefficient R from R/(Tc + R) = "
@@ -405,6 +528,24 @@ def write_report(
         "trapezoidal section with the reach length and slope, Manning n and an "
         "index celerity; Lag routing shifts the hydrograph by the travel time."
     )
+    if s.routing == mth.ROUTE_LAGK:
+        d.para(
+            "Lag and K (constant lag and K): the hydrograph is shifted by the lag and "
+            "attenuated by a linear reservoir with storage constant K. Unless lag "
+            "and K fields are given, the reach travel time T is split into lag = "
+            f"{s.methods.lagk_lag_share:g} T and K = "
+            f"{1 - s.methods.lagk_lag_share:g} T - a first estimate to be "
+            "replaced by calibrated or hydraulically derived values."
+        )
+    elif s.routing == mth.ROUTE_KW:
+        d.para(
+            "Kinematic wave: the reach is a trapezoidal channel with its length and "
+            "slope, Manning n, bottom width and side slope, solved by finite "
+            "differences on sub-reaches about one time step of travel long (dx = "
+            "index celerity x time step). Kinematic wave routing translates the "
+            "flood wave without attenuation; use Muskingum-Cunge where floodplain "
+            "storage matters."
+        )
     d.heading("Design storms", 2)
     if SOURCE_DDF in sources:
         d.para(
@@ -451,28 +592,35 @@ def write_report(
     # ------------------------------------------------------------ parameters
     d.heading("Sub-basin parameters", 1)
     d.caption("Table", "Sub-basin parameters")
-    hdr = ["Sub-basin", "Drains to", "Area (km2)", "CN", "Ia (mm)", "Tc (min)"]
-    hdr.append("Tc / R (h)" if s.transform == TRANSFORM_CLARK else "Lag (min)")
+    loss = s.methods.loss
+    loss_hdr = LOSS_COLUMNS[loss]
+    hdr = ["Sub-basin", "Drains to", "Area (km2)"] + [h for h, _, _ in loss_hdr]
+    hdr.append("Tc (min)")
+    if s.transform == TRANSFORM_CLARK:
+        hdr.append("Tc / R (h)")
+    elif s.transform == mth.TRANSFORM_SNYDER:
+        hdr.append("Tp (h) / Cp")
+    else:
+        hdr.append("Lag (min)")
     rows = []
     for e in subs:
         p = e.params
-        last = (
-            f"{_f(p.get('clark_tc_h'), 3)} / {_f(p.get('clark_r_h'), 3)}"
-            if s.transform == TRANSFORM_CLARK
-            else _f(p.get("lag_min"), 1)
-        )
+        if s.transform == TRANSFORM_CLARK:
+            last = f"{_f(p.get('clark_tc_h'), 3)} / {_f(p.get('clark_r_h'), 3)}"
+        elif s.transform == mth.TRANSFORM_SNYDER:
+            last = f"{_f(p.get('snyder_tp_h'), 3)} / {_f(p.get('snyder_cp'), 2)}"
+        else:
+            last = _f(p.get("lag_min"), 1)
         rows.append(
-            [
-                e.name,
-                e.downstream,
-                _f(p["area_km2"], 4),
-                _f(p["cn"], 1),
-                _f(p["ia_mm"], 2),
-                _f(p["tc_min"], 1) + ("*" if "tc_floor" in e.flags else ""),
-                last,
-            ]
+            [e.name, e.downstream, _f(p["area_km2"], 4)]
+            + [_f(p.get(k), nd) for _, k, nd in loss_hdr]
+            + [_f(p["tc_min"], 1) + ("*" if "tc_floor" in e.flags else ""), last]
         )
     d.table(hdr, rows)
+    srcs = _source_rows(subs)
+    if srcs:
+        d.caption("Table", "Where the estimated sub-basin parameters came from")
+        d.table(["Parameter", "Source", "Sub-basins"], srcs, widths_cm=[5.0, 8.5, 3.0])
     if any("tc_floor" in e.flags for e in subs):
         d.para(f"* Tc raised to the minimum of {s.tc_floor_min:g} min.")
     if any(e.params.get("cn_mean") is not None for e in subs):
@@ -499,11 +647,15 @@ def write_report(
             meth = p.get("method", "-")
             if meth == "muskingum":
                 par = f"K {_f(p['k_h'], 3)} h, X {_f(p['x'], 2)}, {p['steps']} step(s)"
-            elif meth == "muskingum_cunge":
+            elif meth in ("muskingum_cunge", mth.ROUTE_KW):
                 par = (
                     f"S {_f(p['slope'], 4)}, n {_f(p['n'], 3)}, B {_f(p['width_m'], 1)} m, "
                     f"z {_f(p['side_slope'], 1)}"
                 )
+                if meth == mth.ROUTE_KW:
+                    par += f", {p['subreaches']} sub-reach(es)"
+            elif meth == mth.ROUTE_LAGK:
+                par = f"lag {_f(p['lagk_lag_h'], 3)} h, K {_f(p['lagk_k_h'], 3)} h"
             else:
                 par = f"lag {_f(p.get('lag_min'), 1)} min"
             rows.append(
@@ -646,7 +798,7 @@ def write_report(
         d.bullet(txt)
 
     d.heading("References", 1)
-    for ref in REFERENCES + arf_references(r.arf):
+    for ref in REFERENCES + method_references(s) + arf_references(r.arf):
         d.para(ref)
     d.doc.save(path)
     return notes

@@ -48,6 +48,7 @@ from mayim_tools._common.output_files import (
 from mayim_tools.rainfall._common import arf as arfm
 
 from . import core
+from . import methods as mth
 from . import storms as stm
 from .project import HMS_DIR_TEMPLATE, write_project
 
@@ -63,11 +64,28 @@ CN_METHODS = [
 TRANSFORMS = [
     (core.TRANSFORM_SCS, "SCS unit hydrograph (lag = 0.6 Tc)"),
     (core.TRANSFORM_CLARK, "Clark unit hydrograph (Tc, R)"),
+    (core.TRANSFORM_SNYDER, "Snyder unit hydrograph (Tp, Cp)"),
 ]
 ROUTINGS = [
     (core.ROUTE_MUSKINGUM, "Muskingum (K and X from the stream network)"),
     (core.ROUTE_LAG, "Lag (travel time)"),
     (core.ROUTE_MC, "Muskingum-Cunge (trapezoidal channel)"),
+    (core.ROUTE_LAGK, "Lag and K (travel time split into lag and K)"),
+    (core.ROUTE_KW, "Kinematic wave (trapezoidal channel)"),
+]
+LOSSES = [
+    (mth.LOSS_SCS, "SCS curve number"),
+    (mth.LOSS_IC, "Initial and Constant"),
+    (mth.LOSS_DC, "Deficit and Constant"),
+    (mth.LOSS_GA, "Green and Ampt (soil rasters)"),
+]
+ANTECEDENTS = [
+    (mth.ANTECEDENT_MOIST, "Moist: initial water content at field capacity"),
+    (mth.ANTECEDENT_DRY, "Dry: initial water content at wilting point"),
+]
+SNYDER_TPS = [
+    (mth.SNYDER_TP_LAG, "Tp = 0.6 Tc (the SCS lag)"),
+    (mth.SNYDER_TP_CT, "Tp = 0.75 Ct (L Lca)^0.3 (fields lfp_km, lca_km)"),
 ]
 SOURCES = [
     (stm.SOURCE_DDF, "DDF table - HEC-HMS frequency storm"),
@@ -197,6 +215,16 @@ def _num(v):
     return x if x == x else None  # NaN -> None
 
 
+def _numeric_attrs(feature, names) -> dict:
+    """{field: value} of the numeric attributes (parameter overrides)."""
+    out = {}
+    for n in names:
+        v = _num(feature[n])
+        if v is not None:
+            out[n] = v
+    return out
+
+
 def _text(v) -> str:
     if v is None:
         return ""
@@ -218,6 +246,17 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
     CN_RASTER = "CN_RASTER"
     CN_FIELD = "CN_FIELD"
     CN_METHOD = "CN_METHOD"
+    LOSS = "LOSS"
+    SOIL_FOLDER = "SOIL_FOLDER"
+    KSAT_FACTOR = "KSAT_FACTOR"
+    ANTECEDENT = "ANTECEDENT"
+    SOIL_DEPTH = "SOIL_DEPTH"
+    IL_DEFAULT = "IL_DEFAULT"
+    CL_DEFAULT = "CL_DEFAULT"
+    SNYDER_TP = "SNYDER_TP"
+    SNYDER_CT = "SNYDER_CT"
+    SNYDER_CP = "SNYDER_CP"
+    LAGK_SHARE = "LAGK_SHARE"
     CN_DEPTH = "CN_DEPTH"
     LAMBDA = "LAMBDA"
     IMPERV_FIELD = "IMPERV_FIELD"
@@ -318,14 +357,32 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
             "Loss: SCS curve number from the CN raster (band 'cn_design' of SCS "
             "Curve Numbers, else band 1) - the area-weighted mean of the cells, or "
             "the runoff-equivalent CN at the CN design depth - or a CN field; "
-            "Ia = lambda S with S = 25400/CN - 254 mm.\n"
-            "Transform: SCS unit hydrograph with lag = 0.6 Tc, or Clark with Tc and "
-            "R from R/(Tc+R). Tc from the Tc field (min), at least the minimum Tc.\n"
+            "Ia = lambda S with S = 25400/CN - 254 mm. Initial and Constant: "
+            "initial loss from an il_mm field, else Ia from the CN, else the "
+            "default; constant rate from a cl_mmh field, else the soil Ksat "
+            "(geometric mean over the sub-basin, x the Ksat factor), else the "
+            "default. Deficit and Constant: maximum deficit (theta_s - theta_wp) x "
+            "the soil depth, initial deficit (theta_s - theta_i) x the depth with "
+            "theta_i at field capacity (moist) or wilting point (dry) - else S and "
+            "Ia from the CN, or md_mm / id_mm fields; constant rate as above. "
+            "Green and Ampt: K = soil Ksat x factor, suction psi_f, theta_s and "
+            "theta_i from the soil rasters, or the ga_ks_mmh, ga_psi_mm, ga_ts, "
+            "ga_ti fields. Soil rasters: the Regional Soil Parameterisation "
+            "outputs in the soil raster folder (0-30 cm P50 bands). Every "
+            "estimated value's source is listed in the CSV and report.\n"
+            "Transform: SCS unit hydrograph with lag = 0.6 Tc; Clark with Tc and "
+            "R from R/(Tc+R); or Snyder (standard) with Tp = 0.6 Tc or 0.75 Ct "
+            "(L Lca)^0.3 (Catchment Delineation lfp_km, lca_km) and Cp (or "
+            "snyder_tp_h / snyder_cp fields). Tc from the Tc field (min), at least "
+            "the minimum Tc.\n"
             "Routing: Muskingum with K (musk_k_h), X (musk_x) of the stream network "
             "and sub-reaches set for the time step (1/(2(1-X)) <= K/(n dt) <= "
             "1/(2X)); reaches too short for it use Lag. Lag uses the travel time; "
             "Muskingum-Cunge a trapezoid with the reach length and slope. Without "
-            "travel times, K = length / velocity.\n"
+            "travel times, K = length / velocity. Lag and K: lag = share x travel "
+            "time, K = the rest (or lagk_lag_h / lagk_k_h fields). Kinematic wave: "
+            "the Muskingum-Cunge trapezoid (or kw_n / kw_width_m fields) with "
+            "sub-reaches of about one time step of travel.\n"
             "Rainfall (one run per return period, duration and peak position or "
             "pattern): DDF table -> HEC-HMS frequency storm (depths at 5 min ... the "
             "duration, nested with the peak at each chosen position); Alternating "
@@ -494,6 +551,23 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
         )
         self.addParameter(
             QgsProcessingParameterEnum(
+                self.LOSS,
+                "Loss method",
+                options=[label for _, label in LOSSES],
+                defaultValue=0,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterFile(
+                self.SOIL_FOLDER,
+                "Soil raster folder (Regional Soil Parameterisation; loss methods "
+                "other than SCS)",
+                behavior=_folder_behavior(),
+                optional=True,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterEnum(
                 self.LAMBDA,
                 "Initial abstraction ratio Ia / S",
                 options=[label for _, label in LAMBDA_OPTIONS],
@@ -650,6 +724,72 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
                 QgsProcessingParameterNumber.Double,
                 defaultValue=5.0,
                 minValue=0.5,
+            ),
+            QgsProcessingParameterEnum(
+                self.ANTECEDENT,
+                "Soil moisture at the start of the storm (Deficit and Constant, "
+                "Green and Ampt)",
+                options=[label for _, label in ANTECEDENTS],
+                defaultValue=0,
+            ),
+            QgsProcessingParameterNumber(
+                self.KSAT_FACTOR,
+                "Factor on the soil Ksat (constant rate, Green and Ampt K)",
+                QgsProcessingParameterNumber.Double,
+                defaultValue=1.0,
+                minValue=0.01,
+                maxValue=10.0,
+            ),
+            QgsProcessingParameterNumber(
+                self.SOIL_DEPTH,
+                "Soil layer depth for the Deficit and Constant deficits (mm)",
+                QgsProcessingParameterNumber.Double,
+                defaultValue=300.0,
+                minValue=10.0,
+            ),
+            QgsProcessingParameterNumber(
+                self.IL_DEFAULT,
+                "Initial loss / deficit without CN, soil or field (mm)",
+                QgsProcessingParameterNumber.Double,
+                defaultValue=10.0,
+                minValue=0.0,
+            ),
+            QgsProcessingParameterNumber(
+                self.CL_DEFAULT,
+                "Constant loss rate without soil Ksat or field (mm/h)",
+                QgsProcessingParameterNumber.Double,
+                defaultValue=5.0,
+                minValue=0.0,
+            ),
+            QgsProcessingParameterEnum(
+                self.SNYDER_TP,
+                "Snyder standard lag Tp",
+                options=[label for _, label in SNYDER_TPS],
+                defaultValue=0,
+            ),
+            QgsProcessingParameterNumber(
+                self.SNYDER_CT,
+                "Snyder Ct (with Tp = 0.75 Ct (L Lca)^0.3)",
+                QgsProcessingParameterNumber.Double,
+                defaultValue=2.0,
+                minValue=0.1,
+                maxValue=10.0,
+            ),
+            QgsProcessingParameterNumber(
+                self.SNYDER_CP,
+                "Snyder peaking coefficient Cp",
+                QgsProcessingParameterNumber.Double,
+                defaultValue=0.6,
+                minValue=0.05,
+                maxValue=1.0,
+            ),
+            QgsProcessingParameterNumber(
+                self.LAGK_SHARE,
+                "Lag and K: share of the travel time taken as lag (rest is K)",
+                QgsProcessingParameterNumber.Double,
+                defaultValue=0.5,
+                minValue=0.0,
+                maxValue=1.0,
             ),
             QgsProcessingParameterNumber(
                 self.CLARK_RATIO,
@@ -851,6 +991,7 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
                     wkb=bytes(g.asWkb()),
                     sub_type=_text(f["sub_type"]) if "sub_type" in names else "",
                     bank=_text(f["bank"]) if "bank" in names else "",
+                    attrs=_numeric_attrs(f, names),
                 )
             )
             rings[nm] = [
@@ -910,6 +1051,7 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
                     musk_x=val("musk_x"),
                     tt_min=val("tt_min"),
                     wkb=bytes(g.asWkb()),
+                    attrs=_numeric_attrs(f, names),
                 )
             )
             lines[nm] = parts
@@ -981,6 +1123,81 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
             raise QgsProcessingException(str(e)) from e
         feedback.pushInfo(f"Areal reduction: {model.label()} ({note})")
         return model
+
+    def _method_settings(self, parameters, context, loss):
+        return mth.MethodSettings(
+            loss=loss,
+            ksat_factor=self.parameterAsDouble(parameters, self.KSAT_FACTOR, context),
+            antecedent=ANTECEDENTS[
+                self.parameterAsEnum(parameters, self.ANTECEDENT, context)
+            ][0],
+            soil_depth_mm=self.parameterAsDouble(parameters, self.SOIL_DEPTH, context),
+            initial_loss_mm=self.parameterAsDouble(
+                parameters, self.IL_DEFAULT, context
+            ),
+            constant_rate_mmh=self.parameterAsDouble(
+                parameters, self.CL_DEFAULT, context
+            ),
+            snyder_tp=SNYDER_TPS[
+                self.parameterAsEnum(parameters, self.SNYDER_TP, context)
+            ][0],
+            snyder_ct=self.parameterAsDouble(parameters, self.SNYDER_CT, context),
+            snyder_cp=self.parameterAsDouble(parameters, self.SNYDER_CP, context),
+            lagk_lag_share=self.parameterAsDouble(parameters, self.LAGK_SHARE, context),
+        )
+
+    def _soil_values(self, parameters, context, feedback, crs, geoms, subs, loss):
+        """Zonal soil parameters per sub-basin from the Regional Soil
+        Parameterisation rasters (x.soil); returns the input label."""
+        folder = self.parameterAsFile(parameters, self.SOIL_FOLDER, context)
+        if not folder:
+            if loss == mth.LOSS_GA:
+                feedback.pushWarning(
+                    "Green and Ampt without a soil raster folder: every sub-catchment "
+                    "needs the ga_ks_mmh, ga_psi_mm, ga_ts and ga_ti fields."
+                )
+            return "-"
+        if loss == mth.LOSS_SCS:
+            feedback.pushInfo("Soil raster folder not used by the SCS loss method.")
+            return f"{folder} (not used)"
+        try:
+            found, notes = mth.find_soil_rasters(folder)
+        except mth.MethodError as e:
+            raise QgsProcessingException(str(e)) from e
+        for n in notes:
+            feedback.pushInfo(n)
+        if not found:
+            raise QgsProcessingException(
+                f"No Regional Soil Parameterisation rasters (bands such as "
+                f"ksat_0-30cm_P50) in {folder}."
+            )
+        feedback.setProgressText("Soil parameters per sub-basin")
+        from qgis.core import QgsRasterLayer
+
+        for code, (path, band) in found.items():
+            lyr = QgsRasterLayer(path, code)
+            tr = QgsCoordinateTransform(crs, lyr.crs(), context.transformContext())
+            wkts = []
+            for g in geoms:
+                gg = QgsGeometry(g)
+                if lyr.crs() != crs:
+                    gg.transform(tr)
+                wkts.append(gg.asWkt())
+            vals = mth.zonal_values(path, band, wkts, geometric=(code == "ksat"))
+            for x, v in zip(subs, vals, strict=True):
+                if x.soil is None:
+                    x.soil = {}
+                x.soil[code] = v
+            empty = [x.name for x, v in zip(subs, vals, strict=True) if v is None]
+            if empty:
+                feedback.pushWarning(
+                    f"No {code} value for {len(empty)} sub-catchment(s) "
+                    f"({', '.join(empty[:8])}): outside the soil raster."
+                )
+        missing = [c for c in mth.SOIL_CODES if c not in found]
+        if missing:
+            feedback.pushInfo("Soil rasters not found: " + ", ".join(missing))
+        return f"{folder} ({', '.join(sorted(found))})"
 
     def _storms(self, parameters, context, feedback, arf_model=None):
         chosen = [
@@ -1142,6 +1359,7 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
             parameters, context, feedback, crs
         )
         cn_layer = self.parameterAsRasterLayer(parameters, self.CN_RASTER, context)
+        loss = LOSSES[self.parameterAsEnum(parameters, self.LOSS, context)][0]
         lam = LAMBDA_OPTIONS[self.parameterAsEnum(parameters, self.LAMBDA, context)][0]
         cn_method = CN_METHODS[
             self.parameterAsEnum(parameters, self.CN_METHOD, context)
@@ -1174,14 +1392,17 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
                         feedback.pushWarning(
                             f"{x.name}: CN from the cell at its centroid."
                         )
-        elif not cn_field:
+        elif not cn_field and loss == mth.LOSS_SCS:
             raise QgsProcessingException("Give the curve number raster or a CN field.")
         missing = [x.name for x in subs if x.cn is None]
-        if missing:
+        if missing and loss == mth.LOSS_SCS:
             raise QgsProcessingException(
                 f"No curve number for {len(missing)} sub-catchment(s): "
                 + ", ".join(missing[:10])
             )
+        soil_label = self._soil_values(
+            parameters, context, feedback, crs, geoms, subs, loss
+        )
 
         feedback.setProgressText("Reading the streams and nodes")
         ssrc, reaches, lines = self._read_streams(parameters, context, feedback, crs)
@@ -1237,6 +1458,7 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
             dt_min=dt_opt,
             tail_h=tail if tail > 0 else None,
             ensembles=self.parameterAsBoolean(parameters, self.ENSEMBLES, context),
+            methods=self._method_settings(parameters, context, loss),
         )
         try:
             r = core.assemble(subs, reaches, nodes, storms, s)
@@ -1324,6 +1546,8 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
             ("Streams", ssrc.sourceName() if ssrc is not None else "-"),
             ("Nodes", nsrc.sourceName() if nsrc is not None else "-"),
             ("Curve numbers", cn_label),
+            ("Loss method", mth.LOSS_LABELS[loss]),
+            ("Soil rasters", soil_label),
             (
                 "Time of concentration",
                 self.parameterAsString(parameters, self.TC_FIELD, context),
