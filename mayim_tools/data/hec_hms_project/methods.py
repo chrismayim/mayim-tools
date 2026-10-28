@@ -11,7 +11,7 @@ Phase 1 (2026-10-28):
 Each estimated parameter records where it came from (``params["sources"]``):
 a field on the input layer (``attrs``), the Regional Soil Parameterisation
 rasters (zonal statistics over the sub-catchment), the curve number, the
-Catchment Delineation geometry, or a default. The basin-file keywords and
+'Catchments: 1. Delineation' geometry, or a default. The basin-file keywords and
 units were checked by computing and re-saving generated projects in
 HEC-HMS 4.14 (metric: mm, mm/h, m3/m3, hours for Snyder Tp and Lag and K).
 

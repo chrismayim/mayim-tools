@@ -37,7 +37,7 @@ class CatchmentInput:
     s_mean: float | None = None  # mean catchment slope, m/m
     tc_min: float | None = None  # Tc for the Rational method
     ineffective_km2: float = 0.0
-    mode: str | None = None  # Catchment Delineation 'total' / 'incremental'
+    mode: str | None = None  # 'Catchments: 1. Delineation' 'total' / 'incremental'
     map_mm: float | None = None
     sdf_basin: int | None = None
     veld_zone: str | None = None

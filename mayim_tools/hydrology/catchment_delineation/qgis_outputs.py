@@ -1,5 +1,5 @@
 """
-QGIS side of the Catchment Delineation outputs: styled in-memory layers,
+QGIS side of the 'Catchments: 1. Delineation' outputs: styled in-memory layers,
 shapefile export, loading saved files into the project with the house
 layer styles, and the report's layout map rendered by QGIS.
 

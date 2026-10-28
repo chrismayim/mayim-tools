@@ -56,7 +56,7 @@ PARAMETERS (all lengths in metres - the DEM must be in a projected CRS)
   factor, circularity, elongation, Gravelius), hypsometric integral,
   stream length and drainage density (streams = cells whose upstream
   area is at least a threshold), and the channel start on the longest flow
-  path (for the Time of Concentration tool).
+  path (for the 'Catchments: 2. Time of Concentration' tool).
 """
 
 from __future__ import annotations

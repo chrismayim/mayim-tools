@@ -715,7 +715,7 @@ def extract_stream_network(
     """Extracts, orders and characterises the stream network.
 
     ``outlet_cells`` is an alternative to ``pour_points`` for callers that
-    have already placed their outlets (e.g. Catchment Delineation, whose
+    have already placed their outlets (e.g. 'Catchments: 1. Delineation', whose
     pour points are snapped and whose pour lines cover many cells): a list
     of (name, flat cell indices). The network is then everything upstream
     of those cells, exactly as with pour points.

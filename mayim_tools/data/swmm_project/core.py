@@ -402,7 +402,7 @@ def build_model(
 ) -> SwmmModel:
     """SWMM model from an assembled HEC-HMS ProjectResult ``r``.
     ``sub_extra``: {sub-catchment name: {'w_flow_m': .., 's_mean_pc': ..}}
-    (Catchment Delineation fields); ``reach_points``: {reach source name: xy
+    ('Catchments: 1. Delineation' fields); ``reach_points``: {reach source name: xy
     downstream}; ``reach_slopes``: {reach source name: slope m/m} (inverts
     without a DEM)."""
     sub_extra = sub_extra or {}
@@ -454,7 +454,7 @@ def build_model(
     if nsqrt:
         warnings.append(
             f"{nsqrt} sub-catchment(s) have no '{s.width_source}' field value; their "
-            "width is sqrt(area) (the Catchment Delineation widths are better)."
+            "width is sqrt(area) (the 'Catchments: 1. Delineation' widths are better)."
         )
     if any("default_slope" in x.flags for x in subs):
         warnings.append(

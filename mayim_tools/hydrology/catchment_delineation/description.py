@@ -356,9 +356,10 @@ def modelling_considerations(a: dict, size: str, screen: str | None) -> list[str
     points.append(method)
 
     points.append(
-        "Time of concentration: use the Time of Concentration tool, which "
-        "splits the longest flow path into overland, shallow concentrated "
-        "and channel flow with parameters set per catchment"
+        "Time of concentration: use the 'Catchments: 2. Time of "
+        "Concentration' tool, which splits the longest flow path into "
+        "overland, shallow concentrated and channel flow with parameters set "
+        "per catchment"
         + (
             f" (the channel starts {a['ch_head_m']:.0f} m from the outlet on "
             "the longest flow path)."

@@ -84,7 +84,7 @@ PARAMETER_DEFINITIONS = [
     ("Length of overland flow", "L_o (km)", "L_o = 1 / (2 D_d).", "Horton (1945)"),
     ("Constant of channel maintenance", "C (km²/km)", "C = 1 / D_d.", "Schumm (1956)"),
     ("Sinuosity", "-", "L / straight-line distance between its ends.", "-"),
-    ("Channel start on L", "L_ch (m)", "Distance from the outlet along L to the most upstream cell of L whose upstream area reaches the stream threshold (the channel head); blank when L has no stream cell. Used by the Time of Concentration tool.", "-"),
+    ("Channel start on L", "L_ch (m)", "Distance from the outlet along L to the most upstream cell of L whose upstream area reaches the stream threshold (the channel head); blank when L has no stream cell. Used by the 'Catchments: 2. Time of Concentration' tool.", "-"),
     ("Waterway length", "L_w (m)", "Length of the stream through a stream sub-catchment; the longest flow path L otherwise.", "-"),
     ("Mean overland flow length", "L_om (m)", "Mean D8 flow length from every cell to the nearest stream cell (to the outlet where no stream is reached).", "-"),
     ("SWMM width - flow length", "W_f (m)", "W_f = A / L_om, with L_om capped at the maximum overland flow length when one is set.", "Rossman & Huber (2016)"),
@@ -861,7 +861,7 @@ def write_report_docx(
         f"This annexure documents the delineation and characterisation of "
         f"{n} catchment{'s' if n != 1 else ''} from a digital elevation model "
         f"(DEM) with a {dem.get('cell_x', 0):g} m x {dem.get('cell_y', 0):g} m "
-        f"cell size, using the {ctx.get('tool', 'Catchment Delineation')} tool "
+        f"cell size, using the {ctx.get('tool', 'Catchments: 1. Delineation')} tool "
         f"(Mayim Tools, version {ctx.get('version', '-')}) in "
         f"{'total' if mode == 'total' else 'incremental'} mode. For each "
         "catchment it records the inputs and method, the geometric, relief, "

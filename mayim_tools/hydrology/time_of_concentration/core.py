@@ -1,4 +1,4 @@
-"""Time of Concentration - calculation core (no QGIS dependency).
+"""'Catchments: 2. Time of Concentration' - calculation core (no QGIS dependency).
 
 Per catchment:
 
@@ -10,7 +10,7 @@ Per catchment:
     overland (sheet) flow   x from L - L_ov to L           Kerby, DM Eq 3.11
     shallow concentrated    x from L_ch to L - L_ov        NRCS V = k S^0.5
     channel                 x from 0 to L_ch               DM Eq 3.12
-  L_ch is the channel start (Catchment Delineation's ch_head_m, or the
+  L_ch is the channel start ('Catchments: 1. Delineation''s ch_head_m, or the
   user's ch_start_m); L_ov the overland length (never past the channel
   start). Each part takes its slope from the DEM profile along the path.
 - Selected Tc: the method chosen per catchment (tc_method).
@@ -26,7 +26,7 @@ import numpy as np
 
 from . import tables as tb
 
-TOOL_VERSION = "0.1.0"
+TOOL_VERSION = "0.1.1"
 
 
 # ---------------------------------------------------------------- methods ---
@@ -102,7 +102,7 @@ def equal_area_slope(x, z) -> float | None:
 
 def profile_from_line(vertices_xy, z_values) -> tuple[np.ndarray, np.ndarray]:
     """(x from the outlet, z), ascending in x, from a flow-path line drawn
-    divide -> outlet (Catchment Delineation's longest flow path) with the
+    divide -> outlet ('Catchments: 1. Delineation''s longest flow path) with the
     DEM value at each vertex. Vertices with no DEM value are dropped."""
     pts = np.asarray(vertices_xy, dtype=float)
     zs = np.asarray(z_values, dtype=float)
@@ -136,7 +136,7 @@ class CatchmentTc:
     s_avg: float | None = None
     s_1085: float | None = None
     s_ea: float | None = None
-    ch_head_m: float | None = None  # measured by Catchment Delineation
+    ch_head_m: float | None = None  # measured by 'Catchments: 1. Delineation'
     x: np.ndarray | None = None  # profile along the LFP, from the outlet
     z: np.ndarray | None = None
     params: Params = field(default_factory=Params)

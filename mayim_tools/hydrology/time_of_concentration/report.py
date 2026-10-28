@@ -1,5 +1,5 @@
-"""Word (.docx) report of the Time of Concentration tool in the Mayim report
-standard: title page, summary, tool and method, inputs and settings,
+"""Word (.docx) report of the 'Catchments: 2. Time of Concentration' tool in
+the Mayim report standard: title page, summary, tool and method, inputs and settings,
 parameters and calculations, results, outputs, notes and limitations,
 references (house text styles, 9 pt tables, numbered captions, 16.5 cm
 house-style charts).
@@ -108,7 +108,7 @@ def write_report(path, items, run_info: dict, context=None) -> list[str]:
             ("Project / site", context.get("project_name") or "-"),
             ("Prepared by", "Mayim Consulting"),
             ("Tool and version",
-             f"{run_info.get('tool', 'Time of Concentration')}, version "
+             f"{run_info.get('tool', 'Catchments: 2. Time of Concentration')}, version "
              f"{run_info.get('version', '-')}"),
             ("Software", context.get("software") or "-"),
             ("Report date", _dt.date.today().isoformat()),

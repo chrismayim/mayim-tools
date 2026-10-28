@@ -1,4 +1,5 @@
-"""Fields and the CSV output of the Time of Concentration tool (no QGIS)."""
+"""Fields and the CSV output of the 'Catchments: 2. Time of Concentration'
+tool (no QGIS)."""
 
 from __future__ import annotations
 

@@ -98,7 +98,7 @@ SNAP_FIELDS = [
 _BLUES = ["#9ecae1", "#6baed6", "#4292c6", "#2171b5", "#08519c", "#08306b"]
 
 # Selectable outputs (same file descriptions as the stream outputs of
-# Catchment Delineation) and the Mayim QML style each layer is loaded with.
+# 'Catchments: 1. Delineation') and the Mayim QML style each layer is loaded with.
 OUTPUT_SPECS = [
     OutputSpec(
         "OUTPUT_STREAMS", "Stream network (Strahler, Shreve, Horton, Hack orders)",
@@ -629,7 +629,7 @@ class StreamNetworkAlgorithm(QgsProcessingAlgorithm):
 
 
 # ---------------------------------------------------------------------------
-# Shared with Catchment Delineation: network parameters, settings and the
+# Shared with 'Catchments: 1. Delineation': network parameters, settings and the
 # reach / node / main-stem layer writers (so both tools write identical
 # stream outputs).
 # ---------------------------------------------------------------------------

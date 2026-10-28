@@ -1,5 +1,5 @@
 """
-Network sub-catchments (Catchment Delineation, incremental mode) - pure
+Network sub-catchments ('Catchments: 1. Delineation', incremental mode) - pure
 NumPy, no QGIS dependency.
 
 The pour point(s) / pour line(s) mark only the final outlet of each system.

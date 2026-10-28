@@ -89,7 +89,7 @@ from .qgis_outputs import (
 from .report import write_report_docx
 from .subcatchments import delineate_network_subcatchments
 
-TOOL_VERSION = "0.10.0"
+TOOL_VERSION = "0.10.1"
 
 MODE_OPTIONS = [
     "Total (full catchment per outlet; nested catchments overlap)",
@@ -319,7 +319,7 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
         return "catchment_delineation"
 
     def displayName(self):
-        return "Catchment Delineation"
+        return "Catchments: 1. Delineation"
 
     def group(self):
         return "Hydrological Tools"
@@ -330,7 +330,7 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
     def shortHelpString(self):
         glossary = "\n".join(f"  {n}: {d}" for n, _, d in CATCHMENT_FIELDS)
         return (
-            f"Catchment Delineation (version {TOOL_VERSION})\n"
+            f"Catchments: 1. Delineation (version {TOOL_VERSION})\n"
             "\n"
             "PURPOSE:\tDelineates the catchment draining to each pour "
             "point or pour line, and writes the catchment polygon(s) "
@@ -406,9 +406,9 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
             "TIME OF CONCENTRATION:\tNot calculated here. ch_head_m gives "
             "where the channel starts on the longest flow path (the most "
             "upstream path cell whose upstream area reaches the stream "
-            "threshold, in m from the outlet). The Time of Concentration "
-            "tool takes the catchments, the longest flow paths and the DEM "
-            "and calculates Tc per catchment.\n"
+            "threshold, in m from the outlet). The 'Catchments: 2. Time of "
+            "Concentration' tool takes the catchments, the longest flow "
+            "paths and the DEM and calculates Tc per catchment.\n"
             "\n"
             "STREAM NETWORK:\tThe same stream outputs as the Stream Network "
             "tool, for the network upstream of the outlets: reaches split at "

@@ -1,4 +1,4 @@
-"""Processing Toolbox algorithm: catchment polygons (Catchment Delineation
+"""Processing Toolbox algorithm: catchment polygons ('Catchments: 1. Delineation'
 output or any layer with the same attributes) + design rainfall DDF + runoff
 coefficient CSV in -> design peak flows by the SANRAL Drainage Manual
 Chapter 3 methods and DWS CAPA out (catchment layer, sectioned CSV,
@@ -235,9 +235,9 @@ class SanralPeakFlowsAlgorithm(QgsProcessingAlgorithm):
             "design value is left to the engineer.\n"
             "\n"
             "INPUTS:\tCatchment polygons with area, longest flow path, 10-85 "
-            "slope, Lc and mean slope (%) - the Catchment Delineation field "
+            "slope, Lc and mean slope (%) - the 'Catchments: 1. Delineation' field "
             "names are the defaults - and Tc (min), by default tc_sel_mn of the "
-            "Time of Concentration tool. Rational: a C CSV (catchment_id, alpha, "
+            "'Catchments: 2. Time of Concentration' tool. Rational: a C CSV (catchment_id, alpha, "
             "C1, Ft_class, beta, C2, gamma, C3; the C1 breakdown columns of the "
             "Rational C tool are shown on the calculation sheets) and, for "
             "Alternative 3, the "

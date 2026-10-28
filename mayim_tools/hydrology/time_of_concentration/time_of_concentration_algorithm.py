@@ -1,6 +1,6 @@
-"""Processing Toolbox algorithm: Time of Concentration.
+"""Processing Toolbox algorithm: 'Catchments: 2. Time of Concentration'.
 
-Catchment polygons (Catchment Delineation output) + their longest flow paths
+Catchment polygons ('Catchments: 1. Delineation' output) + their longest flow paths
 + the DEM in -> Kirpich, USBR (DM Eq 3.12) and Bransby-Williams Tc, the
 combined overland + shallow concentrated + channel Tc and the selected Tc
 per catchment.
@@ -221,7 +221,7 @@ class TimeOfConcentrationAlgorithm(QgsProcessingAlgorithm):
         return "time_of_concentration"
 
     def displayName(self):
-        return "Time of Concentration"
+        return "Catchments: 2. Time of Concentration"
 
     def group(self):
         return "Hydrological Tools"
@@ -240,7 +240,7 @@ class TimeOfConcentrationAlgorithm(QgsProcessingAlgorithm):
             f"  {c}: {t} (k = {k:.2f} m/s)" for c, (t, k) in tb.SC_TYPES.items()
         )
         return (
-            f"Time of Concentration (version {TOOL_VERSION})\n"
+            f"Catchments: 2. Time of Concentration (version {TOOL_VERSION})\n"
             "\n"
             "PURPOSE:\tTc per catchment by Kirpich, USBR (SANRAL DM Eq 3.12) and "
             "Bransby-Williams on the whole longest flow path, and by a combined "
@@ -250,7 +250,7 @@ class TimeOfConcentrationAlgorithm(QgsProcessingAlgorithm):
             "catchment (tc_method), the default Tc field of SANRAL Deterministic "
             "Peak Flows, Prepare HEC-HMS project and Prepare SWMM project.\n"
             "\n"
-            "INPUTS:\tThe Catchment Delineation catchments (lfp_km, s_avg, "
+            "INPUTS:\tThe 'Catchments: 1. Delineation' catchments (lfp_km, s_avg, "
             "s_1085, s_ea, ch_head_m) and longest flow paths, and the DEM they "
             "were delineated from. Optional land cover (SANLC or ESA "
             "WorldCover) for suggested r and surface.\n"
@@ -304,7 +304,7 @@ class TimeOfConcentrationAlgorithm(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterVectorLayer(
                 self.FLOWPATHS,
-                "Longest flow paths (Catchment Delineation)",
+                "Longest flow paths ('Catchments: 1. Delineation')",
                 [QgsProcessing.SourceType.TypeVectorLine],
             )
         )

@@ -13,7 +13,7 @@ basin geometry) from GIS outputs:
 - stream nodes -> Junction elements; a node with no reach leaving it is
   the outlet of its system and becomes a Sink.
 
-The topology follows the naming of Catchment Delineation (incremental mode)
+The topology follows the naming of 'Catchments: 1. Delineation' (incremental mode)
 and Stream Network: stream A1 drains to node A1 (the outlet), stream A2 to
 node A2 at the top of A1, a branch A3A1 to the confluence node at the top
 of A3 (A4); a sub-catchment's ``node`` field names the node it drains to.
@@ -425,7 +425,7 @@ def build_network(
         if t is None:
             raise HmsProjectError(
                 f"Reach '{r.name}' does not follow the stem + number naming "
-                "(A1, A3A2 ...) of Catchment Delineation / Stream Network."
+                "(A1, A3A2 ...) of 'Catchments: 1. Delineation' / Stream Network."
             )
         if r.ds_name and r.ds_name not in rnames:
             warnings.append(

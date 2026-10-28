@@ -137,7 +137,7 @@ def write_report(
         "S^(1/2) (SI units), with the characteristic width W, "
         "slope S, Manning n and depression storage ds. The width sets how fast a "
         "subcatchment drains and is the most sensitive parameter. "
-        f"Widths come from '{s.width_source}' (Catchment Delineation: w_flow_m = A / mean "
+        f"Widths come from '{s.width_source}' ('Catchments: 1. Delineation': w_flow_m = A / mean "
         "overland flow length; w_chan_m = 2 x waterway length; w_gu_m = Guo and "
         "Urbonas 2009), else sqrt(area)."
     )

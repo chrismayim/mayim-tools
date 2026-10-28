@@ -1,6 +1,6 @@
 """Processing Toolbox algorithm: Prepare HEC-HMS project (Data Tools).
 
-Sub-catchments + stream reaches + stream nodes (Catchment Delineation /
+Sub-catchments + stream reaches + stream nodes ('Catchments: 1. Delineation' /
 Stream Network outputs) + an SCS curve number raster + DDF / hyetograph /
 Huff / ensemble rainfall + an optional DEM -> a HEC-HMS 4.14 (or 4.13) project
 folder that opens and computes in HEC-HMS, with an optional HEC-HMS
@@ -345,7 +345,7 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
             "METHOD\n"
             "Geometry: each sub-catchment is a sub-basin (area from the polygon) "
             "draining to the junction at its stream node (field 'node' of the "
-            "Catchment Delineation incremental output). Each stream is a reach "
+            "'Catchments: 1. Delineation' incremental output). Each stream is a reach "
             "from the node at its top (stem + next number: the top of A3 is A4) to "
             "the top node of the stream it flows into ('ds_name'), or to the outlet. "
             "A node with no reach leaving it is the outlet of its system (a sink). "
@@ -372,7 +372,7 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
             "estimated value's source is listed in the CSV and report.\n"
             "Transform: SCS unit hydrograph with lag = 0.6 Tc; Clark with Tc and "
             "R from R/(Tc+R); or Snyder (standard) with Tp = 0.6 Tc or 0.75 Ct "
-            "(L Lca)^0.3 (Catchment Delineation lfp_km, lca_km) and Cp (or "
+            "(L Lca)^0.3 ('Catchments: 1. Delineation' lfp_km, lca_km) and Cp (or "
             "snyder_tp_h / snyder_cp fields). Tc from the Tc field (min), at least "
             "the minimum Tc.\n"
             "Routing: Muskingum with K (musk_k_h), X (musk_x) of the stream network "
@@ -418,10 +418,10 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
             "\n"
             "PARAMETERS\n"
             "Sub-catchments: polygons in a projected CRS (metres), e.g. the "
-            "Catchment Delineation catchments (incremental mode); name field "
+            "'Catchments: 1. Delineation' catchments (incremental mode); name field "
             "outlet_id, node field node, Tc field tc_sel_mn (the selected Tc of "
-            "the Time of Concentration tool).\n"
-            "Stream reaches / nodes: the Catchment Delineation or Stream Network "
+            "the 'Catchments: 2. Time of Concentration' tool).\n"
+            "Stream reaches / nodes: the 'Catchments: 1. Delineation' or Stream Network "
             "stream and node layers (fields name, ds_name, length_m, slope, "
             "musk_k_h, musk_x, tt_min).\n"
             "CN raster: SCS Curve Numbers output, or give a CN field.\n"

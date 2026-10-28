@@ -163,7 +163,7 @@ def test_provider_registers_seven_algorithms() -> None:
             "rainfall_tools",
         ),
         "catchment_delineation": (
-            "Catchment Delineation",
+            "Catchments: 1. Delineation",
             "Hydrological Tools",
             "hydrological_tools",
         ),
@@ -238,7 +238,7 @@ def test_provider_registers_seven_algorithms() -> None:
             "hydrological_tools",
         ),
         "time_of_concentration": (
-            "Time of Concentration",
+            "Catchments: 2. Time of Concentration",
             "Hydrological Tools",
             "hydrological_tools",
         ),

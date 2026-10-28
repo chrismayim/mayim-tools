@@ -492,7 +492,7 @@ def write_report(
             "hydrograph, qp = 2.75 Cp / Tp (m3/s per km2 per cm; Chow et al. 1988). "
             + (
                 "Tp = 0.75 Ct (L Lca)^0.3 h, with the longest flow path L and the "
-                "centroid distance Lca (km) of Catchment Delineation and "
+                "centroid distance Lca (km) of 'Catchments: 1. Delineation' and "
                 f"Ct = {ms.snyder_ct:g}; "
                 if ms.snyder_tp == mth.SNYDER_TP_CT
                 else "Tp = 0.6 Tc (the SCS lag); "

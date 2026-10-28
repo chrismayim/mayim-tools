@@ -1,6 +1,6 @@
 """Processing Toolbox algorithm: Prepare SWMM project (Data Tools).
 
-Sub-catchments + stream reaches + stream nodes (Catchment Delineation /
+Sub-catchments + stream reaches + stream nodes ('Catchments: 1. Delineation' /
 Stream Network outputs) + an SCS curve number raster + DDF / hyetograph /
 Huff / ensemble rainfall + a DEM -> one EPA SWMM 5 input file with every
 design storm as a rainfall time series, for EPA SWMM, PCSWMM and Autodesk
@@ -48,10 +48,13 @@ from . import core
 WIDTHS = [
     (
         core.WIDTH_FLOW,
-        "w_flow_m: A / mean overland flow length (Catchment Delineation)",
+        "w_flow_m: A / mean overland flow length ('Catchments: 1. Delineation')",
     ),
-    (core.WIDTH_CHANNEL, "w_chan_m: 2 x waterway length (Catchment Delineation)"),
-    (core.WIDTH_GUO, "w_gu_m: Guo and Urbonas 2009 (Catchment Delineation)"),
+    (
+        core.WIDTH_CHANNEL,
+        "w_chan_m: 2 x waterway length ('Catchments: 1. Delineation')",
+    ),
+    (core.WIDTH_GUO, "w_gu_m: Guo and Urbonas 2009 ('Catchments: 1. Delineation')"),
     (core.WIDTH_SQRT, "sqrt(area) (no width field)"),
 ]
 ROUTINGS = [
@@ -130,7 +133,7 @@ class PrepareSwmmProjectAlgorithm(PrepareHecHmsProjectAlgorithm):
             "the node at its top to the node below; nodes with no reach leaving them are "
             "outfalls (normal depth).\n"
             "Subcatchments: area, % impervious (optional field), width from the "
-            "Catchment Delineation field chosen (w_flow_m by default; sqrt(area) when "
+            "'Catchments: 1. Delineation' field chosen (w_flow_m by default; sqrt(area) when "
             "missing), slope from s_mean_pc (else a default), Manning n and depression "
             "storage, Curve Number infiltration from the CN raster (or a CN field).\n"
             "Nodes: invert = lowest DEM cell near the node, lowered where needed so every "
@@ -152,10 +155,10 @@ class PrepareSwmmProjectAlgorithm(PrepareHecHmsProjectAlgorithm):
             "into Storm and Sanitary Analysis 2024.\n"
             "\n"
             "PARAMETERS\n"
-            "Sub-catchments: Catchment Delineation catchments (incremental mode): name "
-            "outlet_id, node, Tc tc_sel_mn (Time of Concentration tool), widths w_flow_m / w_chan_m / w_gu_m, slope "
+            "Sub-catchments: 'Catchments: 1. Delineation' catchments (incremental mode): name "
+            "outlet_id, node, Tc tc_sel_mn ('Catchments: 2. Time of Concentration' tool), widths w_flow_m / w_chan_m / w_gu_m, slope "
             "s_mean_pc.\n"
-            "Streams / nodes: Catchment Delineation or Stream Network layers (name, "
+            "Streams / nodes: 'Catchments: 1. Delineation' or Stream Network layers (name, "
             "ds_name, length_m, slope).\n"
             "DEM: for the node inverts and DEM transects.\n"
             "Peak positions, return periods, durations: as in Prepare HEC-HMS project.\n"
@@ -761,7 +764,7 @@ class PrepareSwmmProjectAlgorithm(PrepareHecHmsProjectAlgorithm):
         return outputs
 
     def _sub_extra(self, parameters, context, source, subs):
-        """Catchment Delineation width and slope fields per sub-catchment."""
+        """'Catchments: 1. Delineation' width and slope fields per sub-catchment."""
         names = source.fields().names()
         name_f = self.parameterAsString(parameters, self.SUB_NAME_FIELD, context)
         slope_f = self.parameterAsString(parameters, self.SLOPE_FIELD, context)

@@ -1,6 +1,6 @@
 """Word (.docx) report for the DEM Inundation Boundary tool, in the Mayim
 report and figure standard (Doc(house_style=True), ChartStyle figures at
-16.5 cm, map composed like the Catchment Delineation layout map).
+16.5 cm, map composed like the 'Catchments: 1. Delineation' layout map).
 
 Zero QGIS dependency. Needs python-docx and matplotlib (both imported
 lazily, so the rest of the tool works without them). Figures use

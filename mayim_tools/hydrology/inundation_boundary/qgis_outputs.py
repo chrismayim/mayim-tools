@@ -4,7 +4,7 @@ boundary, extent and seeds, their styles, loading saved files into the
 project, and the report's layout map rendered by QGIS - in the Mayim
 report and figure standard.
 
-Reuses the Catchment Delineation building blocks (shapefile export, map
+Reuses the 'Catchments: 1. Delineation' building blocks (shapefile export, map
 render, legend keys, OpenStreetMap background, contour layer) rather than
 re-coding them.
 """

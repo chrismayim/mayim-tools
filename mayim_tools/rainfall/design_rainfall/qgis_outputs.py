@@ -1,7 +1,7 @@
 """QGIS side of the Design Rainfall vector outputs: memory point layers
 for the snapped grid points, points of interest and nearest rainfall
 stations are built here, written to shapefiles with the shared writer
-(Catchment Delineation's ``qgis_outputs.save_shapefile``) and loaded into
+('Catchments: 1. Delineation''s ``qgis_outputs.save_shapefile``) and loaded into
 the project with this tool's own saved QML styles.
 
 The layer styles (QML) in ./styles are copies of the Mayim layer styles

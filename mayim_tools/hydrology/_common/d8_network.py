@@ -12,7 +12,7 @@ default, or ESRI)::
 0 = pit / no downslope neighbour.
 
 Moved verbatim from hydrology/catchment_delineation/core.py (which still
-re-exports every name) so that Catchment Delineation and Stream Network
+re-exports every name) so that 'Catchments: 1. Delineation' and Stream Network
 share one tested implementation of pointer decoding, the downstream
 index, pointer-doubling terminals, topological flow accumulation,
 outlet snapping, Strahler ordering and stream links.

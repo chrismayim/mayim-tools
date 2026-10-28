@@ -1,5 +1,5 @@
-"""Tables of the Time of Concentration tool (no QGIS): Kerby roughness r,
-NRCS shallow concentrated flow surfaces, Tc method codes and the land-cover
+"""Tables of the 'Catchments: 2. Time of Concentration' tool (no QGIS): Kerby
+roughness r, NRCS shallow concentrated flow surfaces, Tc method codes and the land-cover
 suggestions.
 
 Sources
