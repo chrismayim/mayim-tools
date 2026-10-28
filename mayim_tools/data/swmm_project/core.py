@@ -31,7 +31,7 @@ import numpy as np
 from ..hec_hms_project import storms as stm
 
 TOOL_NAME = "Prepare SWMM project"
-TOOL_VERSION = "0.2.0"
+TOOL_VERSION = "0.2.1"
 
 ROUTE_DYNWAVE = "DYNWAVE"
 ROUTE_KINWAVE = "KINWAVE"

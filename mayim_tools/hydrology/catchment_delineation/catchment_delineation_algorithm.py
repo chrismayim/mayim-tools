@@ -89,7 +89,7 @@ from .qgis_outputs import (
 from .report import write_report_docx
 from .subcatchments import delineate_network_subcatchments
 
-TOOL_VERSION = "0.9.1"
+TOOL_VERSION = "0.10.0"
 
 MODE_OPTIONS = [
     "Total (full catchment per outlet; nested catchments overlap)",
@@ -159,9 +159,7 @@ CATCHMENT_FIELDS = [
     ("strm_freq", _D, "stream frequency, segments/km2"),
     ("lo_km", _D, "length of overland flow 1/(2 Dd), km"),
     ("c_maint", _D, "constant of channel maintenance 1/Dd, km2/km"),
-    ("tc_kirp_mn", _D, "Tc Kirpich (L, s_avg), min"),
-    ("tc_usbr_mn", _D, "Tc USBR / SANRAL (L, s_1085), min"),
-    ("tc_bw_mn", _D, "Tc Bransby-Williams (L, A, s_ea), min"),
+    ("ch_head_m", _D, "channel start on the LFP, m from the outlet (blank: none)"),
     ("chan_len_m", _D, "SWMM width: waterway length L_w (stream, else LFP), m"),
     ("lo_mean_m", _D, "SWMM width: mean overland flow length to a stream, m"),
     ("w_flow_m", _D, "SWMM width W_f = A / mean overland flow length, m"),
@@ -405,13 +403,12 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
             "sub-catchment and the longest flow path otherwise. w_ratio = "
             "w_gu_m / w_flow_m flags shapes far from a rectangle.\n"
             "\n"
-            "TIME OF CONCENTRATION:\tKirpich (metric, with the average "
-            "slope), USBR as used in the SANRAL Drainage Manual (defined "
-            "watercourses, with the 10-85 slope) and Bransby-Williams "
-            "(ARR form, with the equal-area slope). All three use the "
-            "longest D8 flow path with no split between overland and "
-            "channel flow. Check that each method suits the catchment "
-            "before using the value.\n"
+            "TIME OF CONCENTRATION:\tNot calculated here. ch_head_m gives "
+            "where the channel starts on the longest flow path (the most "
+            "upstream path cell whose upstream area reaches the stream "
+            "threshold, in m from the outlet). The Time of Concentration "
+            "tool takes the catchments, the longest flow paths and the DEM "
+            "and calculates Tc per catchment.\n"
             "\n"
             "STREAM NETWORK:\tThe same stream outputs as the Stream Network "
             "tool, for the network upstream of the outlets: reaches split at "
@@ -1251,6 +1248,7 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
             ("s_avg", _D, ""),
             ("s_1085", _D, ""),
             ("s_ea", _D, ""),
+            ("ch_head_m", _D, ""),
         ]
         sink, dest_id = memory.parameterAsSink(
             None,
@@ -1285,6 +1283,7 @@ class CatchmentDelineationAlgorithm(QgsProcessingAlgorithm):
             feat["s_avg"] = a["s_avg"]
             feat["s_1085"] = a["s_1085"]
             feat["s_ea"] = a["s_ea"]
+            feat["ch_head_m"] = a.get("ch_head_m")
             sink.addFeature(feat, QgsFeatureSink.Flag.FastInsert)
         return dest_id
 

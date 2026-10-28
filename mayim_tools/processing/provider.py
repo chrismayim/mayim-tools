@@ -56,6 +56,9 @@ from mayim_tools.hydrology.terrain_profile import (
 from mayim_tools.hydrology.terrain_storage.terrain_storage_algorithm import (
     DemDepressionStageStorageAlgorithm,
 )
+from mayim_tools.hydrology.time_of_concentration import (
+    time_of_concentration_algorithm as time_of_concentration_algo,
+)
 from mayim_tools.land_cover.curve_numbers.curve_numbers_algorithm import (
     CurveNumbersAlgorithm,
 )
@@ -161,6 +164,7 @@ class MayimToolsProvider(QgsProcessingProvider):
         self.addAlgorithm(RationalCAlgorithm())
         self.addAlgorithm(dem_hydro_processing_algo.DemHydroProcessingAlgorithm())
         self.addAlgorithm(sanral_peak_flows_algo.SanralPeakFlowsAlgorithm())
+        self.addAlgorithm(time_of_concentration_algo.TimeOfConcentrationAlgorithm())
         self.addAlgorithm(inundation_boundary_algo.InundationBoundaryAlgorithm())
         self.addAlgorithm(terrain_profile_algo.TerrainProfileAlgorithm())
         self.addAlgorithm(dws_wr2012_algo.DwsWr2012Algorithm())

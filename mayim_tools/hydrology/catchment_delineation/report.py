@@ -84,9 +84,7 @@ PARAMETER_DEFINITIONS = [
     ("Length of overland flow", "L_o (km)", "L_o = 1 / (2 D_d).", "Horton (1945)"),
     ("Constant of channel maintenance", "C (km²/km)", "C = 1 / D_d.", "Schumm (1956)"),
     ("Sinuosity", "-", "L / straight-line distance between its ends.", "-"),
-    ("Tc - Kirpich", "t_c (min)", "t_c = 0.0195 L^0.77 S_avg^-0.385 (L in m).", "Kirpich (1940)"),
-    ("Tc - USBR", "t_c (min)", "t_c = 60 (0.87 L² / (1000 S_1085))^0.385 (L in km).", "USBR (1973)"),
-    ("Tc - Bransby-Williams", "t_c (min)", "t_c = 58 L / (A^0.1 S_e^0.2) (L in km, A in km², S_e in m/km).", "Bransby-Williams (1922)"),
+    ("Channel start on L", "L_ch (m)", "Distance from the outlet along L to the most upstream cell of L whose upstream area reaches the stream threshold (the channel head); blank when L has no stream cell. Used by the Time of Concentration tool.", "-"),
     ("Waterway length", "L_w (m)", "Length of the stream through a stream sub-catchment; the longest flow path L otherwise.", "-"),
     ("Mean overland flow length", "L_om (m)", "Mean D8 flow length from every cell to the nearest stream cell (to the outlet where no stream is reached).", "-"),
     ("SWMM width - flow length", "W_f (m)", "W_f = A / L_om, with L_om capped at the maximum overland flow length when one is set.", "Rossman & Huber (2016)"),
@@ -131,14 +129,7 @@ RESULT_GROUPS = [
             ("Bifurcation ratio R_b", "bif_r", "{:.2f}", 1),
             ("Length of overland flow L_o (km)", "lo_km", "{:.3f}", 1),
             ("Constant of channel maintenance C (km²/km)", "c_maint", "{:.3f}", 1),
-        ],
-    ),
-    (
-        "Time of concentration",
-        [
-            ("Kirpich (min)", "tc_kirp_mn", "{:.1f}", 1),
-            ("USBR (min)", "tc_usbr_mn", "{:.1f}", 1),
-            ("Bransby-Williams (min)", "tc_bw_mn", "{:.1f}", 1),
+            ("Channel start on L, from the outlet L_ch (m)", "ch_head_m", "{:.1f}", 1),
         ],
     ),
     (
@@ -702,9 +693,7 @@ PARAMETER_VALUE_KEYS = {
     "Length of overland flow": ("lo_km", "{:.3f}", 1),
     "Constant of channel maintenance": ("c_maint", "{:.3f}", 1),
     "Sinuosity": ("sinuosity", "{:.3f}", 1),
-    "Tc - Kirpich": ("tc_kirp_mn", "{:.1f}", 1),
-    "Tc - USBR": ("tc_usbr_mn", "{:.1f}", 1),
-    "Tc - Bransby-Williams": ("tc_bw_mn", "{:.1f}", 1),
+    "Channel start on L": ("ch_head_m", "{:.1f}", 1),
     "Waterway length": ("chan_len_m", "{:.1f}", 1),
     "Mean overland flow length": ("lo_mean_m", "{:.1f}", 1),
     "SWMM width - flow length": ("w_flow_m", "{:.1f}", 1),
@@ -820,14 +809,6 @@ def width_note(ctx: dict) -> str:
     )
 
 
-def _tc_range(a):
-    vals = [a.get(k) for k in ("tc_kirp_mn", "tc_usbr_mn", "tc_bw_mn")]
-    vals = [v for v in vals if v is not None]
-    if not vals:
-        return "-"
-    return f"{min(vals):.1f} - {max(vals):.1f}"
-
-
 def write_report_docx(
     path: str,
     catchments: Sequence[CatchmentResult],
@@ -918,7 +899,7 @@ def write_report_docx(
                 "Area (km²)",
                 "L (km)",
                 "S_1085 (%)",
-                "Tc range (min)",
+                "L_ch (m)",
             ],
             [
                 [
@@ -933,7 +914,7 @@ def write_report_docx(
                     format_value(c.attributes["area_km2"], "{:.3f}", 1),
                     format_value(c.attributes["lfp_km"], "{:.3f}", 1),
                     format_value(c.attributes["s_1085"], "{:.2f}", 100),
-                    _tc_range(c.attributes),
+                    format_value(c.attributes.get("ch_head_m"), "{:.0f}", 1),
                 ]
                 for c in catchments
             ],
@@ -950,7 +931,7 @@ def write_report_docx(
                 "S_1085 (%)",
                 "S_m (%)",
                 "Order",
-                "Tc range (min)",
+                "L_ch (m)",
             ],
             [
                 [
@@ -960,7 +941,7 @@ def write_report_docx(
                     format_value(c.attributes["s_1085"], "{:.2f}", 100),
                     format_value(c.attributes["s_mean_pc"], "{:.1f}", 1),
                     format_value(c.attributes["strm_ord"], "{:d}", None),
-                    _tc_range(c.attributes),
+                    format_value(c.attributes.get("ch_head_m"), "{:.0f}", 1),
                 ]
                 for c in catchments
             ],
@@ -1121,10 +1102,11 @@ def write_report_docx(
         widths_cm=[6.2, 2.8, 7.5],
     )
     d.para(
-        "Kirpich uses S_avg, USBR uses S_1085 and Bransby-Williams uses S_e, "
-        "each with the longest flow path L. None of the three separates "
-        "overland from channel flow, so they apply the whole path length as "
-        "channel-type flow."
+        "Times of concentration are not calculated here: the Time of "
+        "Concentration tool takes the catchments, the longest flow paths and "
+        "the DEM, with the overland, shallow concentrated and channel flow "
+        "parameters set per catchment. L_ch marks where the channel starts on "
+        "L for that tool."
     )
     d.para(width_note(ctx))
 
@@ -1186,28 +1168,24 @@ def write_report_docx(
             ],
             widths_cm=[2.3, 1.6, 1.4, 1.5, 1.6, 1.6, 1.6, 1.7, 1.5, 1.4],
         )
-        d.caption("Table", "Sub-catchment times of concentration and centroids")
+        d.caption("Table", "Sub-catchment channel start and centroids")
         d.table(
             [
                 "Sub-catchment",
-                "Tc Kirpich (min)",
-                "Tc USBR (min)",
-                "Tc Bransby-Williams (min)",
+                "Channel start on L, L_ch (m)",
                 "Centroid X",
                 "Centroid Y",
             ],
             [
                 [
                     c.outlet_id,
-                    format_value(c.attributes["tc_kirp_mn"], "{:.1f}", 1),
-                    format_value(c.attributes["tc_usbr_mn"], "{:.1f}", 1),
-                    format_value(c.attributes["tc_bw_mn"], "{:.1f}", 1),
+                    format_value(c.attributes.get("ch_head_m"), "{:.1f}", 1),
                     format_value(c.attributes["cx"], "{:.1f}", 1),
                     format_value(c.attributes["cy"], "{:.1f}", 1),
                 ]
                 for c in catchments
             ],
-            widths_cm=[2.5, 2.4, 2.4, 3.2, 3.0, 3.0],
+            widths_cm=[3.5, 5.0, 4.0, 4.0],
         )
         d.caption("Table", "Sub-catchment SWMM width estimates")
         d.table(

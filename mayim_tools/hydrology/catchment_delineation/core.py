@@ -55,8 +55,8 @@ PARAMETERS (all lengths in metres - the DEM must be in a projected CRS)
   H/L, 10-85, equal-area, grid mean Horn slope), shape indices (form
   factor, circularity, elongation, Gravelius), hypsometric integral,
   stream length and drainage density (streams = cells whose upstream
-  area is at least a threshold), and time of concentration by Kirpich,
-  USBR / SANRAL and Bransby-Williams.
+  area is at least a threshold), and the channel start on the longest flow
+  path (for the Time of Concentration tool).
 """
 
 from __future__ import annotations
@@ -334,31 +334,6 @@ def equal_area_slope(x: np.ndarray, z: np.ndarray) -> float | None:
     return 2.0 * area / float(x[-1]) ** 2
 
 
-def tc_kirpich_minutes(length_m: float, slope: float | None) -> float | None:
-    """Kirpich (1940), metric: tc = 0.0195 L^0.77 S^-0.385 (min, L m, S m/m)."""
-    if slope is None or slope <= 0 or length_m <= 0:
-        return None
-    return 0.0195 * length_m**0.77 * slope**-0.385
-
-
-def tc_usbr_minutes(length_km: float, slope: float | None) -> float | None:
-    """USBR (1973) as used in the SANRAL Drainage Manual for defined
-    watercourses: tc = (0.87 L^2 / (1000 S))^0.385 hours (L km, S m/m)."""
-    if slope is None or slope <= 0 or length_km <= 0:
-        return None
-    return 60.0 * (0.87 * length_km**2 / (1000.0 * slope)) ** 0.385
-
-
-def tc_bransby_williams_minutes(
-    length_km: float, area_km2: float, slope: float | None
-) -> float | None:
-    """Bransby-Williams (ARR form): tc = 58 L / (A^0.1 Se^0.2) minutes
-    (L km, A km2, Se in m/km - the slope argument here is m/m)."""
-    if slope is None or slope <= 0 or length_km <= 0 or area_km2 <= 0:
-        return None
-    return 58.0 * length_km / (area_km2**0.1 * (slope * 1000.0) ** 0.2)
-
-
 def hypsometric_curve(z: np.ndarray, cell_area_m2: float) -> list[dict]:
     """Relative area above each relative height (0.00 ... 1.00)."""
     z = z[~np.isnan(z)]
@@ -622,6 +597,10 @@ def catchment_from_cells(
     # streams and drainage density (within the catchment's own cells)
     acc_local = acc[gflat]
     stream = in_mask & (acc_local >= thr_cells)
+    # channel start on the LFP: its most upstream stream cell (upstream area
+    # only grows downstream, so the stream part of the path is continuous)
+    on_stream = np.nonzero(acc_local[path_arr] >= thr_cells)[0]
+    ch_head_m = float(x_prof[on_stream.max()]) if on_stream.size else None
     strm_m = float(np.sum(np.where(stream & moves, steps[gflat], 0.0)))
     step_local = np.where(moves, steps[gflat], 0.0)
     order = strahler_order(local_next, stream)
@@ -767,11 +746,7 @@ def catchment_from_cells(
             "strm_freq": _none_round(n_streams / area_km2 if area_km2 > 0 else None, 4),
             "lo_km": _none_round(1.0 / (2.0 * dd) if dd > 0 else None, 4),
             "c_maint": _none_round(1.0 / dd if dd > 0 else None, 4),
-            "tc_kirp_mn": _none_round(tc_kirpich_minutes(lfp_m, s_avg), 2),
-            "tc_usbr_mn": _none_round(tc_usbr_minutes(lfp_km, s_1085), 2),
-            "tc_bw_mn": _none_round(
-                tc_bransby_williams_minutes(lfp_km, area_km2, s_ea), 2
-            ),
+            "ch_head_m": _none_round(ch_head_m, 2),
             "chan_len_m": _none_round(channel_length_m, 2),
             **widths,
         }
@@ -792,7 +767,7 @@ def catchment_from_cells(
     if lfp_m > 0 and (s_avg is None or s_avg <= 0):
         warn(
             f"Catchment '{catchment_id}': the longest flow path does not "
-            "fall towards the outlet, so slopes and Tc were not computed."
+            "fall towards the outlet, so its slopes were not computed."
         )
 
     catchment = CatchmentResult(

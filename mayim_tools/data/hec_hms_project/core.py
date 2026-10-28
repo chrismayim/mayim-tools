@@ -37,7 +37,7 @@ import numpy as np
 from . import methods as mth
 
 TOOL_NAME = "Prepare HEC-HMS project"
-TOOL_VERSION = "0.5.0"
+TOOL_VERSION = "0.5.1"
 HMS_VERSION = "4.14"  # default; 4.13 is also supported
 HMS_VERSIONS = ["4.14", "4.13"]
 

@@ -153,7 +153,7 @@ class PrepareSwmmProjectAlgorithm(PrepareHecHmsProjectAlgorithm):
             "\n"
             "PARAMETERS\n"
             "Sub-catchments: Catchment Delineation catchments (incremental mode): name "
-            "outlet_id, node, Tc tc_usbr_mn, widths w_flow_m / w_chan_m / w_gu_m, slope "
+            "outlet_id, node, Tc tc_sel_mn (Time of Concentration tool), widths w_flow_m / w_chan_m / w_gu_m, slope "
             "s_mean_pc.\n"
             "Streams / nodes: Catchment Delineation or Stream Network layers (name, "
             "ds_name, length_m, slope).\n"
@@ -197,7 +197,7 @@ class PrepareSwmmProjectAlgorithm(PrepareHecHmsProjectAlgorithm):
             QgsProcessingParameterField(
                 self.TC_FIELD,
                 "Time of concentration field (min; sets the run-out time)",
-                defaultValue="tc_usbr_mn",
+                defaultValue="tc_sel_mn",
                 parentLayerParameterName=self.SUBCATCHMENTS,
                 type=QgsProcessingParameterField.Numeric,
             )

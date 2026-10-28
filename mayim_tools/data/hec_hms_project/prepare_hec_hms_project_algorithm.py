@@ -419,7 +419,8 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
             "PARAMETERS\n"
             "Sub-catchments: polygons in a projected CRS (metres), e.g. the "
             "Catchment Delineation catchments (incremental mode); name field "
-            "outlet_id, node field node, Tc field tc_usbr_mn.\n"
+            "outlet_id, node field node, Tc field tc_sel_mn (the selected Tc of "
+            "the Time of Concentration tool).\n"
             "Stream reaches / nodes: the Catchment Delineation or Stream Network "
             "stream and node layers (fields name, ds_name, length_m, slope, "
             "musk_k_h, musk_x, tt_min).\n"
@@ -472,7 +473,7 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
             QgsProcessingParameterField(
                 self.TC_FIELD,
                 "Time of concentration field (min)",
-                defaultValue="tc_usbr_mn",
+                defaultValue="tc_sel_mn",
                 parentLayerParameterName=self.SUBCATCHMENTS,
                 type=QgsProcessingParameterField.Numeric,
             )

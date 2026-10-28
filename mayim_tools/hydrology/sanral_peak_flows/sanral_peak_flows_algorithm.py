@@ -235,8 +235,9 @@ class SanralPeakFlowsAlgorithm(QgsProcessingAlgorithm):
             "design value is left to the engineer.\n"
             "\n"
             "INPUTS:\tCatchment polygons with area, longest flow path, 10-85 "
-            "slope, Lc, mean slope (%) and Tc (min) - the Catchment Delineation "
-            "field names are the defaults. Rational: a C CSV (catchment_id, alpha, "
+            "slope, Lc and mean slope (%) - the Catchment Delineation field "
+            "names are the defaults - and Tc (min), by default tc_sel_mn of the "
+            "Time of Concentration tool. Rational: a C CSV (catchment_id, alpha, "
             "C1, Ft_class, beta, C2, gamma, C3; the C1 breakdown columns of the "
             "Rational C tool are shown on the calculation sheets) and, for "
             "Alternative 3, the "
@@ -298,7 +299,7 @@ class SanralPeakFlowsAlgorithm(QgsProcessingAlgorithm):
             (self.S1085_FIELD, "10-85 slope field (m/m)", "s_1085", numeric, True),
             (self.LCA_FIELD, "Length to centroid Lc field (km)", "lca_km", numeric, True),
             (self.SMEAN_FIELD, "Mean catchment slope field (%), for CAPA", "s_mean_pc", numeric, True),
-            (self.TC_FIELD, "Tc field for the Rational method (min)", "tc_usbr_mn", numeric, True),
+            (self.TC_FIELD, "Tc field for the Rational method (min)", "tc_sel_mn", numeric, True),
         ):  # fmt: skip
             kwargs = {"parentLayerParameterName": self.CATCHMENTS, "defaultValue": default,
                       "optional": optional}  # fmt: skip

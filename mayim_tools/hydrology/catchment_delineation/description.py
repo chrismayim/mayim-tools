@@ -43,8 +43,6 @@ MEAN_SLOPE_CLASSES = [
 ]
 
 REFERENCES = [
-    "Bransby-Williams, G. (1922). Flood discharge and the dimensions of "
-    "spillways in India. The Engineer, 134, 321-322.",
     "FAO (2006). Guidelines for Soil Description, 4th edition. Food and "
     "Agriculture Organization of the United Nations, Rome.",
     "Gravelius, H. (1914). Flusskunde. Göschen, Berlin.",
@@ -57,8 +55,6 @@ REFERENCES = [
     "the American Geophysical Union, 13, 350-361.",
     "Horton, R.E. (1945). Erosional development of streams and their "
     "drainage basins. Geological Society of America Bulletin, 56, 275-370.",
-    "Kirpich, Z.P. (1940). Time of concentration of small agricultural "
-    "watersheds. Civil Engineering, 10(6), 362.",
     "Melton, M.A. (1965). The geomorphic and paleoclimatic significance of "
     "alluvial deposits in southern Arizona. Journal of Geology, 73, 1-38.",
     "Miller, V.C. (1953). A quantitative geomorphic study of drainage basin "
@@ -89,8 +85,6 @@ REFERENCES = [
     "Strahler, A.N. (1964). Quantitative geomorphology of drainage basins "
     "and channel networks. In V.T. Chow (ed.), Handbook of Applied "
     "Hydrology, Section 4-II. McGraw-Hill, New York.",
-    "USBR (1973). Design of Small Dams, 2nd edition. United States Bureau "
-    "of Reclamation, Washington DC.",
     "USDA-NRCS (2007). National Engineering Handbook, Part 630 Hydrology, "
     "Chapter 16: Hydrographs. United States Department of Agriculture.",
     "Wilford, D.J., Sakals, M.E., Innes, J.L., Sidle, R.C. & Bergerud, W.A. "
@@ -140,15 +134,6 @@ def melton_screening(melton, length_km):
     if melton <= 0.60 or length_km >= 2.7:
         return "debris flood"
     return "debris flow"
-
-
-def tc_values(attrs):
-    names = [
-        ("Kirpich", attrs.get("tc_kirp_mn")),
-        ("USBR", attrs.get("tc_usbr_mn")),
-        ("Bransby-Williams", attrs.get("tc_bw_mn")),
-    ]
-    return [(n, v) for n, v in names if v is not None]
 
 
 def describe_catchment(attrs: dict, detail: dict) -> dict:
@@ -370,33 +355,18 @@ def modelling_considerations(a: dict, size: str, screen: str | None) -> list[str
     }[size]
     points.append(method)
 
-    tcs = tc_values(a)
-    if tcs:
-        lo = min(v for _, v in tcs)
-        hi = max(v for _, v in tcs)
-        listing = ", ".join(f"{n} {v:.1f} min" for n, v in tcs)
-        points.append(
-            f"Time of concentration estimates: {listing}. Estimates range from "
-            f"{lo:.1f} to {hi:.1f} min"
-            + (
-                f" (a factor of {hi / lo:.1f}), so the choice of method matters"
-                if lo > 0 and hi / lo >= 1.5
-                else ""
-            )
-            + ". Each empirical formula is only valid within the conditions it "
-            "was derived for (Kirpich 1940 comes from small, steep rural "
-            "catchments), and none of these values separates overland from "
-            "channel flow. Select or combine methods to suit the catchment and "
-            "the governing guideline."
+    points.append(
+        "Time of concentration: use the Time of Concentration tool, which "
+        "splits the longest flow path into overland, shallow concentrated "
+        "and channel flow with parameters set per catchment"
+        + (
+            f" (the channel starts {a['ch_head_m']:.0f} m from the outlet on "
+            "the longest flow path)."
+            if a.get("ch_head_m") is not None
+            else "; no stream cell lies on the longest flow path, so it has "
+            "no channel part at the current stream threshold."
         )
-        points.append(
-            f"Design storm durations should bracket the critical duration; as a "
-            f"starting range, test from about {0.5 * lo:.0f} min to "
-            f"{2.0 * hi:.0f} min. For hydrograph models, use a computational "
-            f"time step of no more than about 0.1 to 0.2 x Tc, i.e. "
-            f"{0.1 * lo:.1f} to {0.2 * lo:.1f} min here (compare the unit "
-            "hydrograph guidance of USDA-NRCS 2007, dt <= 0.29 x lag)."
-        )
+    )
 
     if a.get("hole_ha", 0) > 0:
         points.append(

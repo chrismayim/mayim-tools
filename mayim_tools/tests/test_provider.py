@@ -37,7 +37,7 @@ def test_provider_registers_seven_algorithms() -> None:
     provider = loaded_provider()
 
     algorithms = provider.algorithms()
-    assert len(algorithms) == 36
+    assert len(algorithms) == 37
 
     by_name = {algorithm.name(): algorithm for algorithm in algorithms}
 
@@ -73,6 +73,7 @@ def test_provider_registers_seven_algorithms() -> None:
         "curve_numbers",
         "dem_hydro_processing",
         "sanral_peak_flows",
+        "time_of_concentration",
         "terrain_profile",
         "dws_wr2012_extract",
         "rational_c",
@@ -233,6 +234,11 @@ def test_provider_registers_seven_algorithms() -> None:
         ),
         "sanral_peak_flows": (
             "SANRAL Deterministic Peak Flows",
+            "Hydrological Tools",
+            "hydrological_tools",
+        ),
+        "time_of_concentration": (
+            "Time of Concentration",
             "Hydrological Tools",
             "hydrological_tools",
         ),

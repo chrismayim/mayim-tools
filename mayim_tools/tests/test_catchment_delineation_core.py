@@ -36,9 +36,6 @@ from mayim_tools.hydrology.catchment_delineation.core import (
     simplify_ring,
     slope_10_85,
     snap_to_max_accumulation,
-    tc_bransby_williams_minutes,
-    tc_kirpich_minutes,
-    tc_usbr_minutes,
     trace_rings,
 )
 from mayim_tools.hydrology.catchment_delineation.export import (
@@ -347,24 +344,6 @@ def test_equal_area_slope_concave_profile():
     assert equal_area_slope(x, z) == pytest.approx(2 * (1e-5 * 1000**3 / 3) / 1000**2)
 
 
-def test_tc_formulas_hand_checked():
-    # L = 1 km, S = 0.01 m/m
-    assert tc_kirpich_minutes(1000.0, 0.01) == pytest.approx(
-        0.0195 * 1000**0.77 * 0.01**-0.385
-    )
-    assert tc_kirpich_minutes(1000.0, 0.01) == pytest.approx(23.45, abs=0.05)
-    assert tc_usbr_minutes(1.0, 0.01) == pytest.approx(
-        60 * (0.87 / 10.0) ** 0.385, rel=1e-9
-    )
-    assert tc_usbr_minutes(1.0, 0.01) == pytest.approx(23.44, abs=0.05)
-    # Bransby-Williams: 58 L / (A^0.1 Se^0.2), Se in m/km
-    assert tc_bransby_williams_minutes(2.0, 4.0, 0.005) == pytest.approx(
-        58 * 2.0 / (4.0**0.1 * 5.0**0.2)
-    )
-    assert tc_kirpich_minutes(1000.0, 0.0) is None
-    assert tc_usbr_minutes(1.0, None) is None
-
-
 def test_horn_slope_on_plane():
     y, x = np.mgrid[0:6, 0:6].astype(float)
     z = 0.03 * x * CELL + 0.04 * y * CELL
@@ -408,7 +387,10 @@ def test_single_outlet_matches_bruteforce_and_attributes():
     # LFP from a top corner: diagonal run to the valley, then straight down
     assert a["lfp_km"] > 0.39
     assert 0 < a["s_1085"] < 1.5 and a["s_ea"] > 0 and a["s_avg"] > 0
-    assert a["tc_kirp_mn"] > 0 and a["tc_usbr_mn"] > 0 and a["tc_bw_mn"] > 0
+    assert "tc_usbr_mn" not in a  # Tc moved to the Time of Concentration tool
+    # channel start on the LFP: below it the path is stream, above it not
+    assert a["strm_km"] > 0
+    assert 0 < a["ch_head_m"] < a["lfp_km"] * 1000
     assert 0 < a["hyps_int"] < 1
     assert 0 < a["lca_km"] < a["lfp_km"]
     assert c.flow_path[-1] == pytest.approx(cxy(39, 25))
