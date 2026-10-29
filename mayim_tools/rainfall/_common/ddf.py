@@ -88,7 +88,13 @@ def aep_band(aep_percent):
 def load_ddf_table(path, duration_col=None):
     """Load a DDF CSV (Duration + one or more '<ARI>yr Depth (mm)'
     columns) and return a long-format DataFrame with columns
-    [duration_min, ari_years, aep_percent, depth_mm]."""
+    [duration_min, ari_years, aep_percent, depth_mm].
+
+    Where two rows give the same duration in minutes - a continuous
+    '24 h' and a fixed-interval '1 day' (Design Rainfall South Africa
+    tables carry both) - the continuous row is kept and the day-labelled
+    one dropped, as in read_ddf_csv(). Otherwise the first row is kept.
+    The dropped labels are listed in long_df.attrs['dropped_durations']."""
     df = read_csv_any_delimiter(path)
     if duration_col is None:
         duration_col = df.columns[0]
@@ -110,9 +116,23 @@ def load_ddf_table(path, duration_col=None):
             "(expected column names like '10yr Depth (mm)')."
         )
 
-    rows = []
+    # one row per duration in minutes, the continuous label preferred
+    chosen, dropped = {}, []
     for _, row in df.iterrows():
-        dur_min = parse_duration_to_minutes(row[duration_col])
+        label = str(row[duration_col]).strip()
+        dur_min = parse_duration_to_minutes(label)
+        is_day = bool(_DAY_LABEL_RE.search(label))
+        prev = chosen.get(dur_min)
+        if prev is None:
+            chosen[dur_min] = (label, is_day, row)
+        elif prev[1] and not is_day:
+            dropped.append(prev[0])
+            chosen[dur_min] = (label, is_day, row)
+        else:
+            dropped.append(label)
+
+    rows = []
+    for dur_min, (_label, _is_day, row) in chosen.items():
         for col, ari in ari_cols:
             depth = row[col]
             if pd.notna(depth):
@@ -132,6 +152,7 @@ def load_ddf_table(path, duration_col=None):
     )
     if long_df.empty:
         raise ValueError("DDF table parsed to zero usable rows.")
+    long_df.attrs["dropped_durations"] = dropped
     return long_df
 
 

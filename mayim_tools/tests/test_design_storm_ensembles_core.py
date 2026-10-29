@@ -430,3 +430,27 @@ def test_empty_catalogue_still_writes_key_and_header(tmp_path):
     lines = path.read_text(encoding="utf-8-sig").splitlines()
     assert lines[0] == "# Column key"
     assert lines[-1] == ",".join(report.CATALOGUE_COLUMNS)
+
+
+def test_load_ddf_table_prefers_24h_over_1_day(tmp_path):
+    """Design Rainfall tables give both '24 h' (continuous) and '1 day'
+    (fixed interval) - both 1440 min. The 24 h row is kept, whichever
+    comes first, and the 1 day row is reported as dropped."""
+    for order in (["24 h", "1 day"], ["1 day", "24 h"]):
+        depths = {"24 h": [65.5, 109.3], "1 day": [56.7, 94.7]}
+        df = pd.DataFrame(
+            {
+                "Duration": ["1 h", *order, "2 day"],
+                "2yr Depth (mm)": [27.1, *(depths[d][0] for d in order), 70.6],
+                "10yr Depth (mm)": [45.3, *(depths[d][1] for d in order), 117.9],
+            }
+        )
+        path = tmp_path / "ddf.csv"
+        df.to_csv(path, index=False)
+        long_df = load_ddf_table(str(path))
+        day = long_df[long_df["duration_min"] == 1440.0]
+        assert sorted(day["depth_mm"]) == [65.5, 109.3]
+        assert long_df.attrs["dropped_durations"] == ["1 day"]
+        table = DDFTable(long_df)
+        assert table.depth_at_ari(1440.0, 10.0)[0] == pytest.approx(109.3)
+        assert set(long_df["duration_min"]) == {60.0, 1440.0, 2880.0}

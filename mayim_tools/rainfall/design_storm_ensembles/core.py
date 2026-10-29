@@ -365,6 +365,12 @@ class DesignStormEngine:
             timeseries_path, datetime_col, value_col
         )
         ddf_long = load_ddf_table(ddf_path)
+        for label in ddf_long.attrs.get("dropped_durations", []):
+            self.warnings.append(
+                f"DDF table: duration '{label}' dropped - the table gives "
+                "another value for the same duration (the continuous 24 h "
+                "is used rather than the fixed-interval 1 day)."
+            )
         ddf_table = DDFTable(ddf_long)
 
         events = extract_events(series, self.ietd_hours, self.min_event_depth_mm)
