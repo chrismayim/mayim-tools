@@ -1,14 +1,20 @@
 # Mayim Report, Figure and Graph Standard
 
-*House design standard for every Word report, graph, chart and map produced by Mayim tools and analyses (version 2.2, October 2026).*
+*House design standard for every Word report, graph, chart and map produced by Mayim tools and analyses (version 2.3, October 2026).*
 
-*Version 2: title page added (section 1.4); report structure and checklist updated to match; font availability rule added (section 2.2). Version 2.1: minor and major contours, with an option to leave contours off (section 3.2). Version 2.2: gridlines drawn as semi-transparent black, so crossing gridlines no longer cut gaps in each other (section 2.3).*
+*Version 2: title page added (section 1.4); report structure and checklist updated to match; font availability rule added (section 2.2). Version 2.1: minor and major contours, with an option to leave contours off (section 3.2). Version 2.2: gridlines drawn as semi-transparent black (section 2.3). Version 2.3: gridlines in solid greys, because semi-transparent black showed as solid black in some matplotlib versions (section 2.3); tables left-aligned with their left border on the text margin (section 1.3); A4 page with a 16.5 cm text width (section 1.0).*
 
 **How to use this document:** give it to Claude in any chat with the instruction "apply the Mayim report and figure standard". Every value below is a requirement unless it is marked as a default. If something is not covered here, follow the closest rule and say which choice was made.
 
 ---
 
 ## 1. Word reports (.docx)
+
+### 1.0 Page
+
+- **A4** portrait (21.0 × 29.7 cm).
+- **Margins:** left and right 2.25 cm, top and bottom 2.5 cm, so the text width is **16.5 cm**, the width of every table and figure.
+- Set the page explicitly: python-docx starts from US Letter with 3.17 cm side margins (a 15.24 cm text width), on which 16.5 cm tables and figures run past the right margin.
 
 ### 1.1 Text styles
 
@@ -34,7 +40,9 @@
 
 ### 1.3 Tables
 
-- Use the "Table Grid" style, centred on the page, with column widths set explicitly so the table fits the 16.5 cm text width.
+- Use the "Table Grid" style, with column widths set explicitly so the table fits the 16.5 cm text width (the widths add up to 16.5 cm or less).
+- **Placement:** left-aligned, with the table's **left border on the text margin**, in line with the body text. This is the position of the table itself, not the alignment of the text in its cells. In Word's compatibility mode the table indent is measured to the cell text, so the table is indented by its left cell margin (108 twips, 0.19 cm, in Table Grid) to put the border on the margin.
+- The title-page details table (1.4) stays centred.
 - **Header row:** 9 pt bold, shaded #ADADCC.
 - **Body:** 9 pt regular.
 - **Group sub-heading rows** (when a table is split into groups): merged across the full width, 9 pt bold, shaded #F2F2F2.
@@ -110,13 +118,13 @@ Write guideline-neutral content unless a specific standard (e.g. SANRAL, ARR) is
 
 - **Plot area border:** black, 0.75 pt, on all four sides.
 - **Ticks:** black, 0.75 pt wide, with minor ticks on.
-- **Major gridlines:** solid, 0.75 pt, black at 25 % opacity (#00000040), which shows as #BFBFBF on the white plot area.
-- **Minor gridlines:** solid, 0.75 pt, black at 5 % opacity (#0000000D), which shows as #F2F2F2 on the white plot area.
-- Gridlines are semi-transparent, not solid grey, so that where two gridlines cross the later one darkens the crossing slightly instead of painting a light gap through the other. Solid grey minor lines drawn over the major lines of the other axis make the major lines look dashed.
+- **Major gridlines:** solid, 0.75 pt, dark grey **#808080**.
+- **Minor gridlines:** solid, 0.5 pt, light grey **#D9D9D9**.
+- Use solid (opaque) greys, not semi-transparent black: in some matplotlib versions the grid alpha setting overrides the colour's own alpha, so semi-transparent black showed as solid black (version 2.2).
 - Draw gridlines behind the data.
 - Use plain number formatting, with no offset or scientific notation on coordinate or elevation axes, and no thousands separators.
 - Show units in the axis titles: "Elevation (m)", "Distance upstream from outlet (km)".
-- Legends have no frame on graphs. On maps they sit below the map (see 3.3).
+- Legends have no frame on graphs, and are placed where they do not cover the data (e.g. matplotlib `loc="best"`). On maps they sit below the map (see 3.3).
 
 ### 2.4 Colours
 
@@ -215,8 +223,8 @@ The standard is implemented in shared modules. Reuse them rather than re-coding 
 
 | What | Where | How to use it |
 |---|---|---|
-| Report text styles, title page, tables, captions, 16.5 cm pictures | `mayim_tools/_common/docx_report.py` | `Doc(house_style=True)`, then `.title_page(title, purpose, details, subtitle)`, `.heading()`, `.para()`, `.label()`, `.bullet()`, `.numbered()`, `.caption()`, `.table()`, `.picture()` |
-| Chart style (fonts, border, grids, palette, exact-size PNG) | `mayim_tools/_common/report_figures.py` | `style = ChartStyle()`; `with style.context(): fig = style.figure(height_cm)` … `style.axes(ax)`; `style.legend(ax)`; `style.png(fig)`. The constants are `CHART_SIZE = 9`, `CHART_COLOURS`, `CHART_GRID_MAJOR` (#00000040) and `CHART_GRID_MINOR` (#0000000D); `style.axes(ax)` draws the grid, so tools need no axis drawing-order workarounds |
+| Report page, text styles, title page, tables, captions, 16.5 cm pictures | `mayim_tools/_common/docx_report.py` | `Doc(house_style=True)` sets the A4 page (1.0), the text styles and left-aligned tables on the text margin (`table_align = "left"`, the house-style default; `"center"` is still available); then `.title_page(title, purpose, details, subtitle)`, `.heading()`, `.para()`, `.label()`, `.bullet()`, `.numbered()`, `.caption()`, `.table()`, `.picture()` |
+| Chart style (fonts, border, grids, palette, exact-size PNG) | `mayim_tools/_common/report_figures.py` | `style = ChartStyle()`; `with style.context(): fig = style.figure(height_cm)` … `style.axes(ax)`; `style.legend(ax)`; `style.png(fig)`. The constants are `CHART_SIZE = 9`, `CHART_COLOURS`, `CHART_GRID_MAJOR` (#808080, 0.75 pt) and `CHART_GRID_MINOR` (#D9D9D9, `CHART_GRID_MINOR_PT` 0.5 pt); `style.axes(ax)` draws the grid, so tools need no axis drawing-order workarounds |
 | Map composition (legend with symbol images, scale bar, north arrow) | `mayim_tools/_common/report_maps.py` | `PlanMap`, `figure_rendered_map`, `scale_bar`, `north_arrow`, `image_legend`, `OSM_ATTRIBUTION`, `OSM_LICENCE_NOTE` |
 | QGIS map render, legend keys, OSM background | `mayim_tools/_common/qgis_maps.py` | `render_map`, `legend_entries`, `osm_layer`, `osm_has_tiles`, `map_crs_and_extent` |
 | Shapefile export, loading layers with styles | `hydrology/catchment_delineation/qgis_outputs.py` | `apply_style`, `save_shapefile`, `load_on_completion`, `make_plan_map` |
@@ -250,25 +258,51 @@ with matplotlib.rc_context(RC):
     for s in ax.spines.values():
         s.set_visible(True); s.set_color("black"); s.set_linewidth(0.75)
     ax.minorticks_on(); ax.set_axisbelow(True)
-    # semi-transparent black: #BFBFBF / #F2F2F2 on white, no gaps where lines cross
-    ax.grid(True, which="major", color="#00000040", linewidth=0.75, linestyle="-")
-    ax.grid(True, which="minor", color="#0000000D", linewidth=0.75, linestyle="-")
+    # solid greys (not semi-transparent black, which some versions draw black)
+    ax.grid(True, which="minor", color="#D9D9D9", linewidth=0.5, linestyle="-")
+    ax.grid(True, which="major", color="#808080", linewidth=0.75, linestyle="-")
     ax.legend(prop=FontProperties(family="Arial Narrow", size=9, style="italic"),
-              frameon=False)
+              frameon=False, loc="best")
     fig.savefig("figure.png", dpi=200, facecolor="white")  # no bbox_inches="tight"
+```
+
+### Minimal python-docx page and table placement (outside mayim_tools)
+
+```python
+from docx import Document
+from docx.enum.table import WD_TABLE_ALIGNMENT
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+from docx.shared import Cm
+
+doc = Document()
+for sec in doc.sections:  # A4, 16.5 cm text width
+    sec.page_width, sec.page_height = Cm(21.0), Cm(29.7)
+    sec.left_margin = sec.right_margin = Cm(2.25)
+    sec.top_margin = sec.bottom_margin = Cm(2.5)
+
+t = doc.add_table(rows=1, cols=3)
+t.style = "Table Grid"
+t.alignment = WD_TABLE_ALIGNMENT.LEFT
+ind = OxmlElement("w:tblInd")  # indent by the cell margin: border on the text margin
+ind.set(qn("w:w"), "108"); ind.set(qn("w:type"), "dxa")
+t._tbl.tblPr.append(ind)  # mayim_tools inserts it in schema order
 ```
 
 ---
 
 ## 6. Checklist before delivering
 
+- [ ] A4 page, 2.25 cm side margins (16.5 cm text width).
 - [ ] Title page: title Arial 20 pt bold, #0F0F36, centred; short purpose and goal; report details (project number, tool and version, date, status); page break after it.
 - [ ] Body Arial 10 pt black; headings Arial 12 pt bold, #0F0F36, all caps; sub-headings Arial 10 pt bold, #0F0F36; captions Arial 9 pt italic.
+- [ ] Tables left-aligned with the left border on the text margin, within 16.5 cm (title-page details table centred).
 - [ ] No thousands separators anywhere: text, tables, axis labels or CSVs.
 - [ ] Every figure is 16.5 cm wide, saved without cropping.
 - [ ] Figure text is Arial Narrow 9 pt: regular for text, bold for axis titles, italic for legends.
 - [ ] House fonts found (including the per-user Windows font folder); any substitution named in the run log.
-- [ ] Black 0.75 pt plot border; major and minor gridlines in semi-transparent black (#00000040 and #0000000D, i.e. #BFBFBF and #F2F2F2 on white), with no gaps where gridlines cross.
+- [ ] Black 0.75 pt plot border; major gridlines solid dark grey #808080 0.75 pt, minor gridlines solid light grey #D9D9D9 0.5 pt.
+- [ ] Legends clear of the data.
 - [ ] Content colours follow the palette order, with no thin yellow lines.
 - [ ] Natural ground profiles are black, 1 pt, dashed.
 - [ ] Maps:

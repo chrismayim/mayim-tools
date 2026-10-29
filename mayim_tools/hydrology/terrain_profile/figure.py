@@ -21,6 +21,7 @@ from mayim_tools._common.report_figures import (
     CHART_FONT,
     CHART_GRID_MAJOR,
     CHART_GRID_MINOR,
+    CHART_GRID_MINOR_PT,
     CHART_INK,
     CHART_LINE_PT,
     CHART_SIZE,
@@ -271,7 +272,7 @@ def draw_section(
     # frame and grid
     ax.set_axisbelow(True)
     ax.minorticks_on()
-    ax.grid(True, which="minor", color=CHART_GRID_MINOR, linewidth=CHART_LINE_PT)
+    ax.grid(True, which="minor", color=CHART_GRID_MINOR, linewidth=CHART_GRID_MINOR_PT)
     ax.grid(True, which="major", color=CHART_GRID_MAJOR, linewidth=CHART_LINE_PT)
     for side in ("top", "right", "left", "bottom"):
         ax.spines[side].set_visible(True)

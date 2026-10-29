@@ -918,7 +918,7 @@ def write_report_docx(
                 ]
                 for c in catchments
             ],
-            widths_cm=[2.4, 2.8, 4.0, 1.9, 1.6, 1.9, 2.4],
+            widths_cm=[2.4, 2.8, 3.5, 1.9, 1.6, 1.9, 2.4],
         )
     else:
         d.caption("Table", "Summary of delineated catchments")

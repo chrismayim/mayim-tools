@@ -170,12 +170,13 @@ CHART_COLOURS = [
     "#00FFFF",
     "#FF00FF",
 ]
-CHART_LINE_PT = 0.75  # border and gridlines
-# Semi-transparent black, so a gridline drawn over another darkens the
-# crossing slightly instead of painting a light gap through it (solid light
-# minor lines made the major lines of the other axis look dashed).
-CHART_GRID_MAJOR = "#00000040"  # shows as #BFBFBF on white
-CHART_GRID_MINOR = "#0000000D"  # shows as #F2F2F2 on white
+CHART_LINE_PT = 0.75  # border and major gridlines
+# Solid greys (report standard v2.3): dark grey major, light grey minor.
+# The semi-transparent black of v2.2 showed as solid black in some
+# matplotlib versions (where the grid alpha overrides the colour's alpha).
+CHART_GRID_MAJOR = "#808080"
+CHART_GRID_MINOR = "#D9D9D9"
+CHART_GRID_MINOR_PT = 0.5
 CHART_DPI = 200
 
 
@@ -263,7 +264,7 @@ class ChartStyle:
                     True,
                     which="minor",
                     color=CHART_GRID_MINOR,
-                    linewidth=CHART_LINE_PT,
+                    linewidth=CHART_GRID_MINOR_PT,
                     linestyle="-",
                 )
             ax.grid(

@@ -128,11 +128,19 @@ class Doc:
             self._apply_house_style()
         self.n_table = 0
         self.n_figure = 0
-        # body tables: "center" (default) or "left" (left border on the
-        # text margin)
-        self.table_align = "center"
+        # body tables: "left" (left border on the text margin; house style,
+        # report standard v2.3) or "center"
+        self.table_align = "left" if house_style else "center"
 
     def _apply_house_style(self):
+        from docx.shared import Cm
+
+        # A4 with 2.25 cm side margins: the 16.5 cm text width of the
+        # standard (python-docx starts from US Letter, 15.24 cm)
+        for sec in self.doc.sections:
+            sec.page_width, sec.page_height = Cm(21.0), Cm(29.7)
+            sec.left_margin = sec.right_margin = Cm(2.25)
+            sec.top_margin = sec.bottom_margin = Cm(2.5)
         styles = self.doc.styles
         _set_style_font(styles["Normal"], HOUSE_FONT, 10, rgb=HOUSE_TEXT_RGB)
         for level in (1, 2):
