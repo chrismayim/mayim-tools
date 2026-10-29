@@ -1,10 +1,10 @@
-# Mayim Report, Figure and Graph Standard
+# Mayim Tools Output Standard
 
-*House design standard for every Word report, graph, chart and map produced by Mayim tools and analyses (version 2.3, October 2026).*
+*House standard for every output of the Mayim tools and analyses: Word reports, graphs and charts, maps, and the files and layers the tools write (version 2.4, October 2026). Previously called the Mayim Report, Figure and Graph Standard.*
 
-*Version 2: title page added (section 1.4); report structure and checklist updated to match; font availability rule added (section 2.2). Version 2.1: minor and major contours, with an option to leave contours off (section 3.2). Version 2.2: gridlines drawn as semi-transparent black (section 2.3). Version 2.3: gridlines in solid greys, because semi-transparent black showed as solid black in some matplotlib versions (section 2.3); tables left-aligned with their left border on the text margin (section 1.3); A4 page with a 16.5 cm text width (section 1.0).*
+*Version 2: title page added (section 1.4); report structure and checklist updated to match; font availability rule added (section 2.2). Version 2.1: minor and major contours, with an option to leave contours off (section 3.2). Version 2.2: gridlines drawn as semi-transparent black (section 2.3). Version 2.3: gridlines in solid greys, because semi-transparent black showed as solid black in some matplotlib versions (section 2.3); tables left-aligned with their left border on the text margin (section 1.3); A4 page with a 16.5 cm text width (section 1.0). Version 2.4: renamed the Mayim Tools Output Standard (file `mayim_tools_output_standard.md`); section 4 (output files and layers) expanded with the conventions settled while bringing every tool to the standard (October 2026); implementation reference and checklist updated to match.*
 
-**How to use this document:** give it to Claude in any chat with the instruction "apply the Mayim report and figure standard". Every value below is a requirement unless it is marked as a default. If something is not covered here, follow the closest rule and say which choice was made.
+**How to use this document:** give it to Claude in any chat with the instruction "apply the Mayim Tools output standard". Every value below is a requirement unless it is marked as a default. If something is not covered here, follow the closest rule and say which choice was made.
 
 ---
 
@@ -204,16 +204,56 @@ Content colours, used in any order:
 
 ---
 
-## 4. Output files from tools
+## 4. Output files and layers from tools
 
-- **Selection:** a tick box for each output, so the user selects which outputs to generate.
-- **Folders:** one per kind, chosen by the user: rasters (GeoTIFF .tif), vector layers (shapefile .shp), CSV (.csv) and Word reports (.docx).
-- **Names:** `<project number>_<layer description>.<ext>`, with underscores throughout and no spaces, e.g. `MC2025_014_Catchments.shp` or `MC2025_014_Catchment_Report.docx`. The project number is optional; without it the name is just the description.
+### 4.1 Selection and folders
+
+- **Selection:** a tick box for each output, so the user selects which outputs to generate. Each output has a sensible default (the main layer, the calculations CSV and the report usually on; diagnostic or specialist outputs off). At least one output must be ticked.
+- **Folders:** one per kind, chosen by the user: rasters (GeoTIFF .tif), vector layers (shapefile .shp), CSV (.csv) and Word reports (.docx). A tool that writes figure files (e.g. PNG sections) gives them their own figure folder. Only the folders of the ticked outputs are needed.
+- **Project inputs:** an optional **project number** (the file-name prefix) and, for tools with a report, an optional **project / site name** for the title page.
+- Check the ticked outputs and their folders **before** the processing starts, so a missing folder fails fast rather than after a long run.
+- Supporting files go with the output they belong to: a layer file (.qlr) beside its rasters, a metadata CSV beside the rasters it describes, a results.json (see 4.4) in the CSV folder.
+
+### 4.2 File names
+
+- **Names:** `<project number>_<description>.<ext>`, with underscores throughout and no spaces, e.g. `MC2025_014_Catchments.shp` or `MC2025_014_Catchment_Report.docx`. The project number is optional; without it the name is just the description.
   - Characters that are not allowed in Windows file names are removed.
-- **Existing files** with the same name are overwritten. If a file is locked (open in QGIS), report it and still write the other outputs.
+- Tools that convert an input file name their output after it: `<project number>_<input file>_<variable>.csv` (e.g. GRIB to CSV, NetCDF4 to CSV).
+- Tools whose files already had established names (e.g. the soil and land-cover extracts) keep those names and add the `<project number>_` prefix. Tools that read such files find them with or without the prefix.
+- Per-method or per-item files add the method or item before the description, e.g. `<project number>_HSG_NEH630_Recommended.tif`, `<project number>_Section_A_Plan.png`.
+- The tool help lists, for every output, the exact file name it produces, built from the same definitions the code uses (so the help cannot drift from the behaviour).
+
+### 4.3 Writing
+
+- **Existing files** with the same name are overwritten.
+- **Locked files:** if a file cannot be written (e.g. open in QGIS, Excel or Word), report it clearly, with the advice to close it and run again, and still write the other outputs. Stop with "No output could be written" only when nothing at all was written.
+- Every written file is listed in the run log, and in the report's Outputs section (1.5).
+
+### 4.4 Formats
+
+- **Vector layers:** shapefiles. Exception: GeoPackage where the attribute names must stay longer than 10 characters, e.g. HEC-RAS attributes used by the RAS layer styles (Import RAS 2D data).
+- **Rasters:** GeoTIFF, with a layer file (.qlr) that loads them with their styles where a tool writes several.
+- **Results for the report compiler** (optional, off by default): `<project number>_<description>.json` in the CSV folder, schema `mayim.results/1` (tool, inputs, and per item every result with method, return period, value, unit, flags and derivation).
+- **Text files for other programs** (e.g. HEC-HMS elevation-volume tables) stay plain text in the layout that program expects.
+- **Processing outputs for model chaining:** tools whose result is mainly an input to the next Processing step (e.g. D8 Flow Direction and D8 Flow Accumulation) may keep Processing raster outputs. Single-file tools still declare their file as a Processing output, so it can be linked in models.
+
+### 4.5 Layers
+
 - **Loading:** written layers are loaded into the QGIS project with their QML style.
 - **Shapefile field names:** at most 10 characters. Shorten longer ones explicitly and list them in the help text.
-- **CSV:** UTF-8 with BOM (so Excel shows ² and ³ correctly). Where the headings are abbreviated, put an abbreviation key at the top.
+- **Long text fields** (e.g. notes) are cut at 254 characters by the shapefile format; the full text goes in the CSV and the report.
+- **Layers updated in place:** where the user enters parameters per feature and runs the tool again (e.g. Catchments: 2. Time of Concentration), the tool may update the input layer itself instead of writing a new file:
+  - it adds its parameter and result fields, keeps the values the user entered, and never overwrites them with defaults;
+  - it fills an empty parameter only with a measured value or an explicit default, and says which in the run log;
+  - it sets up the attribute form for entering the parameters: drop-down lists (value maps) for coded values, aliases, warnings for required fields that are empty, and the result fields read-only; the form is saved as the layer's default style (.qml next to the file);
+  - it refuses a layer that is in edit mode, and lists the features that still need parameters.
+
+### 4.6 CSV files
+
+- UTF-8 with BOM (so Excel shows ² and ³ correctly).
+- Where the headings are abbreviated, start with a **column key**: `# Column key` followed by one `# <column>, <definition>` line per column (read in pandas with `comment="#"`).
+- Multi-part CSVs are **sectioned**: each part starts with a `[section name]` line, e.g. `[run]`, `[catchments]`.
+- Decimal point, no thousands separators (1.2); missing values are empty or "-", never "None" or "nan".
 
 ---
 
@@ -228,7 +268,9 @@ The standard is implemented in shared modules. Reuse them rather than re-coding 
 | Map composition (legend with symbol images, scale bar, north arrow) | `mayim_tools/_common/report_maps.py` | `PlanMap`, `figure_rendered_map`, `scale_bar`, `north_arrow`, `image_legend`, `OSM_ATTRIBUTION`, `OSM_LICENCE_NOTE` |
 | QGIS map render, legend keys, OSM background | `mayim_tools/_common/qgis_maps.py` | `render_map`, `legend_entries`, `osm_layer`, `osm_has_tiles`, `map_crs_and_extent` |
 | Shapefile export, loading layers with styles | `hydrology/catchment_delineation/qgis_outputs.py` | `apply_style`, `save_shapefile`, `load_on_completion`, `make_plan_map` |
-| Output names and folders | `mayim_tools/_common/output_files.py` | `OutputSpec`, `output_file_name`, `shapefile_field_names` |
+| Output names and folders | `mayim_tools/_common/output_files.py` | `OutputSpec(key, label, description, kind, default)` with `.path(folders, project_number)`; `EXTENSIONS`, `clean_name_part`, `output_file_name`, `shapefile_field_names`; `single_output_path()` for single-file tools named after their input |
+| Extract tools (prefixed established names, guarded writes, readers) | `mayim_tools/soil/_common/extract_files.py` | `add_output_parameters`, `ExtractFiles` (`name()`, `path()`, `write()`, `raster_writer()`, `actual()`, `finish()`), `find_named_file()`, `FILES_HELP` |
+| Layers updated in place with an attribute form | `hydrology/time_of_concentration/time_of_concentration_algorithm.py` | `apply_form(layer)` (value maps, aliases, soft not-null constraints, read-only results) and `save_layer_style(layer)`; the algorithm runs with `NoThreading` because it edits the input layer |
 | DEM contours | `hydrology/_common/contours.py` | `dem_contours(dem, geotransform, interval, extent)`; minor and major contours are drawn from two calls (minor interval, then 5 × minor) with the major levels left out of the minor set |
 
 ### Minimal matplotlib equivalent (outside mayim_tools)
@@ -311,6 +353,10 @@ t._tbl.tblPr.append(ind)  # mayim_tools inserts it in schema order
   - [ ] Study area: black dashed 0.5 mm. Contours: minor black 0.15 mm, major (5 × minor interval) black 0.35 mm, or left off when the user unticks them.
   - [ ] Legend below the map, scale bar, north arrow.
 - [ ] Output files:
-  - [ ] Named `<project number>_<description>` with underscores.
-  - [ ] Sorted into the raster, shapefile, CSV and Word folders.
-  - [ ] Loaded into the project with their styles.
+  - [ ] A tick box per output with sensible defaults; a folder per kind; optional project number (and project name for reports).
+  - [ ] Named `<project number>_<description>` with underscores; the help lists every file name.
+  - [ ] Sorted into the raster, shapefile, CSV, Word (and figure) folders.
+  - [ ] A locked file is reported and the other outputs are still written.
+  - [ ] Loaded into the project with their styles; shapefile field names at most 10 characters.
+  - [ ] CSVs UTF-8 with BOM, with a column key where headings are abbreviated.
+  - [ ] Layers updated in place keep the user's entries, have an attribute form, and refuse edit mode.
