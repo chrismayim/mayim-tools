@@ -2,7 +2,8 @@
 
 Two output formats:
     - CSV: flat duration x return-period table, for import into
-      spreadsheets or other design workflows.
+      spreadsheets or other design workflows; and a DDF table CSV with
+      the depths only (write_ddf_csv).
     - DOCX: a Word annexure in the Mayim report and figure standard
       (Doc(house_style=True)): summary, method, inputs, parameters, depth
       tables per site with a layout map of the point of interest, the
@@ -122,6 +123,31 @@ def write_csv(estimate: PointEstimate, output_path: str | Path, stations=None) -
                 ]
             )
             _write_stations_block(writer, stations)
+
+
+def write_ddf_csv(estimates: dict[str, PointEstimate], output_path: str | Path) -> None:
+    """DDF table only: one row per duration, one '<T>yr Depth (mm)' column
+    per return period - the depth columns of write_csv without the lower /
+    upper bounds, the site header and the nearest stations. With several
+    sites a leading Site column identifies each site's rows (the return
+    period columns are the union across the sites)."""
+    all_results = [r for est in estimates.values() for r in est.results]
+    return_periods = _sorted_return_periods(all_results)
+    multi = len(estimates) > 1
+
+    with open(output_path, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.writer(f)
+        header = (["Site"] if multi else []) + ["Duration"]
+        header += [f"{rt}yr Depth (mm)" for rt in return_periods]
+        writer.writerow(header)
+        for site, est in estimates.items():
+            lookup = {(r.duration_label, r.return_period): r for r in est.results}
+            for dur in _sorted_durations(est.results):
+                row = ([site] if multi else []) + [dur]
+                for rt in return_periods:
+                    r = lookup.get((dur, rt))
+                    row.append(r.depth if r else "")
+                writer.writerow(row)
 
 
 # ----------------------------------------------------------------------

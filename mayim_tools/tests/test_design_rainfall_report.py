@@ -287,3 +287,37 @@ def test_csv_is_utf8_with_bom_and_still_reads_as_ddf(tmp_path):
     write_csv_multi({"A": make_estimate(), "B": make_estimate(1.1)}, multi)
     assert multi.read_bytes().startswith(b"\xef\xbb\xbf")
     assert multi.read_text(encoding="utf-8-sig").startswith("Site,")
+
+
+def test_ddf_table_csv_depths_only(tmp_path):
+    """DDF table output: the depth columns of the depth table only - no
+    lower / upper bounds, site header or stations."""
+    import csv
+
+    from mayim_tools.rainfall.design_rainfall.report import write_ddf_csv
+
+    est = make_estimate()
+    path = tmp_path / "M1234_Design_Rainfall_DDF_Table.csv"
+    write_ddf_csv({"Site 1": est}, path)
+    assert path.read_bytes().startswith(b"\xef\xbb\xbf")
+    rows = list(csv.reader(path.open(encoding="utf-8-sig")))
+    depths = ["2yr Depth (mm)", "50yr Depth (mm)", "200yr Depth (mm)"]
+    assert rows[0] == ["Duration", *depths]
+    assert [r[0] for r in rows[1:]] == ["5 min", "1.5 h", "24 h", "1 day", "3 day"]
+    lookup = {(r.duration_label, r.return_period): r.depth for r in est.results}
+    assert rows[1][1:] == [str(lookup[("5 min", rt)]) for rt in (2, 50, 200)]
+    text = path.read_text(encoding="utf-8-sig")
+    assert "Lower" not in text and "Upper" not in text and "Latitude" not in text
+
+
+def test_ddf_table_csv_multi_site(tmp_path):
+    import csv
+
+    from mayim_tools.rainfall.design_rainfall.report import write_ddf_csv
+
+    path = tmp_path / "ddf.csv"
+    write_ddf_csv({"A": make_estimate(), "B": make_estimate(1.1)}, path)
+    rows = list(csv.reader(path.open(encoding="utf-8-sig")))
+    assert rows[0][:2] == ["Site", "Duration"]
+    assert len(rows) == 1 + 2 * 5
+    assert {r[0] for r in rows[1:]} == {"A", "B"}

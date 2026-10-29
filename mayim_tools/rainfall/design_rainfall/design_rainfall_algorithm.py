@@ -71,9 +71,15 @@ from .qgis_outputs import (
     save_shapefile,
     stations_layer,
 )
-from .report import REPORT_TITLE, write_csv, write_csv_multi, write_report_docx
+from .report import (
+    REPORT_TITLE,
+    write_csv,
+    write_csv_multi,
+    write_ddf_csv,
+    write_report_docx,
+)
 
-TOOL_VERSION = "1.2.1"
+TOOL_VERSION = "1.3.0"
 
 WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
 
@@ -93,6 +99,9 @@ OUTPUT_SPECS = [
         SHAPEFILE, False,
     ),
     OutputSpec("OUTPUT_CSV", "Depth table (CSV)", "Design Rainfall Table", CSV),
+    OutputSpec(
+        "OUTPUT_DDF_CSV", "DDF table (CSV)", "Design Rainfall DDF Table", CSV,
+    ),
     OutputSpec(
         "OUTPUT_DOCX", "Design rainfall report (Word)", "Design Rainfall Report",
         WORD, False,
@@ -210,9 +219,10 @@ class DesignRainfallPointAlgorithm(QgsProcessingAlgorithm):
             "<i>OpenStreetMap background</i> - adds OSM tiles behind the "
             "report map (needs internet access).<br><br>"
             "<b>OUTPUTS</b><br>"
-            "Tick the outputs wanted (the snapped grid points, POI and "
-            "depth table are ticked by default) and choose an output folder "
-            "for each kind used: vector layers (shapefiles), CSV and Word. "
+            "Tick the outputs wanted (the snapped grid points, POI, "
+            "depth table and DDF table are ticked by default) and choose an "
+            "output folder for each kind used: vector layers (shapefiles), "
+            "CSV and Word. "
             "Files are named &lt;project number&gt;_&lt;description&gt; with "
             "underscores (just &lt;description&gt; without a project "
             "number) and replace files of the same name; a file that is "
@@ -230,6 +240,10 @@ class DesignRainfallPointAlgorithm(QgsProcessingAlgorithm):
             "as a point layer (reference only).<br>"
             "<i>Depth table (CSV)</i> - duration x return period table "
             "(depth, lower, upper), with the nearest stations appended.<br>"
+            "<i>DDF table (CSV)</i> - the duration-depth-frequency table "
+            "only: Duration and one '&lt;T&gt;yr Depth (mm)' column per return "
+            "period, without the lower and upper bounds, the site details "
+            "or the stations (a leading Site column with several sites).<br>"
             "<i>Design rainfall report (Word)</i> - annexure in the Mayim "
             "report standard: title page, summary, method, inputs, "
             "parameters, depth tables, a layout map per site (point of "
@@ -523,6 +537,13 @@ class DesignRainfallPointAlgorithm(QgsProcessingAlgorithm):
                 done("OUTPUT_CSV", path)
             except Exception as e:
                 failed("OUTPUT_CSV", path, e)
+        if "OUTPUT_DDF_CSV" in want and estimates:
+            path = paths["OUTPUT_DDF_CSV"]
+            try:
+                write_ddf_csv(estimates, path)
+                done("OUTPUT_DDF_CSV", path)
+            except Exception as e:
+                failed("OUTPUT_DDF_CSV", path, e)
         feedback.setProgress(70)
 
         if "OUTPUT_DOCX" in want and estimates:
