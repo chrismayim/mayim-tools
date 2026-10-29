@@ -128,6 +128,9 @@ class Doc:
             self._apply_house_style()
         self.n_table = 0
         self.n_figure = 0
+        # body tables: "center" (default) or "left" (left border on the
+        # text margin)
+        self.table_align = "center"
 
     def _apply_house_style(self):
         styles = self.doc.styles
@@ -311,7 +314,11 @@ class Doc:
         t = self.doc.add_table(rows=1, cols=len(header))
         t.style = "Table Grid"
         t.autofit = False
-        t.alignment = WD_TABLE_ALIGNMENT.CENTER
+        if self.table_align == "left":
+            t.alignment = WD_TABLE_ALIGNMENT.LEFT
+            self._indent_to_margin(t)
+        else:
+            t.alignment = WD_TABLE_ALIGNMENT.CENTER
         for i, h in enumerate(header):
             cell = t.rows[0].cells[i]
             cell.text = ""
@@ -344,6 +351,30 @@ class Doc:
                         row.cells[i].width = Cm(w)
         self.doc.add_paragraph()
         return t
+
+    @staticmethod
+    def _indent_to_margin(t):
+        """Indent the table by its left cell margin (108 twips in Table
+        Grid), so its left border sits on the text margin: in Word's
+        compatibility mode the indent is measured to the cell text."""
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+
+        tbl_pr = t._tbl.tblPr
+        ind = tbl_pr.find(qn("w:tblInd"))
+        if ind is None:
+            ind = OxmlElement("w:tblInd")
+            # schema order: ... jc, tblCellSpacing, tblInd, tblBorders, shd,
+            # tblLayout, tblCellMar, tblLook
+            later = ("w:tblBorders", "w:shd", "w:tblLayout", "w:tblCellMar",
+                     "w:tblLook")  # fmt: skip
+            nxt = next((e for e in tbl_pr if e.tag in {qn(x) for x in later}), None)
+            if nxt is None:
+                tbl_pr.append(ind)
+            else:
+                nxt.addprevious(ind)
+        ind.set(qn("w:w"), "108")
+        ind.set(qn("w:type"), "dxa")
 
     KEEP_TOGETHER_ROWS = 30  # tables up to this many rows are not split
 

@@ -26,7 +26,7 @@ import numpy as np
 
 from . import tables as tb
 
-TOOL_VERSION = "0.1.1"
+TOOL_VERSION = "0.1.2"
 
 
 # ---------------------------------------------------------------- methods ---

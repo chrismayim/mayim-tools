@@ -219,3 +219,13 @@ def test_word_report(tmp_path):
     assert len(doc.inline_shapes) == 2
     cells = "\n".join(c.text for t in doc.tables for r in t.rows for c in r.cells)
     assert not re.search(r"\d,\d", cells)
+    # body tables on the text margin (title-page table stays centred)
+    from docx.oxml.ns import qn
+
+    body = doc.tables[1:]
+    assert all(t._tbl.tblPr.find(qn("w:jc")).get(qn("w:val")) == "left" for t in body)
+    assert all(t._tbl.tblPr.find(qn("w:tblInd")).get(qn("w:w")) == "108" for t in body)
+    # A4 with a 16.5 cm text width
+    sec = doc.sections[0]
+    text_w = sec.page_width - sec.left_margin - sec.right_margin
+    assert abs(text_w / 360000 - 16.5) < 0.01 and abs(sec.page_width.cm - 21.0) < 0.01

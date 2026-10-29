@@ -24,6 +24,9 @@ from .export import status_text
 TITLE = "Time of Concentration"
 MAX_FIGURES = 30
 COLOURS = {"overland": "#FF0000", "shallow": "#00CC00", "channel": "#0000FF"}
+# opaque gridline greys for the profile figure (dark major, light minor)
+GRID_MAJOR = "#808080"
+GRID_MINOR = "#D9D9D9"
 
 
 def num(value, nd=1) -> str:
@@ -80,12 +83,26 @@ def profile_figure(c):
         ax.set_ylabel("Elevation (m)")
         ax.set_xlim(0, big_l / 1000.0)
         style.axes(ax)
-        style.legend(ax, loc="upper left")
+        ax.grid(True, which="minor", color=GRID_MINOR, linewidth=0.5, linestyle="-")
+        ax.grid(True, which="major", color=GRID_MAJOR, linewidth=0.75, linestyle="-")
+        style.legend(ax, loc="best")
         stream = style.png(fig)
     import matplotlib.pyplot as plt
 
     plt.close(fig)
     return stream, list(style.warnings)
+
+
+def _a4_page(doc) -> None:
+    """A4 page with 2.25 cm side margins, so the text width is the 16.5 cm
+    of the report standard (python-docx starts from US Letter with 3.17 cm
+    margins, a 15.24 cm text width). Trial for the standard."""
+    from docx.shared import Cm
+
+    for sec in doc.doc.sections:
+        sec.page_width, sec.page_height = Cm(21.0), Cm(29.7)
+        sec.left_margin = sec.right_margin = Cm(2.25)
+        sec.top_margin = sec.bottom_margin = Cm(2.5)
 
 
 def write_report(path, items, run_info: dict, context=None) -> list[str]:
@@ -96,6 +113,8 @@ def write_report(path, items, run_info: dict, context=None) -> list[str]:
     s = context.get("settings")
     notes: list[str] = []
     doc = Doc(house_style=True)
+    doc.table_align = "left"  # tables on the text margin (trial for the standard)
+    _a4_page(doc)
     doc.title_page(
         TITLE,
         "This annexure gives the time of concentration of each catchment by "
@@ -159,8 +178,8 @@ def write_report(path, items, run_info: dict, context=None) -> list[str]:
         "from the channel start to the outlet (DM Eq 3.12 with the 10-85 "
         "slope of the channel part).",
         "The channel start is where the upstream area along the path first "
-        "reaches the stream threshold used for the delineation (Catchment "
-        "Delineation's ch_head_m), unless a value is entered in ch_start_m. "
+        "reaches the stream threshold used for the delineation (ch_head_m of "
+        "'Catchments: 1. Delineation'), unless a value is entered in ch_start_m. "
         "Each part takes its slope from the DEM along the flow path.",
         "The parameters (overland length, Kerby r, shallow-flow surface, "
         "channel start, method) are fields of the catchment layer and are set "

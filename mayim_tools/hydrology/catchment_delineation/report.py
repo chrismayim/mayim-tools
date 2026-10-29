@@ -1102,8 +1102,8 @@ def write_report_docx(
         widths_cm=[6.2, 2.8, 7.5],
     )
     d.para(
-        "Times of concentration are not calculated here: the Time of "
-        "Concentration tool takes the catchments, the longest flow paths and "
+        "Times of concentration are not calculated here: the 'Catchments: 2. "
+        "Time of Concentration' tool takes the catchments, the longest flow paths and "
         "the DEM, with the overland, shallow concentrated and channel flow "
         "parameters set per catchment. L_ch marks where the channel starts on "
         "L for that tool."
