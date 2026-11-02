@@ -64,3 +64,30 @@ def test_too_many_levels_raises(tmp_path):
         write_contours(str(tmp_path / "c.shp"), _cone(), GT, "", 0.001)
     with pytest.raises(ValueError, match="greater than 0"):
         write_contours(str(tmp_path / "c.shp"), _cone(), GT, "", 0.0)
+
+
+def test_smoothing_changes_lines_and_keeps_rings_closed(tmp_path):
+    pytest.importorskip("osgeo.gdal")
+    from osgeo import ogr
+
+    def read(path):
+        ds = ogr.Open(path)
+        out = []
+        for f in ds.GetLayer(0):
+            out.append((f.GetField("elev_m"), f.GetGeometryRef().GetPoints()))
+        return out
+
+    dem = _cone()
+    raw = str(tmp_path / "raw.shp")
+    smooth = str(tmp_path / "smooth.shp")
+    write_contours(raw, dem, GT, "", 1.0, smooth_iterations=0)
+    write_contours(smooth, dem, GT, "", 1.0)  # default: smoothed
+    a, b = read(raw), read(smooth)
+    assert len(a) == len(b)
+    assert any(pa != pb for (_, pa), (_, pb) in zip(a, b, strict=True))
+    for (la, pa), (lb, pb) in zip(a, b, strict=True):
+        assert la == lb
+        if pa[0] == pa[-1]:  # closed rings stay closed
+            assert pb[0] == pb[-1]
+        else:  # open lines keep their end points
+            assert pb[0] == pytest.approx(pa[0]) and pb[-1] == pytest.approx(pa[-1])

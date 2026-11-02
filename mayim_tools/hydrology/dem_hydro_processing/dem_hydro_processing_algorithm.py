@@ -49,7 +49,7 @@ from mayim_tools._common.output_files import (
 )
 from mayim_tools.hydrology._common.contours import minor_major_contours
 
-from .contours_export import MAJOR_FACTOR, write_contours
+from .contours_export import MAJOR_FACTOR, SMOOTH_ITERATIONS, write_contours
 from .core.classification import DEM_SOURCE_VERTICAL_ERROR_M
 from .core.conditioning import (
     MODE_CONTINUOUS,
@@ -74,7 +74,7 @@ from .qgis_map import (
 )
 from .report import change_classes_present, elevation_change, write_report_docx
 
-TOOL_VERSION = "1.3.0"
+TOOL_VERSION = "1.3.1"
 SOURCE_KEYS = list(DEM_SOURCE_VERTICAL_ERROR_M) + ["custom"]
 SOURCE_LABELS = {
     "survey": "Ground survey",
@@ -113,7 +113,6 @@ OUTPUT_SPECS = [
         "Contours of the corrected DEM",
         "Corrected DEM Contours",
         SHAPEFILE,
-        default=False,
     ),
     OutputSpec("OUTPUT_CSV", "Results (CSV)", "DEM Processing Results", CSV),
     OutputSpec(
@@ -212,6 +211,7 @@ class DemHydroProcessingAlgorithm(QgsProcessingAlgorithm):
     SHOW_CONTOURS = "SHOW_CONTOURS"
     CONTOUR_INTERVAL = "CONTOUR_INTERVAL"
     CONTOURS_INTERVAL = "CONTOURS_INTERVAL"
+    CONTOURS_SMOOTH = "CONTOURS_SMOOTH"
     REPORT_OSM = "REPORT_OSM"
     PROJECT_NUMBER = "PROJECT_NUMBER"
     PROJECT_NAME = "PROJECT_NAME"
@@ -287,7 +287,8 @@ class DemHydroProcessingAlgorithm(QgsProcessingAlgorithm):
             "original), remaining sinks (points; fields sink_id, kind, reason, "
             "cells, elev_m), contours of the corrected DEM (lines at the "
             "contour interval for the contours output, traced by GDAL at the "
-            "DEM's full resolution without smoothing; fields id, elev_m and "
+            "DEM's full resolution and smoothed (Chaikin, 2 passes; can be "
+            "switched off in the advanced settings); fields id, elev_m and "
             "type = Minor or Major, every 5th level Major; styled with major "
             "contours labelled), results CSV, reusable classification table and "
             "the Word report (title page, layout map, tables; needs "
@@ -491,6 +492,15 @@ class DemHydroProcessingAlgorithm(QgsProcessingAlgorithm):
                 type=QgsProcessingParameterNumber.Type.Double,
                 minValue=0.0,
                 defaultValue=1.0,
+            )
+        )
+        self.addParameter(
+            _advanced(
+                QgsProcessingParameterBoolean(
+                    self.CONTOURS_SMOOTH,
+                    "Contours output: smooth the lines (Chaikin corner cutting)",
+                    defaultValue=True,
+                )
             )
         )
         for name, label in FOLDER_PARAMS.values():
@@ -806,10 +816,21 @@ class DemHydroProcessingAlgorithm(QgsProcessingAlgorithm):
                 template = gdal.Open(dem_path)
                 wkt = template.GetProjection() if template is not None else ""
                 template = None
-                n_lines = write_contours(path, surface, gt, wkt, contours_interval)
+                smooth = self.parameterAsBoolean(
+                    parameters, self.CONTOURS_SMOOTH, context
+                )
+                n_lines = write_contours(
+                    path,
+                    surface,
+                    gt,
+                    wkt,
+                    contours_interval,
+                    smooth_iterations=SMOOTH_ITERATIONS if smooth else 0,
+                )
                 feedback.pushInfo(
                     f"Contours: {n_lines} line(s) at {contours_interval:g} m "
-                    f"(major every {MAJOR_FACTOR * contours_interval:g} m)."
+                    f"(major every {MAJOR_FACTOR * contours_interval:g} m"
+                    f"{', smoothed' if smooth else ''})."
                 )
                 load_on_completion(context, path, STYLE_CONTOURS, self._post_processors)
                 done(self.OUTPUT_CONTOURS, path)
