@@ -89,7 +89,7 @@ from .qgis_outputs import (
 from .report import write_report_docx
 from .subcatchments import delineate_network_subcatchments
 
-TOOL_VERSION = "0.10.2"
+TOOL_VERSION = "0.10.3"
 
 MODE_OPTIONS = [
     "Total (full catchment per outlet; nested catchments overlap)",

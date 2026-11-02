@@ -199,6 +199,12 @@ def plan_extent(c: CatchmentResult, pad: float = 0.08) -> tuple:
     if c.outlet_xy:
         xs.append(c.outlet_xy[0])
         ys.append(c.outlet_xy[1])
+    combined = [*(c.detail.get("outlets") or [])]  # combined map: every outlet
+    for path in c.detail.get("flow_paths") or []:  # and flow path
+        combined += list(path)
+    for x, y in combined:
+        xs.append(x)
+        ys.append(y)
     xmin, xmax, ymin, ymax = min(xs), max(xs), min(ys), max(ys)
     margin = pad * max(xmax - xmin, ymax - ymin, 1.0)
     return (xmin - margin, ymin - margin, xmax + margin, ymax + margin)
@@ -484,19 +490,25 @@ def _figure_plan_simple(c: CatchmentResult, style: ChartStyle) -> io.BytesIO:
             ax.plot(
                 [], [], color=C_BLUE, linewidth=1.2, label="Streams (width by order)"
             )
-        if len(c.flow_path) > 1:
-            fx, fy = zip(*c.flow_path, strict=True)
+        paths = c.detail.get("flow_paths") or (
+            [c.flow_path] if len(c.flow_path) > 1 else []
+        )
+        for k, path in enumerate(paths):
+            fx, fy = zip(*path, strict=True)
             ax.plot(
                 fx,
                 fy,
                 color=C_AMBER,
                 linewidth=1.8,
-                label="Longest flow path",
+                label="Longest flow path" if k == 0 else None,
                 zorder=5,
             )
-        if c.outlet_xy:
+        outlets = c.detail.get("outlets") or ([c.outlet_xy] if c.outlet_xy else [])
+        if outlets:
+            ox, oy = zip(*outlets, strict=True)
             ax.plot(
-                *c.outlet_xy,
+                ox,
+                oy,
                 marker="v",
                 markersize=8,
                 color=CHART_INK,
@@ -784,6 +796,43 @@ def network_overview(catchments) -> CatchmentResult:
     )
 
 
+def catchments_overview(catchments) -> CatchmentResult:
+    """A stand-in catchment covering every catchment (several outlets,
+    outlet mode), for the combined layout map at the start of the results:
+    its extent is that of all the catchments (the catchments raster), their
+    flow paths and outlets; every catchment is labelled."""
+    polygons = [poly for c in catchments for poly in c.polygons]
+    streams = [
+        c.detail["streams"]
+        for c in catchments
+        if c.detail.get("streams") is not None and len(c.detail["streams"])
+    ]
+    if streams:  # nested catchments share their upstream segments
+        streams = np.unique(np.vstack(streams), axis=0)
+    return CatchmentResult(
+        outlet_id="all catchments",
+        kind="point",
+        src_fid=-1,
+        attributes={},
+        polygons=polygons,
+        flow_path=[],
+        outlet_xy=None,
+        hypsometric_curve=[],
+        detail={
+            "streams": streams if len(streams) else None,
+            "outlets": [c.outlet_xy for c in catchments if c.outlet_xy],
+            "flow_paths": [c.flow_path for c in catchments if len(c.flow_path) > 1],
+            "labels": [
+                (c.attributes["cx"], c.attributes["cy"], c.outlet_id)
+                for c in catchments
+                if "cx" in c.attributes
+            ],
+            "label_catchments": True,
+            "combined": True,
+        },
+    )
+
+
 def link_text(a: dict) -> str:
     """'drains to node A4 and on into stream A3' for a sub-catchment."""
     node = a.get("node") or "-"
@@ -879,8 +928,7 @@ def write_report_docx(
             f"({total:.3f} km²) was divided along the stream network into {n} "
             f"sub-catchments: {n_streams} draining to a stream"
             + (
-                " (split along the stream centreline into left bank a and right "
-                "bank b)"
+                " (split along the stream centreline into left bank a and right bank b)"
                 if ctx.get("split_banks")
                 else ""
             )
@@ -1122,6 +1170,19 @@ def write_report_docx(
         d.picture(
             plan,
             "Layout of the sub-catchments, stream network and nodes"
+            + (" (background: OpenStreetMap)" if on_osm else ""),
+        )
+        first = 2
+    elif include_figures and len(catchments) > 1:
+        d.heading("5.1 Overview of the catchments", 3)
+        overview = catchments_overview(catchments)
+        plan, pm = figure_plan(overview, style, plan_map, messages)
+        on_osm = bool(pm is not None and pm.attribution)
+        osm_used = osm_used or on_osm
+        d.picture(
+            plan,
+            "Layout of all the catchments, with their stream network, longest "
+            "flow paths, outlets and centroids"
             + (" (background: OpenStreetMap)" if on_osm else ""),
         )
         first = 2

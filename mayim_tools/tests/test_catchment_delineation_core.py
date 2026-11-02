@@ -773,9 +773,12 @@ def test_word_report(tmp_path):
     doc = docx.Document(str(path))
     text = "\n".join(p.text for p in doc.paragraphs)
     assert "Catchment Delineation and Characterisation" in text
-    assert "5.2 Catchment up" in text and "References" in text
+    assert "5.3 Catchment up" in text and "References" in text
     if include:
-        assert len(doc.inline_shapes) == 8  # four figures per catchment
+        # the combined layout map of all catchments first (5.1), then four
+        # figures per catchment
+        assert "5.1 Overview of the catchments" in text
+        assert len(doc.inline_shapes) == 9
 
 
 def _fake_png(width, height):

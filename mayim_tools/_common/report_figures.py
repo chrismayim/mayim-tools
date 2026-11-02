@@ -59,30 +59,66 @@ def _font_dirs() -> list[str]:
 _REGISTER_TRIED: set[str] = set()
 
 
+def _sfnt_family_names(font) -> set[str]:
+    """The family names in a font's name table: the legacy family (name ID
+    1) and the typographic family (ID 16)."""
+    names = set()
+    try:
+        table = font.get_sfnt()
+    except Exception:  # not an sfnt font
+        return names
+    for (platform, _enc, _lang, name_id), raw in table.items():
+        if name_id not in (1, 16):
+            continue
+        try:
+            text = raw.decode("utf-16-be" if platform in (0, 3) else "latin-1")
+        except Exception:
+            continue
+        names.add(text.strip())
+    return names
+
+
 def _register_font(name: str) -> bool:
     """Adds the font files of family ``name`` to matplotlib when its font
-    cache does not list them (a cache built before the font was installed,
-    or a font in the per-user Windows font folder). True when found."""
+    list does not have them under that name. True when found.
+
+    Covers a cache built before the font was installed, a font in the
+    per-user Windows font folder, and width variants such as Arial Narrow:
+    their typographic family is 'Arial' (with 'Narrow' as the style), so
+    matplotlib lists them as condensed Arial and never as 'Arial Narrow'.
+    Files whose name table gives ``name`` as a family are registered under
+    ``name``."""
     if name in _REGISTER_TRIED:
         return False
     _REGISTER_TRIED.add(name)
     try:
+        import dataclasses
+
         from matplotlib import font_manager
         from matplotlib.ft2font import FT2Font
     except ImportError:  # pragma: no cover
         return False
+    manager = font_manager.fontManager
     found = False
     files = set(font_manager.findSystemFonts(fontext="ttf"))
     for folder in _font_dirs():
         files.update(font_manager.findSystemFonts(fontpaths=[folder], fontext="ttf"))
     for path in sorted(files):
         try:
-            if FT2Font(path).family_name != name:
+            font = FT2Font(path)
+            if font.family_name != name and name not in _sfnt_family_names(font):
                 continue
-            font_manager.fontManager.addfont(path)
+            entry = font_manager.ttfFontProperty(font)
+            if entry.name != name:
+                entry = dataclasses.replace(entry, name=name)
+            manager.ttflist.append(entry)
             found = True
         except Exception:  # unreadable font file - skip it
             continue
+    if found:
+        cache = getattr(manager, "_findfont_cached", None)
+        if cache is not None and hasattr(cache, "cache_clear"):
+            cache.cache_clear()
     return found
 
 
