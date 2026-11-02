@@ -474,11 +474,17 @@ def test_word_report(tmp_path):
         "Inputs and settings",
         "Parameters and calculations",
         "Results",
+        "Summary of peak flows",
         "Outputs",
         "Notes and limitations",
         "References",
     ]
     text = "\n".join(x.text for x in doc.paragraphs)
+    # summary section: a table and a peak flow / return period graph per
+    # catchment
+    n = len(_full_run().items)
+    assert text.count("Summary of peak flows (m³/s), catchment") == n
+    assert text.count("Peak flow against return period by method") == n
     cells = "\n".join(c.text for t in doc.tables for r in t.rows for c in r.cells)
     assert "MC2025_014" in cells and "Table 1:" in text
     assert not re.search(r"\d,\d{3}", cells)  # no thousands separators

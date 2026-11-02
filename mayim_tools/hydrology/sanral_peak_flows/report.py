@@ -35,6 +35,17 @@ SHORT_LABELS = {
 
 # House line / fill colours (yellow only for fills, so skipped for bars too).
 BAR_COLOURS = ("#0000FF", "#FF0000", "#00CC00", "#FFC000", "#FF00FF", "#00FFFF")
+# Peak flow against return period: one line per method, house colours in
+# order with green for yellow (report standard 2.4), plus a marker each so
+# the lines do not rely on colour alone.
+LINE_STYLES = (
+    ("#FF0000", "o"),
+    ("#FFC000", "s"),
+    ("#00CC00", "^"),
+    ("#0000FF", "D"),
+    ("#00FFFF", "v"),
+    ("#FF00FF", "P"),
+)
 
 METHOD_TEXT = {
     "rational_alt2": (
@@ -225,10 +236,89 @@ def chart_figure(item, rps):
     return stream, list(style.warnings)
 
 
+def curve_figure(item, rps):
+    """(PNG stream, style warnings) of the peak flow against return period
+    for every method of one catchment (house chart style), with the RMF as a
+    black dashed reference line; (None, []) when there is nothing to draw.
+    Raises ImportError without matplotlib."""
+    from matplotlib.lines import Line2D
+    from matplotlib.ticker import FixedLocator, NullLocator, ScalarFormatter
+
+    from mayim_tools._common.report_figures import ChartStyle
+
+    series = []
+    for m in METHOD_ORDER:
+        if m == "rmf":
+            continue
+        pts = sorted(
+            (r.return_period, r.q_m3s)
+            for r in item.results
+            if r.method == m and r.return_period and r.q_m3s is not None
+        )
+        if pts:
+            series.append((m, pts))
+    rmf = next((r.q_m3s for r in item.results if r.method == "rmf" and r.q_m3s), None)
+    if not series:
+        return None, []
+    style = ChartStyle()
+    with style.context():
+        fig = style.figure(9.0)
+        ax = fig.subplots()
+        handles = []
+        for k, (m, pts) in enumerate(series):
+            colour, marker = LINE_STYLES[k % len(LINE_STYLES)]
+            xs, ys = zip(*pts, strict=True)
+            ax.plot(
+                xs, ys, color=colour, linewidth=1.5, marker=marker, markersize=4.5,
+                markeredgecolor="#000000", markeredgewidth=0.5, zorder=3,
+            )  # fmt: skip
+            handles.append(
+                Line2D(
+                    [], [], color=colour, linewidth=1.5, marker=marker,
+                    markersize=4.5, markeredgecolor="#000000",
+                    markeredgewidth=0.5, label=SHORT_LABELS[m],
+                )
+            )  # fmt: skip
+        if rmf:
+            ax.axhline(rmf, color="#000000", linewidth=0.75, linestyle="--", zorder=2)
+            handles.append(
+                Line2D(
+                    [], [], color="#000000", linewidth=0.75, linestyle="--",
+                    label=f"RMF (Kovacs) {q_text(rmf)} m³/s",
+                )
+            )  # fmt: skip
+        ax.set_xscale("log")
+        ticks = sorted({T for _m, pts in series for T, _q in pts})
+        ax.set_xlim(min(ticks) / 1.15, max(ticks) * 1.15)
+        ax.set_ylim(bottom=0)
+        ax.set_xlabel("Return period (years)")
+        ax.set_ylabel("Peak flow (m³/s)")
+        style.axes(ax)
+        ax.xaxis.set_major_locator(FixedLocator(ticks))
+        ax.xaxis.set_minor_locator(NullLocator())
+        ax.set_xticklabels([f"1:{T}" for T in ticks])
+        for label in ax.get_xticklabels():
+            label.set_fontproperties(style.font_props())
+        fmt = ScalarFormatter(useOffset=False)
+        fmt.set_scientific(False)
+        ax.yaxis.set_major_formatter(fmt)
+        legend = fig.legend(
+            handles=handles,
+            loc="outside lower center",
+            ncol=min(3, len(handles)),
+            frameon=False,
+            prop=style.font_props(style="italic"),
+        )
+        for text in legend.get_texts():
+            text.set_color("#000000")
+        stream = style.png(fig)
+    return stream, list(style.warnings)
+
+
 # ---------------------------------------------------------------- tables
 
 
-def _results_table(doc, item, rps, cid):
+def _results_table(doc, item, rps, cid, caption=None):
     by = {(r.method, r.return_period): r for r in item.results}
     methods = [m for m in METHOD_ORDER if any(r.method == m for r in item.results)]
     header = ["Method"] + [f"1:{T}" for T in rps] + ["RMF"]
@@ -245,7 +335,7 @@ def _results_table(doc, item, rps, cid):
             + [q_text(by[(m, T)].q_m3s) if (m, T) in by else "-" for T in rps]
             + ["-"]
         )
-    doc.caption("Table", f"Peak flows (m³/s), catchment {cid}")
+    doc.caption("Table", caption or f"Peak flows (m³/s), catchment {cid}")
     doc.table(header, rows, widths_cm=_even(len(header), 3.4))
 
 
@@ -443,6 +533,34 @@ def write_report(path, run: RunResult, run_info: dict, context=None) -> list[str
             doc.label("Notes")
             for n in cnotes.split("; "):
                 doc.bullet(n)
+
+    # ------------------------------------------------------------ summary
+    doc.heading("Summary of peak flows", 1)
+    doc.para(
+        "The peak flows of every method are collected here per catchment, with "
+        "the peak flow against return period for each method. The RMF (Kovacs) "
+        "is shown as a reference line; it has no return period."
+    )
+    for item in run.items:
+        cid = item.catchment.catchment_id
+        doc.heading(f"Catchment {cid}", 2)
+        _results_table(
+            doc,
+            item,
+            rps,
+            cid,
+            caption=f"Summary of peak flows (m³/s), catchment {cid}",
+        )
+        try:
+            stream, warns = curve_figure(item, rps)
+            notes.extend(warns)
+        except ImportError:
+            stream = None
+        if stream is not None:
+            doc.picture(
+                stream,
+                f"Peak flow against return period by method, catchment {cid}",
+            )
 
     # ------------------------------------------------------------ outputs
     outputs = context.get("outputs") or []
