@@ -231,7 +231,7 @@ Content colours, used in any order:
 
 ### 4.4 Formats
 
-- **Vector layers:** shapefiles. Exception: GeoPackage where the attribute names must stay longer than 10 characters, e.g. HEC-RAS attributes used by the RAS layer styles (Import RAS 2D data).
+- **Vector layers:** shapefiles, with no exceptions. Attribute names from other programs that are longer than 10 characters (e.g. HEC-RAS attributes in Import RAS 2D data) are shortened as in 4.5, and the full name is set as the field alias when the layer is loaded.
 - **Rasters:** GeoTIFF, with a layer file (.qlr) that loads them with their styles where a tool writes several.
 - **Results for the report compiler** (optional, off by default): `<project number>_<description>.json` in the CSV folder, schema `mayim.results/1` (tool, inputs, and per item every result with method, return period, value, unit, flags and derivation).
 - **Text files for other programs** (e.g. HEC-HMS elevation-volume tables) stay plain text in the layout that program expects.

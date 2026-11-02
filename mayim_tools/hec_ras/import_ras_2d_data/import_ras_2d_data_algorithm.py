@@ -1,6 +1,17 @@
 """Processing Toolbox algorithm: HEC-RAS geometry HDF5 in -> every
-selected 2D geometry element type out, as GeoPackage layers written
-into one output folder, in one tool run.
+selected 2D geometry element type out, as shapefiles written into one
+output folder, in one tool run.
+
+Version 0.6.0 (2026-11-02, Chris's decision): shapefiles instead of the
+GeoPackages of 0.5.0, per the Mayim Tools output standard. HEC-RAS
+attribute names longer than 10 characters are shortened
+(output_files.shapefile_field_names) and the full HEC-RAS name is set as
+each field's alias when the layer is loaded; every shortened name is
+listed in the run log. The RAS styles are copied into this tool's own
+styles/ folder (they had moved to the 'ss' sub-folder of Chris's
+QGIS Layer styles folder, so the old hard-coded path no longer found
+them); they only use field names that fit (Name, Connection, Mode,
+Shape). The notes below describe the earlier GeoPackage builds.
 
 Ported 2026-09-29 from the standalone "Import RAS 2D Data" plugin
 (package ``ras2d_import``) into the Mayim Tools suite, per Chris's
@@ -114,7 +125,7 @@ from qgis.core import (
 from qgis.PyQt.QtCore import QMetaType
 from qgis.PyQt.QtGui import QColor, QIcon
 
-from mayim_tools._common.output_files import clean_name_part
+from mayim_tools._common.output_files import clean_name_part, shapefile_field_names
 from mayim_tools.hec_ras.import_ras_2d_data.boundary_lines.core import (
     read_boundary_condition_lines,
 )
@@ -150,7 +161,7 @@ from mayim_tools.hec_ras.import_ras_2d_data.structures.core import (
     read_weir_structures,
 )
 
-TOOL_VERSION = "0.5.0"
+TOOL_VERSION = "0.6.0"
 
 # --- Element catalogue -------------------------------------------------
 #
@@ -194,15 +205,12 @@ ELEMENT_PIPE_CONDUITS = 17
 # Mesh elements handled by _load_mesh_elements (no single reader call).
 _MESH_ELEMENTS = {ELEMENT_PERIMETER, ELEMENT_CELL_POLYGONS, ELEMENT_CELL_POINTS}
 
-# Location of Chris's saved .qml style files. Hard-coded per his
-# explicit 2026-09-23 request ("The default styles must be part of the
-# script (hard-coded)") - not a Processing parameter, so styling is
-# always applied with zero per-run configuration. If this path ever
-# changes on Chris's machine, it needs a code change (and redeploy)
-# here, not a dialog edit.
-QML_STYLES_DIR = Path(
-    r"D:\Dropbox\MAYIM\6 TEGNIESE DATA EN DOKUMENTE\QGIS\QGIS Layer styles"
-)
+# Chris's saved .qml style files, copied into this tool's own styles/
+# folder (0.6.0; originally read from a hard-coded folder on his machine
+# per his 2026-09-23 request that the styles be "part of the script") -
+# not a Processing parameter, so styling is always applied with zero
+# per-run configuration.
+QML_STYLES_DIR = Path(__file__).resolve().parent / "styles"
 
 # element_id -> QML file stem (no ".qml" extension), per Chris's
 # mapping (2026-09-23, extended same day to add 2D computation
@@ -215,6 +223,8 @@ QML_STYLES_DIR = Path(
 # ELEMENT_CELL_POLYGONS have no mapping and keep
 # _DistinctFeatureStyler's generic styling instead.
 _ELEMENT_QML_STYLES = {
+    ELEMENT_PERIMETER: "RAS_2D_perimeter",
+    ELEMENT_CELL_POLYGONS: "RAS_2D_mesh_cells",
     ELEMENT_CELL_POINTS: "RAS_2D_comp_points",
     ELEMENT_BREAK_LINES: "RAS_2D_breaklines",
     ELEMENT_REFINEMENT_REGIONS: "RAS_2D_regions",
@@ -381,11 +391,13 @@ class _DistinctFeatureStyler(QgsProcessingLayerPostProcessorInterface):
 
     MAX_CATEGORIES = 60
 
-    def __init__(self, category_field: str | None = None):
+    def __init__(self, category_field: str | None = None, aliases=None):
         super().__init__()
         self._category_field = category_field
+        self._aliases = aliases
 
     def postProcessLayer(self, layer, context, feedback):
+        _apply_aliases(layer, self._aliases)
         geometry_type = layer.geometryType()
         if geometry_type == QgsWkbTypes.GeometryType.PolygonGeometry:
             self._style_outline_only(layer)
@@ -440,6 +452,15 @@ class _DistinctFeatureStyler(QgsProcessingLayerPostProcessorInterface):
         layer.triggerRepaint()
 
 
+def _apply_aliases(layer, aliases: dict | None) -> None:
+    """Sets the full HEC-RAS attribute name as the alias of each field
+    that was shortened for the shapefile (``aliases``: short -> full)."""
+    for short, full in (aliases or {}).items():
+        index = layer.fields().indexOf(short)
+        if index >= 0:
+            layer.setFieldAlias(index, full)
+
+
 class _QmlFileStyler(QgsProcessingLayerPostProcessorInterface):
     """Applies one of Chris's saved .qml style files to a layer on
     load, added 2026-09-23 per his element-to-QML mapping (see
@@ -455,14 +476,19 @@ class _QmlFileStyler(QgsProcessingLayerPostProcessorInterface):
     postProcessLayer() after the algorithm returns.
     """
 
-    def __init__(self, qml_path: str):
+    def __init__(self, qml_path: str, aliases: dict | None = None):
         super().__init__()
         self._qml_path = qml_path
+        self._aliases = aliases
 
     def postProcessLayer(self, layer, context, feedback):
+        self._style(layer, feedback)
+        _apply_aliases(layer, self._aliases)
+
+    def _style(self, layer, feedback):
         if not Path(self._qml_path).is_file():
             feedback.pushWarning(
-                f"QML style file not found, left at default style: " f"{self._qml_path}"
+                f"QML style file not found, left at default style: {self._qml_path}"
             )
             return
         # QgsMapLayer.loadNamedStyle returns (message, resultFlag) in
@@ -491,7 +517,6 @@ def _attribute_fields(attribute_dicts) -> QgsFields:
 
 
 class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
-
     INPUT_GEOMETRY_HDF = "INPUT_GEOMETRY_HDF"
     CRS = "CRS"
     ELEMENTS = "ELEMENTS"
@@ -527,18 +552,23 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
             "regions, SA/2D connections (bridges, weirs, culverts, "
             "linear routing), pump stations, boundary condition lines, "
             "initial condition points, reference lines/points/areas, "
-            "and pipe networks - as GeoPackage layers written into one "
-            "output folder, in one tool run. Use the 'Elements to "
-            "import' checklist to pick which of these to write; all "
-            "are selected by default. Each selected element becomes "
-            "its own <project number>_<name>.gpkg file in the output "
-            "folder and is loaded into the project automatically. "
-            "GeoPackage is kept (rather than the shapefiles of the Mayim "
-            "output standard) so the HEC-RAS attribute names, which are "
-            "longer than 10 characters and contain spaces, and the RAS "
-            "styles that use them, stay intact. A file that is open in "
-            "QGIS cannot be replaced: it is reported and the other "
+            "and pipe networks - as shapefiles written into one output "
+            "folder, in one tool run. Use the 'Elements to import' "
+            "checklist to pick which of these to write; all are selected "
+            "by default. Each selected element becomes its own "
+            "<project number>_<name>.shp file in the output folder and is "
+            "loaded into the project automatically. A file that is open "
+            "in QGIS cannot be replaced: it is reported and the other "
             "elements are still written.\n"
+            "\n"
+            "FIELD NAMES:\tShapefile field names are limited to 10 "
+            "characters. HEC-RAS attribute names that fit are kept as they "
+            "are (e.g. Name, Type, Mode, Connection, Flow Area, SA/2D); "
+            "longer ones are cut to 10 characters, and numbered where two "
+            "would be the same (e.g. 'Culvert Groups' -> 'Culvert Gr', "
+            "'Culvert Group ID' -> 'Culvert _1'). Every shortened name is "
+            "listed in the log, and the full HEC-RAS name is shown as the "
+            "field's alias (column heading) when the layer is loaded.\n"
             "\n"
             "NOTE:\t'2D Mesh Cells (polygons)' isn't one of Chris's "
             "originally-listed elements but is kept from the earlier "
@@ -570,22 +600,20 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
             "file, set this to match your project.\n"
             "  Elements to import: which geometry types to write.\n"
             "  Project number (optional): file name prefix.\n"
-            "  Output folder: where the .gpkg file for each selected "
+            "  Output folder: where the shapefile for each selected "
             "element is written, named <project number>_<element> (spaces "
             "- and forward slashes, which can't appear in a filename - "
             "replaced with underscores, e.g. 'MC2025_014_SA_2D_connections_"
-            "-_bridge_2D.gpkg').\n"
+            "-_bridge_2D.shp').\n"
             "\n"
             "STYLING:\tEach output layer is styled automatically on "
-            "load. Most elements get one of Chris's saved .qml style "
-            "files, loaded from a hard-coded folder on his machine "
-            "(see QML_STYLES_DIR / _ELEMENT_QML_STYLES in this file) - "
-            "not a dialog parameter, per his own request. Only '2D "
-            "perimeter' and '2D Mesh Cells (polygons)' have no mapped "
-            ".qml and instead get a generic outline-only/categorized-"
-            "random-colour default. A missing individual .qml file "
+            "load with the Mayim RAS styles (RAS_*.qml, kept in this "
+            "tool's styles folder). A missing individual .qml file "
             "only logs a warning and leaves that one layer unstyled - "
-            "it never fails the run."
+            "it never fails the run.\n"
+            "\n"
+            "Version 0.6.0 writes shapefiles instead of GeoPackages; "
+            "Processing models are not affected (the output is the folder)."
         )
 
     def initAlgorithm(self, config=None):
@@ -622,7 +650,7 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterFolderDestination(
                 self.OUTPUT_FOLDER,
-                "Output folder for vector layers (one GeoPackage per element)",
+                "Output folder for vector layers (one shapefile per element)",
             )
         )
         # No QML-styles-folder parameter: styling is hard-coded (see
@@ -650,6 +678,7 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
         # without this each styler would be garbage-collected before
         # it ever ran.
         self._post_processors = []
+        self._aliases = {}  # shapefile path -> {short field name: full}
         self._feedback = feedback
         project_number = clean_name_part(
             self.parameterAsString(parameters, self.PROJECT_NUMBER, context) or ""
@@ -723,16 +752,16 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
         return {self.OUTPUT_FOLDER: output_folder}
 
     def _out_path(self, output_folder, slug) -> str:
-        return str(Path(output_folder) / f"{self._prefix}{slug}.gpkg")
+        return str(Path(output_folder) / f"{self._prefix}{slug}.shp")
 
     # --- Generic file writers -------------------------------------
     #
     # Build an in-memory QgsVectorLayer, hand it every feature in ONE
     # batch call to dataProvider().addFeatures(...), then export the
-    # whole layer to GeoPackage in one call. This is the standard QGIS
-    # idiom for "materialise features built from scratch and save
-    # them" - see the 2026-09-23 bugfix note at the top of this file
-    # for why it replaced a raw QgsVectorFileWriter.create() +
+    # whole layer to a shapefile in one call (GeoPackage before 0.6.0).
+    # This is the standard QGIS idiom for "materialise features built
+    # from scratch and save them" - see the 2026-09-23 bugfix note at
+    # the top of this file for why it replaced a raw QgsVectorFileWriter.create() +
     # per-feature addFeature() loop.
 
     def _build_memory_layer(self, fields, wkb_type, crs):
@@ -748,7 +777,7 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
         is reported and False returned, so the other elements are still
         written."""
         try:
-            self._write_gpkg(layer, out_path, context)
+            self._write_shapefile(layer, out_path, context)
         except QgsProcessingException as e:
             self._feedback.reportError(
                 f"{e} If {Path(out_path).name} is open in QGIS, remove it from "
@@ -759,11 +788,32 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
         self._feedback.pushInfo(f"Written: {out_path}")
         return True
 
-    def _write_gpkg(self, layer, out_path, context):
+    def _write_shapefile(self, layer, out_path, context):
+        """Writes the layer as a shapefile, replacing an existing one. Field
+        names over 10 characters are shortened; the short -> full names are
+        kept in self._aliases[out_path] for the loaded layer's aliases and
+        listed in the log."""
         layer.updateExtents()
+        if Path(out_path).exists() and not QgsVectorFileWriter.deleteShapeFile(
+            out_path
+        ):
+            raise QgsProcessingException(
+                f"{Path(out_path).name} exists and could not be replaced."
+            )
+        names = [field.name() for field in layer.fields()]
+        short = shapefile_field_names(names)
+        aliases = {s: n for s, n in zip(short, names, strict=True) if s != n}
+        self._aliases[out_path] = aliases
+        if aliases:
+            self._feedback.pushInfo(
+                f"{Path(out_path).name}: shortened field names: "
+                + "; ".join(f"{s} = {n}" for s, n in aliases.items())
+            )
         options = QgsVectorFileWriter.SaveVectorOptions()
-        options.driverName = "GPKG"
+        options.driverName = "ESRI Shapefile"
         options.fileEncoding = "UTF-8"
+        options.attributes = list(range(len(names)))
+        options.attributesExportNames = short
         result = QgsVectorFileWriter.writeAsVectorFormatV3(
             layer, out_path, context.transformContext(), options
         )
@@ -780,11 +830,12 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
         qml_stem = (
             _ELEMENT_QML_STYLES.get(element_id) if element_id is not None else None
         )
+        aliases = self._aliases.get(out_path)
         if qml_stem:
             qml_path = str(QML_STYLES_DIR / f"{qml_stem}.qml")
-            styler = _QmlFileStyler(qml_path)
+            styler = _QmlFileStyler(qml_path, aliases)
         else:
-            styler = _DistinctFeatureStyler(category_field)
+            styler = _DistinctFeatureStyler(category_field, aliases)
         details = QgsProcessingContext.LayerDetails(label, context.project())
         details.setPostProcessor(styler)
         self._post_processors.append(styler)
@@ -956,10 +1007,8 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
             out_path = out_paths[element_id]
             if not self._export_layer(layer, out_path, context):
                 continue
-            # ELEMENT_CELL_POINTS has a QML mapping (RAS_2D_comp_points)
-            # and gets _QmlFileStyler via _register_output below;
-            # ELEMENT_PERIMETER/ELEMENT_CELL_POLYGONS have none and
-            # fall back to _DistinctFeatureStyler's generic styling.
+            # every mesh element has a QML mapping (RAS_2D_perimeter,
+            # RAS_2D_mesh_cells, RAS_2D_comp_points since 0.6.0).
             self._register_output(
                 out_path, labels[element_id], context, element_id=element_id
             )

@@ -364,7 +364,13 @@ class DesignStormEngine:
         series, native_minutes = load_timeseries(
             timeseries_path, datetime_col, value_col
         )
-        ddf_long = load_ddf_table(ddf_path)
+        ddf_long = load_ddf_table(ddf_path, fixed_day_to_continuous=True)
+        scaled = ddf_long.attrs.get("fixed_day_durations", [])
+        if scaled:
+            self.warnings.append(
+                "DDF table: fixed-interval day durations scaled to continuous "
+                "durations (Weiss 1964): " + ", ".join(scaled) + "."
+            )
         for label in ddf_long.attrs.get("dropped_durations", []):
             self.warnings.append(
                 f"DDF table: duration '{label}' dropped - the table gives "

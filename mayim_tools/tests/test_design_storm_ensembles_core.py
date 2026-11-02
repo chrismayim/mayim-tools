@@ -454,3 +454,29 @@ def test_load_ddf_table_prefers_24h_over_1_day(tmp_path):
         table = DDFTable(long_df)
         assert table.depth_at_ari(1440.0, 10.0)[0] == pytest.approx(109.3)
         assert set(long_df["duration_min"]) == {60.0, 1440.0, 2880.0}
+
+
+def test_load_ddf_table_weiss_scaling_of_day_rows(tmp_path):
+    """Fixed-interval day rows are scaled to continuous durations (Weiss
+    1964) only on request; hour-labelled rows never."""
+    df = pd.DataFrame(
+        {
+            "Duration": ["24 h", "1 day", "2 day", "7 day", "72 h"],
+            "10yr Depth (mm)": [109.3, 94.7, 117.9, 170.3, 140.0],
+        }
+    )
+    path = tmp_path / "ddf.csv"
+    df.to_csv(path, index=False)
+    plain = load_ddf_table(str(path))
+    scaled = load_ddf_table(str(path), fixed_day_to_continuous=True)
+
+    def depth(t, minutes):
+        return float(t[t["duration_min"] == minutes]["depth_mm"].iloc[0])
+
+    assert depth(plain, 2880.0) == pytest.approx(117.9)
+    assert depth(scaled, 2880.0) == pytest.approx(117.9 / (1 - 1 / 16))
+    assert depth(scaled, 10080.0) == pytest.approx(170.3 / (1 - 1 / 56))
+    assert depth(scaled, 1440.0) == pytest.approx(109.3)  # 24 h kept, unscaled
+    assert depth(scaled, 4320.0) == pytest.approx(140.0)  # hours: never scaled
+    assert scaled.attrs["fixed_day_durations"] == ["2 day x1.0667", "7 day x1.0182"]
+    assert plain.attrs["fixed_day_durations"] == []

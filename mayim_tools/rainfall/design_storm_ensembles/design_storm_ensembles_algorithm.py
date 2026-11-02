@@ -34,7 +34,7 @@ from mayim_tools._common.output_files import (
 from . import core, report
 
 TOOL_NAME = "Design Storm Ensembles"
-TOOL_VERSION = "1.0.1"
+TOOL_VERSION = "1.0.2"
 
 # Selectable outputs: key, dialog label, file-name description, folder
 # kind, ticked by default. All three share the CSV folder.
@@ -164,7 +164,11 @@ class DesignStormEnsembleAlgorithm(QgsProcessingAlgorithm):
             "and one or more '<ARI>yr Depth (mm)' columns. Where the "
             "table gives both a continuous '24 h' and a fixed-interval "
             "'1 day' value (Design Rainfall tables), the 24 h is used and "
-            "the 1 day dropped.\n"
+            "the 1 day dropped. Day-labelled durations (fixed 08:00-08:00 "
+            "readings) are scaled to continuous durations with the Weiss "
+            "(1964) factor 1/(1-1/(8n)), e.g. 2 day x1.067, 7 day x1.018, as "
+            "in the other DDF tools; hour-labelled durations are used as "
+            "given.\n"
             "Datetime/value column names: leave blank to auto-detect.\n"
             "IETD: minimum dry-period hours separating independent "
             "storms (default 6h, per Huff 1967).\n"

@@ -85,7 +85,7 @@ def aep_band(aep_percent):
     return "rare"
 
 
-def load_ddf_table(path, duration_col=None):
+def load_ddf_table(path, duration_col=None, fixed_day_to_continuous=False):
     """Load a DDF CSV (Duration + one or more '<ARI>yr Depth (mm)'
     columns) and return a long-format DataFrame with columns
     [duration_min, ari_years, aep_percent, depth_mm].
@@ -94,7 +94,15 @@ def load_ddf_table(path, duration_col=None):
     '24 h' and a fixed-interval '1 day' (Design Rainfall South Africa
     tables carry both) - the continuous row is kept and the day-labelled
     one dropped, as in read_ddf_csv(). Otherwise the first row is kept.
-    The dropped labels are listed in long_df.attrs['dropped_durations']."""
+    The dropped labels are listed in long_df.attrs['dropped_durations'].
+
+    With ``fixed_day_to_continuous``, day-labelled durations (fixed
+    08:00-08:00 readings in the SA methodology) are scaled to continuous
+    durations with the Weiss (1964) factor 1/(1-1/(8n)), as read_ddf_csv()
+    does; the scaled rows are listed in
+    long_df.attrs['fixed_day_durations'] as '<label> x<factor>'.
+    Hour-labelled rows (e.g. Precipitation data to DDF's '48 h', from
+    continuous windows) are never scaled."""
     df = read_csv_any_delimiter(path)
     if duration_col is None:
         duration_col = df.columns[0]
@@ -131,8 +139,12 @@ def load_ddf_table(path, duration_col=None):
         else:
             dropped.append(label)
 
-    rows = []
-    for dur_min, (_label, _is_day, row) in chosen.items():
+    rows, scaled = [], []
+    for dur_min, (label, is_day, row) in chosen.items():
+        factor = 1.0
+        if is_day and fixed_day_to_continuous:
+            factor = _weiss(max(1, int(round(dur_min / 1440.0))))
+            scaled.append(f"{label} x{factor:.4f}")
         for col, ari in ari_cols:
             depth = row[col]
             if pd.notna(depth):
@@ -141,7 +153,7 @@ def load_ddf_table(path, duration_col=None):
                         "duration_min": dur_min,
                         "ari_years": ari,
                         "aep_percent": aep_from_ari(ari),
-                        "depth_mm": float(depth),
+                        "depth_mm": float(depth) * factor,
                     }
                 )
 
@@ -153,6 +165,7 @@ def load_ddf_table(path, duration_col=None):
     if long_df.empty:
         raise ValueError("DDF table parsed to zero usable rows.")
     long_df.attrs["dropped_durations"] = dropped
+    long_df.attrs["fixed_day_durations"] = scaled
     return long_df
 
 
