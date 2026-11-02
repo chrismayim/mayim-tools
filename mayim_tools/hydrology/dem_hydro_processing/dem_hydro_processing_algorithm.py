@@ -49,6 +49,7 @@ from mayim_tools._common.output_files import (
 )
 from mayim_tools.hydrology._common.contours import minor_major_contours
 
+from .contours_export import MAJOR_FACTOR, write_contours
 from .core.classification import DEM_SOURCE_VERTICAL_ERROR_M
 from .core.conditioning import (
     MODE_CONTINUOUS,
@@ -63,6 +64,7 @@ from .core.stream_evidence import RasterTransform
 from .export import write_sectioned_csv
 from .qgis_map import (
     STYLE_CHANGE,
+    STYLE_CONTOURS,
     STYLE_SINKS,
     copy_source_layer,
     load_on_completion,
@@ -72,7 +74,7 @@ from .qgis_map import (
 )
 from .report import change_classes_present, elevation_change, write_report_docx
 
-TOOL_VERSION = "1.2.0"
+TOOL_VERSION = "1.3.0"
 SOURCE_KEYS = list(DEM_SOURCE_VERTICAL_ERROR_M) + ["custom"]
 SOURCE_LABELS = {
     "survey": "Ground survey",
@@ -106,6 +108,13 @@ OUTPUT_SPECS = [
         default=False,
     ),
     OutputSpec("OUTPUT_SINKS", "Remaining sinks", "Remaining Sinks", SHAPEFILE),
+    OutputSpec(
+        "OUTPUT_CONTOURS",
+        "Contours of the corrected DEM",
+        "Corrected DEM Contours",
+        SHAPEFILE,
+        default=False,
+    ),
     OutputSpec("OUTPUT_CSV", "Results (CSV)", "DEM Processing Results", CSV),
     OutputSpec(
         "OUTPUT_CLASSES",
@@ -202,12 +211,14 @@ class DemHydroProcessingAlgorithm(QgsProcessingAlgorithm):
     STUDY_AREA = "STUDY_AREA"
     SHOW_CONTOURS = "SHOW_CONTOURS"
     CONTOUR_INTERVAL = "CONTOUR_INTERVAL"
+    CONTOURS_INTERVAL = "CONTOURS_INTERVAL"
     REPORT_OSM = "REPORT_OSM"
     PROJECT_NUMBER = "PROJECT_NUMBER"
     PROJECT_NAME = "PROJECT_NAME"
     OUTPUT_DEM = "OUTPUT_DEM"
     OUTPUT_CHANGE = "OUTPUT_CHANGE"
     OUTPUT_SINKS = "OUTPUT_SINKS"
+    OUTPUT_CONTOURS = "OUTPUT_CONTOURS"
     OUTPUT_CSV = "OUTPUT_CSV"
     OUTPUT_DOCX = "OUTPUT_DOCX"
     OUTPUT_CLASSES = "OUTPUT_CLASSES"
@@ -274,7 +285,11 @@ class DemHydroProcessingAlgorithm(QgsProcessingAlgorithm):
             "existing files are replaced. Layers are loaded with the Mayim "
             "styles. Outputs: corrected DEM, elevation change (corrected minus "
             "original), remaining sinks (points; fields sink_id, kind, reason, "
-            "cells, elev_m), results CSV, reusable classification table and "
+            "cells, elev_m), contours of the corrected DEM (lines at the "
+            "contour interval for the contours output, traced by GDAL at the "
+            "DEM's full resolution without smoothing; fields id, elev_m and "
+            "type = Minor or Major, every 5th level Major; styled with major "
+            "contours labelled), results CSV, reusable classification table and "
             "the Word report (title page, layout map, tables; needs "
             "python-docx and matplotlib in QGIS's Python).\n"
             "\n"
@@ -347,7 +362,7 @@ class DemHydroProcessingAlgorithm(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterBoolean(
                 self.CLASSIFY,
-                "Classify depressions in continuous mode (information only; " "slower)",
+                "Classify depressions in continuous mode (information only; slower)",
                 defaultValue=False,
             )
         )
@@ -468,6 +483,16 @@ class DemHydroProcessingAlgorithm(QgsProcessingAlgorithm):
                     spec.key, f"Output: {spec.label}", defaultValue=spec.default
                 )
             )
+        self.addParameter(
+            QgsProcessingParameterNumber(
+                self.CONTOURS_INTERVAL,
+                "Contour interval for the contours output (m; every "
+                f"{MAJOR_FACTOR}th contour is a major contour)",
+                type=QgsProcessingParameterNumber.Type.Double,
+                minValue=0.0,
+                defaultValue=1.0,
+            )
+        )
         for name, label in FOLDER_PARAMS.values():
             self.addParameter(
                 QgsProcessingParameterFolderDestination(name, label, optional=True)
@@ -582,6 +607,13 @@ class DemHydroProcessingAlgorithm(QgsProcessingAlgorithm):
             os.makedirs(folder, exist_ok=True)
             folders[kind] = folder
         paths = {spec.key: spec.path(folders, project_number) for spec in selected}
+        contours_interval = self.parameterAsDouble(
+            parameters, self.CONTOURS_INTERVAL, context
+        )
+        if self.OUTPUT_CONTOURS in paths and contours_interval <= 0:
+            raise QgsProcessingException(
+                "Enter a contour interval greater than 0 m for the contours output."
+            )
         dem_path = dem_layer.source()
         crs = dem_layer.crs()
         dem, nodata, gt = _read_raster(dem_path)
@@ -763,6 +795,26 @@ class DemHydroProcessingAlgorithm(QgsProcessingAlgorithm):
                 done(self.OUTPUT_SINKS, path)
             except Exception as e:
                 failed(self.OUTPUT_SINKS, e)
+
+        # contours of the corrected DEM (full resolution, GDAL)
+        if self.OUTPUT_CONTOURS in paths:
+            path = paths[self.OUTPUT_CONTOURS]
+            feedback.setProgressText("Tracing contours of the corrected DEM")
+            try:
+                surface = result.corrected.astype("float64")
+                surface[~np.isfinite(diff)] = np.nan
+                template = gdal.Open(dem_path)
+                wkt = template.GetProjection() if template is not None else ""
+                template = None
+                n_lines = write_contours(path, surface, gt, wkt, contours_interval)
+                feedback.pushInfo(
+                    f"Contours: {n_lines} line(s) at {contours_interval:g} m "
+                    f"(major every {MAJOR_FACTOR * contours_interval:g} m)."
+                )
+                load_on_completion(context, path, STYLE_CONTOURS, self._post_processors)
+                done(self.OUTPUT_CONTOURS, path)
+            except Exception as e:
+                failed(self.OUTPUT_CONTOURS, e)
 
         ctx = {
             "tool": self.displayName(),

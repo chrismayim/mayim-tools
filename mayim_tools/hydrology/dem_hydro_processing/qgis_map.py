@@ -49,6 +49,7 @@ from mayim_tools._common.report_maps import OSM_ATTRIBUTION, PlanMap
 STYLES_DIR = Path(__file__).resolve().parent / "styles"
 STYLE_CHANGE = STYLES_DIR / "DEM_elevation_change.qml"
 STYLE_SINKS = STYLES_DIR / "DEM_remaining_sinks.qml"
+STYLE_CONTOURS = STYLES_DIR / "DEM_contours.qml"
 MAP_PAD_FRACTION = 0.02
 
 SINK_FIELDS = (  # (name, type, length; 0 = default)
