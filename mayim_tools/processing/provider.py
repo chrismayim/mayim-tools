@@ -16,6 +16,9 @@ from mayim_tools.data.grib_to_csv.grib_to_csv_algorithm import GribToCsvAlgorith
 from mayim_tools.data.hec_hms_project import (
     prepare_hec_hms_project_algorithm as prepare_hec_hms_project_algo,
 )
+from mayim_tools.data.landxml_import.landxml_import_algorithm import (
+    LandXmlImportAlgorithm,
+)
 from mayim_tools.data.netcdf4_to_csv.netcdf4_list_variables_algorithm import (
     Netcdf4ListVariablesAlgorithm,
 )
@@ -141,6 +144,7 @@ class MayimToolsProvider(QgsProcessingProvider):
         self.addAlgorithm(RainfallFrequencyAlgorithm())
         self.addAlgorithm(HuffCurvesAlgorithm())
         self.addAlgorithm(GribToCsvAlgorithm())
+        self.addAlgorithm(LandXmlImportAlgorithm())
         self.addAlgorithm(DdfToHyetographsAlgorithm())
         self.addAlgorithm(PersiannExtractAlgorithm())
         self.addAlgorithm(D8FlowDirectionAlgorithm())

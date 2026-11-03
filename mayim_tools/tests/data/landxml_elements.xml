@@ -1,0 +1,71 @@
+<?xml version="1.0"?>
+<LandXML xmlns="http://www.landxml.org/schema/LandXML-1.2" version="1.2">
+  <Units><Metric areaUnit="squareMeter" linearUnit="meter" volumeUnit="cubicMeter"/></Units>
+  <CoordinateSystem desc="Hartebeesthoek94 / Lo29" epsgCode="2053"/>
+  <Application name="Test" version="1"/>
+  <CgPoints name="All">
+    <CgPoint name="1" code="FH" desc="Fire hydrant">-2865700.0 -92300.0 1505.0</CgPoint>
+    <CgPoint name="2" code="MH" desc="Manhole">-2865710.0 -92290.0 1504.5</CgPoint>
+    <CgPoint name="3" code="TP">-2865720.0 -92280.0</CgPoint>
+    <CgPoints name="Services">
+      <CgPoint pntRef="1"/>
+      <CgPoint pntRef="2"/>
+    </CgPoints>
+  </CgPoints>
+  <Alignments name="Roads">
+    <Alignment name="Road A" length="160.0" staStart="0">
+      <CoordGeom>
+        <Line><Start>-2865700.0 -92400.0</Start><End>-2865700.0 -92350.0</End></Line>
+        <Spiral length="20.0" radiusStart="INF" radiusEnd="50.0" rot="cw" spiType="clothoid">
+          <Start>-2865700.0 -92350.0</Start><PI>-2865700.0 -92336.67</PI><End>-2865701.331 -92330.088</End>
+        </Spiral>
+        <Curve rot="cw" radius="50.0">
+          <Start>-2865701.331 -92330.088</Start><Center>-2865750.0 -92341.47</Center><End>-2865750.0 -92291.47</End>
+        </Curve>
+      </CoordGeom>
+    </Alignment>
+  </Alignments>
+  <PlanFeatures name="Survey FL">
+    <PlanFeature name="Kerb 1">
+      <CoordGeom>
+        <Line><Start>-2865690.0 -92400.0 1506.0</Start><End>-2865690.0 -92380.0 1505.8</End></Line>
+        <Line><Start>-2865690.0 -92380.0 1505.8</Start><End>-2865695.0 -92370.0 1505.5</End></Line>
+      </CoordGeom>
+    </PlanFeature>
+  </PlanFeatures>
+  <Parcels name="Site 1">
+    <Parcel name="Erf 219" area="400.0" parcelType="Single">
+      <CoordGeom>
+        <Line><Start>-2865600.0 -92400.0</Start><End>-2865600.0 -92380.0</End></Line>
+        <Line><Start>-2865600.0 -92380.0</Start><End>-2865620.0 -92380.0</End></Line>
+        <Line><Start>-2865620.0 -92380.0</Start><End>-2865620.0 -92400.0</End></Line>
+        <Line><Start>-2865620.0 -92400.0</Start><End>-2865600.0 -92400.0</End></Line>
+      </CoordGeom>
+    </Parcel>
+  </Parcels>
+  <PipeNetworks>
+    <PipeNetwork name="Storm" pipeNetType="storm">
+      <Structs>
+        <Struct name="MH1" elevRim="1505.0" elevSump="1503.0"><Center>-2865650.0 -92300.0</Center><Invert elev="1503.2" flowDir="out" refPipe="P1"/></Struct>
+        <Struct name="MH2" elevRim="1504.6" elevSump="1502.5"><Center>-2865650.0 -92260.0</Center><Invert elev="1502.8" flowDir="in" refPipe="P1"/></Struct>
+      </Structs>
+      <Pipes>
+        <Pipe name="P1" refStart="MH1" refEnd="MH2" length="40.0" slope="0.01"><CircPipe diameter="0.45"/></Pipe>
+      </Pipes>
+    </PipeNetwork>
+  </PipeNetworks>
+  <Surfaces>
+    <Surface name="Small">
+      <SourceData>
+        <Boundaries><Boundary name="Outer" bndType="outer"><PntList2D>-2865600 -92300 -2865600 -92290 -2865610 -92290 -2865600 -92300</PntList2D></Boundary></Boundaries>
+      </SourceData>
+      <Definition surfType="TIN">
+        <Pnts>
+          <P id="1">-2865600 -92300 100</P><P id="2">-2865600 -92290 101</P>
+          <P id="3">-2865610 -92290 102</P><P id="4">-2865610 -92300 103</P>
+        </Pnts>
+        <Faces><F>1 2 3</F><F>1 3 4</F><F i="1">2 3 4</F></Faces>
+      </Definition>
+    </Surface>
+  </Surfaces>
+</LandXML>

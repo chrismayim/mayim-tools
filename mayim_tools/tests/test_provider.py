@@ -37,7 +37,7 @@ def test_provider_registers_seven_algorithms() -> None:
     provider = loaded_provider()
 
     algorithms = provider.algorithms()
-    assert len(algorithms) == 37
+    assert len(algorithms) == 38
 
     by_name = {algorithm.name(): algorithm for algorithm in algorithms}
 
@@ -47,6 +47,7 @@ def test_provider_registers_seven_algorithms() -> None:
         "rainfall_frequency_stage1",
         "huff_curves",
         "grib_to_csv",
+        "import_landxml_surface",
         "ddf_to_hyetographs",
         "imerg_point_extract",
         "merra2_point_extract",
@@ -104,6 +105,11 @@ def test_provider_registers_seven_algorithms() -> None:
         ),
         "grib_to_csv": (
             "GRIB to CSV",
+            "Data Tools",
+            "data_tools",
+        ),
+        "import_landxml_surface": (
+            "Import LandXML Surface",
             "Data Tools",
             "data_tools",
         ),
