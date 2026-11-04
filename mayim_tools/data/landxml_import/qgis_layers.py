@@ -16,6 +16,8 @@ from qgis.core import (
     QgsField,
     QgsFields,
     QgsGeometry,
+    QgsGradientColorRamp,
+    QgsGradientStop,
     QgsHillshadeRenderer,
     QgsLineString,
     QgsMeshLayer,
@@ -306,12 +308,22 @@ def pipes_layer(items, crs):
 # ----------------------------------------------------------------- styling
 
 
-def elevation_shader(zmin: float, zmax: float) -> QgsRasterShader:
-    if zmax <= zmin:
+def hec_ramp(zmin: float, zmax: float) -> QgsColorRampShader:
+    """Interpolated colour ramp shader with the HEC colours over [zmin,
+    zmax]. It carries a source colour ramp as well as its items: QGIS's mesh
+    scalar settings rebuild the shader from the source ramp when their
+    classification changes, and crash without one (QGIS 4.0.3)."""
+    if not zmax > zmin:
         zmax = zmin + 1.0
     n = len(HEC_COLOURS)
+    stops = [
+        QgsGradientStop(k / (n - 1), QColor(c)) for k, c in enumerate(HEC_COLOURS)
+    ][1:-1]
+    source = QgsGradientColorRamp(QColor(HEC_COLOURS[0]), QColor(HEC_COLOURS[-1]))
+    source.setStops(stops)
     ramp = QgsColorRampShader(zmin, zmax)
     ramp.setColorRampType(QgsColorRampShader.Type.Interpolated)
+    ramp.setSourceColorRamp(source)
     items = []
     for k, colour in enumerate(HEC_COLOURS):
         value = zmin + (zmax - zmin) * k / (n - 1)
@@ -319,12 +331,18 @@ def elevation_shader(zmin: float, zmax: float) -> QgsRasterShader:
             QgsColorRampShader.ColorRampItem(value, QColor(colour), f"{value:.1f} m")
         )
     ramp.setColorRampItemList(items)
+    return ramp
+
+
+def elevation_shader(zmin: float, zmax: float) -> QgsRasterShader:
     shader = QgsRasterShader()
-    shader.setRasterShaderFunction(ramp)
+    shader.setRasterShaderFunction(hec_ramp(zmin, zmax))
     return shader
 
 
 def style_dem(layer, zmin: float, zmax: float) -> None:
+    if not zmax > zmin:
+        zmax = zmin + 1.0
     renderer = QgsSingleBandPseudoColorRenderer(
         layer.dataProvider(), 1, elevation_shader(zmin, zmax)
     )
@@ -334,6 +352,8 @@ def style_dem(layer, zmin: float, zmax: float) -> None:
 
 
 def style_mesh(layer, zmin: float, zmax: float) -> None:
+    if not zmax > zmin:
+        zmax = zmin + 1.0
     settings = layer.rendererSettings()
     native = settings.nativeMeshSettings()
     native.setEnabled(True)
@@ -344,18 +364,9 @@ def style_mesh(layer, zmin: float, zmax: float) -> None:
     if groups:
         group = groups[0]
         scalar = settings.scalarSettings(group)
-        ramp = QgsColorRampShader(zmin, zmax)
-        ramp.setColorRampType(QgsColorRampShader.Type.Interpolated)
-        n = len(HEC_COLOURS)
-        ramp.setColorRampItemList(
-            [
-                QgsColorRampShader.ColorRampItem(
-                    zmin + (zmax - zmin) * k / (n - 1), QColor(c)
-                )
-                for k, c in enumerate(HEC_COLOURS)
-            ]
-        )
-        scalar.setColorRampShader(ramp)
+        # the shader (with its source ramp) first: setting the
+        # classification rebuilds the shader from that ramp
+        scalar.setColorRampShader(hec_ramp(zmin, zmax))
         scalar.setClassificationMinimumMaximum(zmin, zmax)
         settings.setScalarSettings(group, scalar)
         settings.setActiveScalarDatasetGroup(group)

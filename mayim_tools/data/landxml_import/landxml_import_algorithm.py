@@ -49,7 +49,7 @@ from .core import read_landxml
 from .report import write_report
 from .tin import NODATA, outline_rings, tin_to_grid, write_2dm
 
-TOOL_VERSION = "1.0.0"
+TOOL_VERSION = "1.0.1"
 
 # Per surface: key, dialog label, file description after the surface name,
 # folder kind, extension, ticked by default.
