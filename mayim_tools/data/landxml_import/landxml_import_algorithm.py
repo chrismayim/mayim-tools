@@ -19,10 +19,12 @@ import numpy as np
 from osgeo import gdal
 from qgis.core import (
     Qgis,
+    QgsProcessing,
     QgsProcessingAlgorithm,
     QgsProcessingException,
     QgsProcessingParameterBoolean,
     QgsProcessingParameterCrs,
+    QgsProcessingParameterFeatureSource,
     QgsProcessingParameterFile,
     QgsProcessingParameterFolderDestination,
     QgsProcessingParameterNumber,
@@ -43,13 +45,14 @@ from mayim_tools.hydrology.dem_hydro_processing.contours_export import (
     MAJOR_FACTOR,
     write_contours,
 )
+from mayim_tools.hydrology.dem_hydro_processing.qgis_map import copy_source_layer
 
 from . import qgis_layers as ql
 from .core import read_landxml
 from .report import write_report
 from .tin import NODATA, outline_rings, tin_to_grid, write_2dm
 
-TOOL_VERSION = "1.0.1"
+TOOL_VERSION = "1.1.0"
 
 # Per surface: key, dialog label, file description after the surface name,
 # folder kind, extension, ticked by default.
@@ -144,6 +147,7 @@ class LandXmlImportAlgorithm(QgsProcessingAlgorithm):
     CRS = "CRS"
     CELL_SIZE = "CELL_SIZE"
     CONTOUR_INTERVAL = "CONTOUR_INTERVAL"
+    SITE_BOUNDARY = "SITE_BOUNDARY"
     REPORT_OSM = "REPORT_OSM"
     PROJECT_NUMBER = "PROJECT_NUMBER"
     PROJECT_NAME = "PROJECT_NAME"
@@ -191,7 +195,9 @@ class LandXmlImportAlgorithm(QgsProcessingAlgorithm):
             "3D) into QGIS: each surface as a TIN mesh and a DEM raster, and the "
             "other survey elements in the file - survey points with their point "
             "groups, alignments, feature lines, parcels (sites) and pipe "
-            "networks - as GIS layers, with an optional Word report.<br><br>"
+            "networks - as GIS layers, with an optional Word report (per "
+            "surface a layout map of the elevation and survey elements, and "
+            "the same map with the TIN points and triangles).<br><br>"
             "<b>METHOD</b><br>"
             "LandXML gives coordinates as northing, easting (and elevation); "
             "they are written as easting (x), northing (y), elevation (z). "
@@ -213,7 +219,9 @@ class LandXmlImportAlgorithm(QgsProcessingAlgorithm):
             "<i>Coordinate system</i>: leave blank to use the one in the file; "
             "set it when the file has none or it is wrong.<br>"
             "<i>DEM cell size</i> (default 0.5 m) and <i>contour interval</i> "
-            "(default 0.5 m), in the file's units.<br><br>"
+            "(default 0.5 m), in the file's units.<br>"
+            "<i>Site boundary</i> (optional): a polygon layer drawn on the "
+            "report's layout maps.<br><br>"
             "<b>OUTPUTS</b><br>Tick the outputs wanted and choose a folder for "
             "each kind. Files are named &lt;project number&gt;_&lt;description&gt; "
             "and replace files of the same name; a file that is open cannot be "
@@ -275,6 +283,14 @@ class LandXmlImportAlgorithm(QgsProcessingAlgorithm):
                 type=QgsProcessingParameterNumber.Type.Double,
                 minValue=0.0,
                 defaultValue=0.5,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterFeatureSource(
+                self.SITE_BOUNDARY,
+                "Site boundary for the report layout maps (optional)",
+                types=[QgsProcessing.SourceType.TypeVectorPolygon],
+                optional=True,
             )
         )
         self.addParameter(
@@ -429,6 +445,16 @@ class LandXmlImportAlgorithm(QgsProcessingAlgorithm):
             map_layers.append(
                 (boundary, f"TIN boundary ({s.name})", "LXML_tin_boundary.qml", s.name)
             )
+            if OUTPUT_REPORT[0] in want:  # the TIN map (second figure)
+                map_layers[:0] = [
+                    (
+                        ql.tin_points_layer(s, crs),
+                        "TIN point",
+                        "LXML_tin_points.qml",
+                        (s.name, "tin"),
+                    ),
+                    (ql.tin_edges_layer(s, crs), "TIN triangle", None, (s.name, "tin")),
+                ]
             if "OUTPUT_TIN" in want:
                 p = _path(folders[RASTER], pn, f"{sname}_TIN", ".2dm")
                 try:
@@ -575,12 +601,24 @@ class LandXmlImportAlgorithm(QgsProcessingAlgorithm):
             p = _path(folders[WORD], pn, OUTPUT_REPORT[2], ".docx")
             messages = []
             plan_map = None
+            site_layers, site_name = [], None
+            site = self.parameterAsSource(parameters, self.SITE_BOUNDARY, context)
+            if site is not None and crs.isValid():
+                site_name = self.parameterAsLayer(
+                    parameters, self.SITE_BOUNDARY, context
+                )
+                site_name = site_name.name() if site_name is not None else "yes"
+                layer = copy_source_layer(site, "Site boundary", crs, tctx)
+                if layer.featureCount():
+                    site_layers = [
+                        (ql.site_boundary_layer(layer), "Site boundary", None, None)
+                    ]
             if crs.isValid():
                 plan_map = ql.make_plan_map(
                     crs,
                     tctx,
                     dem_info,
-                    element_layers + map_layers,
+                    site_layers + element_layers + map_layers,
                     use_osm=self.parameterAsBoolean(
                         parameters, self.REPORT_OSM, context
                     ),
@@ -601,6 +639,7 @@ class LandXmlImportAlgorithm(QgsProcessingAlgorithm):
                 "contour_interval": interval if "OUTPUT_CONTOURS" in want else None,
                 "surfaces": surf_ctx,
                 "outputs": list(written),
+                "site_boundary": site_name,
             }
             try:
                 _remove(p)

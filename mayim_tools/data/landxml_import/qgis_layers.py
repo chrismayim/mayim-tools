@@ -15,11 +15,13 @@ from qgis.core import (
     QgsFeature,
     QgsField,
     QgsFields,
+    QgsFillSymbol,
     QgsGeometry,
     QgsGradientColorRamp,
     QgsGradientStop,
     QgsHillshadeRenderer,
     QgsLineString,
+    QgsLineSymbol,
     QgsMeshLayer,
     QgsPoint,
     QgsPointXY,
@@ -30,12 +32,14 @@ from qgis.core import (
     QgsRasterLayer,
     QgsRasterShader,
     QgsSingleBandPseudoColorRenderer,
+    QgsSingleSymbolRenderer,
     QgsVectorLayer,
 )
 from qgis.PyQt.QtCore import QMetaType
 from qgis.PyQt.QtGui import QColor
 
 from mayim_tools._common.qgis_maps import (
+    STUDY_AREA_SYMBOL,
     legend_entries,
     map_crs_and_extent,
     osm_has_tiles,
@@ -156,6 +160,42 @@ def breaklines_layer(surface, crs):
         (_line(c), [n or t, f"boundary {t}".strip()]) for n, t, c in surface.boundaries
     ]
     return _add(layer, rows)
+
+
+def tin_edges_layer(surface, crs):
+    """The TIN triangles' edges (each once) as one multi-line feature, thin
+    grey, for the report's TIN map."""
+    import numpy as np
+
+    t = surface.triangles
+    edges = np.unique(
+        np.sort(np.vstack([t[:, [0, 1]], t[:, [1, 2]], t[:, [2, 0]]]), axis=1),
+        axis=0,
+    )
+    xy = surface.xyz[:, :2]
+    lines = [
+        [QgsPointXY(*map(float, xy[a])), QgsPointXY(*map(float, xy[b]))]
+        for a, b in edges
+    ]
+    layer = _layer("MultiLineString", crs, [("surface", S)], "TIN triangles")
+    _add(layer, [(QgsGeometry.fromMultiPolylineXY(lines), [surface.name])])
+    layer.setRenderer(
+        QgsSingleSymbolRenderer(
+            QgsLineSymbol.createSimple(
+                {"line_color": "90,90,90,255", "line_width": "0.1"}
+            )
+        )
+    )
+    return layer
+
+
+def site_boundary_layer(layer):
+    """The site boundary styled for the maps (report standard 3.2: black,
+    0.5 mm, dashed, no fill)."""
+    layer.setRenderer(
+        QgsSingleSymbolRenderer(QgsFillSymbol.createSimple(STUDY_AREA_SYMBOL))
+    )
+    return layer
 
 
 def tin_boundary_layer(surface, rings, crs):
@@ -441,11 +481,12 @@ def crs_from(data, override) -> tuple[QgsCoordinateReferenceSystem, str]:
 def make_plan_map(
     crs, transform_context, dem_paths, vector_layers, use_osm=True, messages=None
 ):
-    """Report PlanMapFn (surface name or None, plot width cm, dpi) ->
-    PlanMap. ``dem_paths`` {surface name: (tif path, zmin, zmax)};
-    ``vector_layers`` [(layer, legend title, qml, surface name or None)],
-    drawn top first; a layer tied to a surface is shown on that surface's
-    map only, the others on every map."""
+    """Report PlanMapFn (item, plot width cm, dpi) -> PlanMap, the item a
+    surface name, (surface name, "tin") for that surface's TIN map, or None.
+    ``dem_paths`` {surface name: (tif path, zmin, zmax)}; ``vector_layers``
+    [(layer, legend title, qml or None to keep the layer's style, key)],
+    drawn top first; key None = on every map, a surface name = on that
+    surface's maps, (surface name, "tin") = on its TIN map only."""
     messages = messages if messages is not None else []
     osm = osm_layer() if use_osm else None
     styled = []
@@ -455,11 +496,16 @@ def make_plan_map(
         clone = layer.clone()
         if qml:
             clone.loadNamedStyle(style_path(qml))
+        elif layer.renderer() is not None:
+            clone.setRenderer(layer.renderer().clone())
         clone.setLabelsEnabled(False)
         styled.append((clone, title, surface))
 
-    def render(surface_name, plot_width_cm, dpi):
-        layers = [(lyr, t) for lyr, t, s in styled if s in (None, surface_name)]
+    def render(item, plot_width_cm, dpi):
+        tin_map = isinstance(item, tuple)
+        surface_name = item[0] if tin_map else item
+        keys = {None, surface_name} | ({item} if tin_map else set())
+        layers = [(lyr, t) for lyr, t, s in styled if s in keys]
         dem = None
         if surface_name in dem_paths:
             path, zmin, zmax = dem_paths[surface_name]

@@ -137,6 +137,7 @@ def write_report(path, data, ctx, plan_map=None) -> list[str]:
             f"{'Imperial' if data.imperial else 'Metric'} ({data.linear_unit or '-'})",
         ],
         ["Coordinate system", f"{ctx.get('crs', '-')} ({ctx.get('crs_source', '-')})"],
+        ["Site boundary", ctx.get("site_boundary") or "-"],
         ["DEM cell size", f"{ctx.get('cell_size', 0):g} {unit}"],
         [
             "Contour interval",
@@ -200,7 +201,22 @@ def write_report(path, data, ctx, plan_map=None) -> list[str]:
                 osm_used = osm_used or bool(pm.attribution)
                 doc.picture(
                     figure_rendered_map(pm, style),
-                    f"Surface {s.name}: elevation, TIN boundary and survey elements"
+                    f"Surface {s.name}: elevation, TIN boundary"
+                    + (", site boundary" if ctx.get("site_boundary") else "")
+                    + " and survey elements"
+                    + (" (background: OpenStreetMap)" if pm.attribution else ""),
+                )
+            try:
+                pm = plan_map((s.name, "tin"), PLAN_PLOT_WIDTH_CM, PLAN_DPI)
+            except Exception as e:
+                pm = None
+                messages.append(f"TIN map of surface {s.name} not drawn ({e}).")
+            if pm is not None:
+                osm_used = osm_used or bool(pm.attribution)
+                doc.picture(
+                    figure_rendered_map(pm, style),
+                    f"Surface {s.name}: as the previous figure, with the TIN "
+                    "points and triangles"
                     + (" (background: OpenStreetMap)" if pm.attribution else ""),
                 )
 
