@@ -66,7 +66,7 @@ STYLES_DIR = Path(__file__).resolve().parent / "styles"
 OUTPUT_SPECS = extract_specs("IMERG")
 
 
-TOOL_VERSION = "0.6.0"
+TOOL_VERSION = "0.6.1"
 
 
 class ImergExtractAlgorithm(QgsProcessingAlgorithm):

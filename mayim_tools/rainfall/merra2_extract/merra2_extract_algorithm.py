@@ -61,7 +61,7 @@ STYLES_DIR = Path(__file__).resolve().parent / "styles"
 OUTPUT_SPECS = extract_specs("MERRA2", matched=False)
 
 
-TOOL_VERSION = "0.4.0"
+TOOL_VERSION = "0.4.1"
 
 
 class Merra2ExtractAlgorithm(QgsProcessingAlgorithm):
