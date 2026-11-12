@@ -308,6 +308,13 @@ ALGORITHMS = [
         "Prepare SWMM project",
         DATA,
     ),
+    (
+        "data.data_boundary.data_boundary_algorithm",
+        "DataBoundaryAlgorithm",
+        "data_boundary",
+        "Data Boundary (mask polygon)",
+        DATA,
+    ),
 ]
 
 # Import name -> pip package name, where they differ.

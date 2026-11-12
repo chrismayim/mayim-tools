@@ -49,7 +49,7 @@ def test_provider_registers_all_algorithms() -> None:
     provider = loaded_provider()
 
     algorithms = provider.algorithms()
-    assert len(algorithms) == 38
+    assert len(algorithms) == 39
 
     by_name = {algorithm.name(): algorithm for algorithm in algorithms}
 
@@ -92,6 +92,7 @@ def test_provider_registers_all_algorithms() -> None:
         "rational_c",
         "prepare_hec_hms_project",
         "prepare_swmm_project",
+        "data_boundary",
     }
 
     expected = {
@@ -285,6 +286,11 @@ def test_provider_registers_all_algorithms() -> None:
             "Data Tools",
             "data_tools",
         ),
+        "data_boundary": (
+            "Data Boundary (mask polygon)",
+            "Data Tools",
+            "data_tools",
+        ),
     }
 
     for name, (display_name, group, group_id) in expected.items():
@@ -298,7 +304,7 @@ def test_provider_lists_every_algorithm_once() -> None:
     from mayim_tools.processing.provider import ALGORITHMS
 
     ids = [entry[2] for entry in ALGORITHMS]
-    assert len(ids) == len(set(ids)) == 38
+    assert len(ids) == len(set(ids)) == 39
 
 
 def test_missing_package_gives_placeholder() -> None:
