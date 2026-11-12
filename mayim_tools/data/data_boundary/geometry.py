@@ -10,37 +10,60 @@ from __future__ import annotations
 
 import numpy as np
 from qgis.core import (
+    QgsCurvePolygon,
     QgsGeometry,
     QgsLineString,
     QgsMultiPolygon,
+    QgsPoint,
     QgsPolygon,
-    QgsWkbTypes,
 )
+
+from .core import densify_line
 
 BUFFER_SEGMENTS = 8
 SMOOTH_ITERATIONS = 2
 SMOOTH_OFFSET = 0.25
 
 
+def _curve_xy(curve) -> np.ndarray:
+    """(n, 2) x, y of a curve, read from its WKB as one array (a
+    point-by-point loop is slow for millions of vertices)."""
+    if not isinstance(curve, QgsLineString):
+        curve = curve.curveToLine()  # arcs and compound curves
+    wkb = bytes(curve.asWkb())
+    dims = 2 + int(curve.is3D()) + int(curve.isMeasure())
+    order = "<" if wkb[0] == 1 else ">"
+    # header: byte order (1), geometry type (4), number of points (4)
+    vals = np.frombuffer(wkb, dtype=f"{order}f8", offset=9)
+    return vals.reshape(-1, dims)[:, :2].astype(float)
+
+
 def feature_points(geom: QgsGeometry, spacing: float | None) -> np.ndarray:
-    """(n, 2) vertices of a geometry. Lines and polygon outlines are first
-    densified so no two vertices along them are more than ``spacing``
-    apart (None: the vertices as they are)."""
+    """(n, 2) vertices of a geometry. Lines and polygon outlines get extra
+    points so no two vertices along them are more than ``spacing`` apart
+    (None: the vertices as they are). Reads the coordinates as arrays, as
+    a contour layer can have millions of vertices."""
     if geom is None or geom.isEmpty():
         return np.empty((0, 2))
-    g = QgsGeometry(geom)
-    if (
-        spacing
-        and spacing > 0
-        and g.type()
-        in (
-            QgsWkbTypes.GeometryType.LineGeometry,
-            QgsWkbTypes.GeometryType.PolygonGeometry,
-        )
-    ):
-        g = g.densifyByDistance(spacing)
-    pts = [(v.x(), v.y()) for v in g.vertices()]
-    return np.asarray(pts, dtype=float).reshape(-1, 2)
+    out = []
+    for part in geom.constParts():
+        if isinstance(part, QgsPoint):
+            out.append(np.array([[part.x(), part.y()]]))
+            continue
+        if isinstance(part, QgsCurvePolygon):
+            rings = [part.exteriorRing()] + [
+                part.interiorRing(i) for i in range(part.numInteriorRings())
+            ]
+        else:
+            rings = [part]
+        for ring in rings:
+            if ring is None:
+                continue
+            xy = _curve_xy(ring)
+            out.append(densify_line(xy, spacing) if spacing else xy)
+    if not out:
+        return np.empty((0, 2))
+    return np.vstack(out)
 
 
 def polygons_to_geometry(polys) -> QgsGeometry:

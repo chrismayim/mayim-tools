@@ -155,3 +155,70 @@ def test_buffer_union():
     assert not g.isMultipart() or len(g.asMultiPolygon()) == 1
     with pytest.raises(ValueError):
         gm.buffer_union(pts, 0)
+
+
+def test_thin_points_one_per_cell():
+    from mayim_tools.data.data_boundary.core import thin_points
+
+    xy = grid(0, 99, 0, 99, step=1.0)  # 10000 points
+    thin = thin_points(xy, 10.0)
+    assert len(thin) == 100
+    assert thin[:, 0].min() == 0 and thin[:, 1].min() == 0
+
+
+def test_thin_for_concave_caps_the_point_count():
+    from mayim_tools.data.data_boundary.core import thin_for_concave
+
+    xy = grid(0, 999, 0, 999, step=1.0)  # 1e6 points
+    pts, cell = thin_for_concave(xy, 50.0, max_points=5000)
+    assert len(pts) <= 5000 and cell > 5.0
+    pts, cell = thin_for_concave(xy, 50.0)
+    assert cell == 5.0 and len(pts) == 200 * 200
+
+
+def test_large_contour_set_stays_one_area():
+    """Thinned contours give the same band as the full set."""
+    from mayim_tools.data.data_boundary.core import thin_for_concave
+
+    xs = np.arange(0, 2000.01, 1.0)
+    xy = np.vstack(
+        [np.column_stack([xs, np.full_like(xs, y)]) for y in range(0, 401, 20)]
+    )
+    pts, cell = thin_for_concave(xy, 50.0)
+    polys = concave_polygons(pts, 50.0, keep_holes=False)
+    assert len(polys) == 1
+    assert polygon_area(polys[0]) == pytest.approx(2000 * 400, rel=0.01)
+
+
+def test_densify_line():
+    from mayim_tools.data.data_boundary.core import densify_line
+
+    line = np.array([[0, 0], [100, 0], [100, 25]])
+    d = densify_line(line, 10)
+    assert len(d) == 10 + 3 + 1
+    assert np.hypot(*np.diff(d, axis=0).T).max() <= 10 + 1e-9
+    assert (d[0] == [0, 0]).all() and (d[-1] == [100, 25]).all()
+    assert len(densify_line(line, None)) == 3
+
+
+def test_feature_points_parts_and_rings():
+    gm = _qgis()
+    from qgis.core import QgsGeometry
+
+    poly = QgsGeometry.fromWkt(
+        "MultiPolygon(((0 0, 10 0, 10 10, 0 10, 0 0),(2 2, 4 2, 4 4, 2 2)),"
+        "((20 0, 30 0, 30 10, 20 0)))"
+    )
+    assert len(gm.feature_points(poly, None)) == 5 + 4 + 4
+    pts = gm.feature_points(QgsGeometry.fromWkt("MultiPoint((1 2),(3 4))"), 5)
+    assert pts.tolist() == [[1, 2], [3, 4]]
+
+
+def test_feature_points_3d_lines():
+    gm = _qgis()
+    from qgis.core import QgsGeometry
+
+    z = QgsGeometry.fromWkt("LineStringZ(0 0 5, 10 0 5, 10 10 6)")
+    assert gm.feature_points(z, None).tolist() == [[0, 0], [10, 0], [10, 10]]
+    zm = QgsGeometry.fromWkt("MultiLineStringZM((0 0 5 1, 10 0 5 2))")
+    assert gm.feature_points(zm, None).tolist() == [[0, 0], [10, 0]]

@@ -38,7 +38,7 @@ from mayim_tools._common.output_files import SHAPEFILE, output_file_name
 from mayim_tools.hydrology.catchment_delineation.qgis_outputs import save_shapefile
 
 from . import geometry as gm
-from .core import TOOL_VERSION, concave_polygons, convex_polygon
+from .core import TOOL_VERSION, concave_polygons, convex_polygon, thin_for_concave
 
 CONCAVE, CONVEX, BUFFER = 0, 1, 2
 METHODS = [
@@ -121,7 +121,12 @@ class DataBoundaryAlgorithm(QgsProcessingAlgorithm):
             "<b>METHOD</b><br>"
             "Lines and polygon outlines are first densified so their vertices "
             "are at most half the maximum edge length apart; points are used "
-            "as they are. Duplicate points are removed.<br>"
+            "as they are. Duplicate points are removed. For the concave "
+            "method the points are thinned to one per cell of a tenth of the "
+            "maximum edge length (larger for very big data sets, so at most "
+            "one million points are triangulated); the run log gives the cell "
+            "size, which is about how far the boundary can lie inside the "
+            "outermost data.<br>"
             "<i>Concave (maximum edge length)</i>, the default: the points are "
             "triangulated (Delaunay) and every triangle with an edge longer "
             "than the maximum edge length is removed; the outline of the "
@@ -297,13 +302,23 @@ class DataBoundaryAlgorithm(QgsProcessingAlgorithm):
                 geom = gm.buffer_union(geoms, buf)
             else:
                 xy = np.vstack(chunks) if chunks else np.empty((0, 2))
+                chunks.clear()
                 n_points = len(xy)
-                feedback.pushInfo(f"{n_points} data points (before duplicates).")
-                polys = (
-                    concave_polygons(xy, max_edge)
-                    if method == CONCAVE
-                    else convex_polygon(xy)
-                )
+                feedback.pushInfo(f"{n_points} data points.")
+                if method == CONCAVE:
+                    xy, cell = thin_for_concave(xy, max_edge)
+                    feedback.pushInfo(
+                        f"Thinned to {len(xy)} points, one per {cell:.2f} m cell "
+                        f"(the boundary is within about {cell * 1.42:.1f} m of "
+                        "the boundary of all the points)."
+                    )
+                    feedback.setProgressText("Triangulating the data points")
+                    feedback.setProgress(50)
+                    if feedback.isCanceled():
+                        return {}
+                    polys = concave_polygons(xy, max_edge, keep_holes=not fill)
+                else:
+                    polys = convex_polygon(xy)
                 geom = gm.polygons_to_geometry(polys)
         except ValueError as e:
             raise QgsProcessingException(str(e)) from e

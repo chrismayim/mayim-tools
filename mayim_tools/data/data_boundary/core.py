@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import numpy as np
 
-TOOL_VERSION = "1.0.0"
+TOOL_VERSION = "1.0.1"
 
 
 def unique_points(xy, tolerance: float = 1e-6) -> np.ndarray:
@@ -113,13 +113,15 @@ def _edge_lengths(xy, tri):
 def _boundary_rings(xy, tri):
     """Closed rings of the boundary of a set of counter-clockwise
     triangles: shells counter-clockwise, holes clockwise."""
-    edges = np.vstack([tri[:, [0, 1]], tri[:, [1, 2]], tri[:, [2, 0]]])
-    fwd = {(int(a), int(b)) for a, b in edges}
+    n = np.int64(len(xy))
+    a = np.concatenate([tri[:, 0], tri[:, 1], tri[:, 2]])
+    b = np.concatenate([tri[:, 1], tri[:, 2], tri[:, 0]])
+    # an edge used by one triangle only (its reverse is not used) is on the
+    # boundary; vectorised, as a data set can have millions of edges
+    on_boundary = ~np.isin(a * n + b, b * n + a)
     nxt: dict[int, list[int]] = {}
-    for a, b in edges:
-        a, b = int(a), int(b)
-        if (b, a) not in fwd:  # used by one triangle only: on the boundary
-            nxt.setdefault(a, []).append(b)
+    for u, v in zip(a[on_boundary].tolist(), b[on_boundary].tolist(), strict=True):
+        nxt.setdefault(u, []).append(v)
     rings = []
     while nxt:
         start = next(iter(nxt))
@@ -129,24 +131,24 @@ def _boundary_rings(xy, tri):
             outs = nxt.get(cur)
             if not outs:
                 break
-            b = outs.pop()
+            v = outs.pop()
             if not outs:
                 del nxt[cur]
-            cur = b
+            cur = v
             if cur == start:
                 break
             ring.append(cur)
         if len(ring) >= 3:
-            pts = xy[ring + [ring[0]]]
-            rings.append(pts)
+            rings.append(xy[ring + [ring[0]]])
     return rings
 
 
-def _assemble(rings):
+def _assemble(rings, keep_holes: bool = True):
     """[(shell, [holes])]: each clockwise ring goes to the smallest
-    counter-clockwise ring that contains it."""
+    counter-clockwise ring that contains it (holes left out when not
+    ``keep_holes``)."""
     shells = [r for r in rings if ring_area(r) > 0]
-    holes = [r for r in rings if ring_area(r) < 0]
+    holes = [r for r in rings if ring_area(r) < 0] if keep_holes else []
     out = [(s, []) for s in sorted(shells, key=ring_area)]
     for h in holes:
         probe = h[0] + 1e-9 * (h[1] - h[0])
@@ -159,10 +161,11 @@ def _assemble(rings):
     return out
 
 
-def concave_polygons(xy, max_edge: float):
+def concave_polygons(xy, max_edge: float, keep_holes: bool = True):
     """[(shell, [holes])] of the Delaunay triangles whose edges are all at
-    most ``max_edge`` long (largest polygon first). Raises ValueError
-    when no triangle is left."""
+    most ``max_edge`` long (largest polygon first; holes left out when not
+    ``keep_holes``). Raises ValueError when no triangle is left. For large
+    data sets thin the points first (thin_points)."""
     if max_edge <= 0:
         raise ValueError("The maximum edge length must be greater than 0.")
     xy = unique_points(xy)
@@ -176,4 +179,50 @@ def concave_polygons(xy, max_edge: float):
             f"data points are further apart. Use at least {shortest:.1f} m "
             "(about 1.5 to 3 times the contour spacing or point spacing)."
         )
-    return _assemble(_boundary_rings(xy, tri[keep]))
+    return _assemble(_boundary_rings(xy, tri[keep]), keep_holes)
+
+
+MAX_POINTS = 1_000_000
+
+
+def thin_points(xy, cell: float) -> np.ndarray:
+    """One point per square grid cell of size ``cell`` (the first point in
+    each cell). The boundary drawn from the thinned points lies within
+    about one cell diagonal of the boundary of all the points."""
+    xy = np.asarray(xy, dtype=float).reshape(-1, 2)
+    xy = xy[np.all(np.isfinite(xy), axis=1)]
+    if len(xy) == 0 or cell <= 0:
+        return xy
+    ij = np.floor((xy - xy.min(axis=0)) / cell).astype(np.int64)
+    key = ij[:, 0] * (int(ij[:, 1].max()) + 1) + ij[:, 1]
+    _, idx = np.unique(key, return_index=True)
+    return xy[np.sort(idx)]
+
+
+def thin_for_concave(xy, max_edge: float, max_points: int = MAX_POINTS):
+    """(points, cell size) for the concave method: the points thinned to
+    one per cell of a tenth of the maximum edge length - finer than any
+    triangle that is kept, so the outline hardly changes - and the cell
+    enlarged until at most ``max_points`` are left (a Delaunay
+    triangulation of millions of points takes minutes and gigabytes)."""
+    cell = max_edge / 10.0
+    pts = thin_points(xy, cell)
+    while len(pts) > max_points:
+        cell *= 1.5
+        pts = thin_points(pts, cell)
+    return pts, cell
+
+
+def densify_line(line, spacing: float) -> np.ndarray:
+    """A polyline's vertices with points added so that no two are more
+    than ``spacing`` apart (vectorised)."""
+    p = np.asarray(line, dtype=float).reshape(-1, 2)
+    if len(p) < 2 or not spacing or spacing <= 0:
+        return p
+    d = np.hypot(*(p[1:] - p[:-1]).T)
+    k = np.maximum(1, np.ceil(d / spacing).astype(np.int64))  # pieces per segment
+    seg = np.repeat(np.arange(len(d)), k)
+    start = np.repeat(np.cumsum(k) - k, k)
+    t = (np.arange(len(seg)) - start) / k[seg]
+    out = p[seg] + (p[seg + 1] - p[seg]) * t[:, None]
+    return np.vstack([out, p[-1:]])
