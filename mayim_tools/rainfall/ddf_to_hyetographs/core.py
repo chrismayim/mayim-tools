@@ -33,10 +33,14 @@ import re
 import numpy as np
 import pandas as pd
 
+from mayim_tools._common.frequency import one_in_x_of_label
+
 PEAK_RATIOS = (0.25, 0.33, 0.50, 0.66, 0.75)
 
 _RETURN_PERIOD_COL_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*yr\s*Depth", re.IGNORECASE)
 _AEP_PERCENT_COL_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*%\s*$")
+# '2% AEP Depth (mm)' (the suite's DDF header from 0.30)
+_AEP_DEPTH_COL_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*%\s*AEP\s*Depth", re.IGNORECASE)
 _DURATION_WITH_UNIT_RE = re.compile(
     r"^\s*(\d+(?:\.\d+)?)\s*(min|h|hr|hour)s?\s*$", re.IGNORECASE
 )
@@ -45,8 +49,9 @@ _DURATION_WITH_UNIT_RE = re.compile(
 def parse_idf_table(df: pd.DataFrame, duration_col: str | None = None) -> dict:
     """Returns {return_period_years: [(duration_min, depth_mm), ...]},
     sorted by duration, tolerant of two header conventions:
-    - '{RT}yr Depth (mm)' (Design Rainfall / Rainfall Frequency
-      Analysis's recommended-DDF output format)
+    - '{AEP}% AEP Depth (mm)' (Design Rainfall / Precipitation data to
+      DDF from 0.30) and the older '{RT}yr Depth (mm)'
+      (return period = AEP 1 in x)
     - bare AEP-percent columns (e.g. '50%', '20%', '1%'), converted to
       return period via T = 100 / AEP%.
 
@@ -75,8 +80,11 @@ def parse_idf_table(df: pd.DataFrame, duration_col: str | None = None) -> dict:
             continue
         rt = None
         m = _RETURN_PERIOD_COL_RE.match(str(col))
+        m_aep = _AEP_DEPTH_COL_RE.match(str(col))
         if m:
             rt = float(m.group(1))
+        elif m_aep:
+            rt = one_in_x_of_label(str(col))
         else:
             m = _AEP_PERCENT_COL_RE.match(str(col))
             if m:

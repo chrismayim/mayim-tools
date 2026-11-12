@@ -29,7 +29,7 @@ from . import lookup as lk
 from . import tables as tb
 
 TOOL_NAME = "Run-off Coefficients (SANRAL Deterministic)"
-TOOL_VERSION = "0.1.2"
+TOOL_VERSION = "0.2.0"
 NODATA_F = -9999.0
 NODATA_U8 = 255
 DEFAULT_CELL_M = 20.0
@@ -734,7 +734,7 @@ def flags(cr: CatchmentResult, r: RunResult) -> None:
         if plant and felled / plant > FELLED_FLAG_SHARE:
             f.append(
                 f"clear-felled plantation is {100 * felled / plant:.0f} % of the "
-                "plantation area (over 30 %): reconsider the return period (DM p. 3-19)"
+                "plantation area (over 30 %): reconsider the design AEP (DM p. 3-19)"
             )
     for code, rule in r.lookup.rules.items():
         if rule.flag == lk.FLAG_MINE:

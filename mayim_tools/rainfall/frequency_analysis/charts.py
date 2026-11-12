@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from mayim_tools._common.frequency import aep_label
 from mayim_tools.rainfall._common.rfa.distributions import (
     GUMBEL_TAU3,
     GUMBEL_TAU4,
@@ -107,7 +108,9 @@ def ddf_figure(result):
             y = [look[(d, t)]["depth_mm"] for d in durs]
             lo = np.array([look[(d, t)]["lower_mm"] for d in durs], float)
             up = np.array([look[(d, t)]["upper_mm"] for d in durs], float)
-            (line,) = ax.plot(durs, y, color=col, lw=DATA_LW, label=f"{t:g}-year")
+            (line,) = ax.plot(
+                durs, y, color=col, lw=DATA_LW, label=aep_label(100.0 / t)
+            )
             handles.append(line)
             if np.all(np.isfinite(lo)) and np.all(np.isfinite(up)):
                 ax.fill_between(durs, lo, up, color=col, alpha=BAND_ALPHA, lw=0)

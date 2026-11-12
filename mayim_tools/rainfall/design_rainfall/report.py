@@ -23,6 +23,13 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from mayim_tools._common.frequency import (
+    aep_depth_header,
+    aep_from_one_in_x,
+    aep_header,
+    aep_label_long_from_one_in_x,
+)
+
 from .core import PointEstimate
 
 if TYPE_CHECKING:
@@ -97,7 +104,7 @@ def write_csv(estimate: PointEstimate, output_path: str | Path, stations=None) -
 
         header = ["Duration"]
         for rt in return_periods:
-            header += [f"{rt}yr Depth (mm)", f"{rt}yr Lower (mm)", f"{rt}yr Upper (mm)"]
+            header += [_h(rt), _h(rt, "Lower"), _h(rt, "Upper")]
         writer.writerow(header)
 
         for dur in durations:
@@ -126,7 +133,7 @@ def write_csv(estimate: PointEstimate, output_path: str | Path, stations=None) -
 
 
 def write_ddf_csv(estimates: dict[str, PointEstimate], output_path: str | Path) -> None:
-    """DDF table only: one row per duration, one '<T>yr Depth (mm)' column
+    """DDF table only: one row per duration, one '<AEP>% AEP Depth (mm)' column
     per return period - the depth columns of write_csv without the lower /
     upper bounds, the site header and the nearest stations. With several
     sites a leading Site column identifies each site's rows (the return
@@ -138,7 +145,7 @@ def write_ddf_csv(estimates: dict[str, PointEstimate], output_path: str | Path) 
     with open(output_path, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.writer(f)
         header = (["Site"] if multi else []) + ["Duration"]
-        header += [f"{rt}yr Depth (mm)" for rt in return_periods]
+        header += [_h(rt) for rt in return_periods]
         writer.writerow(header)
         for site, est in estimates.items():
             lookup = {(r.duration_label, r.return_period): r for r in est.results}
@@ -183,7 +190,7 @@ def write_csv_multi(
             "Duration",
         ]
         for rt in return_periods:
-            header += [f"{rt}yr Depth (mm)", f"{rt}yr Lower (mm)", f"{rt}yr Upper (mm)"]
+            header += [_h(rt), _h(rt, "Lower"), _h(rt, "Upper")]
         writer.writerow(header)
 
         for site, est in estimates.items():
@@ -300,8 +307,14 @@ def _text(value) -> str:
     return text if text and text.lower() not in ("nan", "none") else "-"
 
 
-def _rt_label(rt: int) -> str:
-    return f"1:{rt} yr"
+def _rt_label(rt: int, n_columns: int = 1) -> str:
+    """'2% AEP (1 in 50)' table header (Mayim drainage terminology)."""
+    return aep_header(rt, n_columns)
+
+
+def _h(rt, kind: str = "Depth") -> str:
+    """CSV column header of return period rt: '2% AEP Depth (mm)'."""
+    return aep_depth_header(aep_from_one_in_x(rt), kind)
 
 
 def _duration_range(durations: list[str]) -> str:
@@ -325,7 +338,8 @@ def _depth_table_rows(estimate: PointEstimate, attr: str):
     durations = _sorted_durations(estimate.results)
     return_periods = _sorted_return_periods(estimate.results)
     lookup = {(r.duration_label, r.return_period): r for r in estimate.results}
-    header = ["Duration"] + [_rt_label(rt) for rt in return_periods]
+    n = len(return_periods)
+    header = ["Duration"] + [_rt_label(rt, n) for rt in return_periods]
     rows = []
     for dur in durations:
         row = [dur]
@@ -376,7 +390,10 @@ def _headline(est: PointEstimate) -> str | None:
     r = next(
         r for r in est.results if r.duration_label == dur and r.return_period == rt
     )
-    text = f"The {dur}, 1:{rt} year design rainfall depth is {r.depth:.1f} mm"
+    text = (
+        f"The {dur}, {aep_label_long_from_one_in_x(rt)} design rainfall depth "
+        f"is {r.depth:.1f} mm"
+    )
     if r.lower is not None and r.upper is not None:
         text += f" (90 % interval {r.lower:.1f} to {r.upper:.1f} mm)"
     return text + "."
@@ -508,7 +525,8 @@ STATION_WIDTHS = [2.4, 5.0, 1.7, 1.4, 1.7, 2.4, 1.9]
 def station_1day_rows(stations, return_periods: list[int]):
     """(header, rows) of the 1-day design depths published for the stations
     (median of each return period, DRE dataset)."""
-    header = ["Station name"] + [_rt_label(rt) for rt in return_periods]
+    n = len(return_periods)
+    header = ["Station name"] + [_rt_label(rt, n) for rt in return_periods]
     rows = []
     if stations is None or stations.empty:
         return header, rows
@@ -696,8 +714,9 @@ def write_report_docx(
     d.para(
         f"This annexure gives design rainfall depths for {n_sites} "
         f"site{'s' if n_sites != 1 else ''}, for durations of "
-        f"{_duration_range(durations)} and return periods of "
-        f"{_join([str(rt) for rt in return_periods])} years. The depths were "
+        f"{_duration_range(durations)} and annual exceedance probabilities of "
+        f"{_join([aep_label_long_from_one_in_x(rt) for rt in return_periods])}. "
+        "The depths were "
         f"estimated with the {DEFAULT_METHOD_NOTE} at the nearest point of "
         "the national 1 arc-minute design rainfall grid, using the "
         f"{ctx.get('tool', REPORT_TITLE)} tool (version "
@@ -771,7 +790,7 @@ def write_report_docx(
         "2 to 7 days: the index value follows from L1,1d with the power-law "
         "regressions of the multi-day region.",
         "The median design depth is the index value times the 1-day growth "
-        "curve factor of the site's cluster for each return period; the same "
+        "curve factor of the site's cluster for each AEP; the same "
         "growth curve is used for every duration.",
         "The 90 % upper and lower bounds combine the bounds of the growth "
         "curve with the prediction interval of the index value at the grid "
@@ -799,8 +818,9 @@ def write_report_docx(
             ["Sites", str(n_sites)],
             ["Durations", ", ".join(durations) or "-"],
             [
-                "Return periods (years)",
-                ", ".join(str(rt) for rt in return_periods) or "-",
+                "AEPs",
+                ", ".join(aep_label_long_from_one_in_x(rt) for rt in return_periods)
+                or "-",
             ],
             [
                 "Nearest rainfall stations listed",
@@ -915,6 +935,10 @@ def write_report_docx(
         "and must be applied separately for catchment-average rainfall.",
         "The nearest rainfall stations are listed for reference only and do "
         "not influence the grid-based estimates.",
+        "The design rainfall grid was extracted from the Water Research "
+        "Commission's publicly available Design Rainfall Estimation in South "
+        "Africa program (Smithers and Schulze, 2002). Copyright of the grid "
+        "remains with the WRC and the authors.",
     ]
     if used_osm:
         notes.append(OSM_LICENCE_NOTE)

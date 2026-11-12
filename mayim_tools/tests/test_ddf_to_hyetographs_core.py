@@ -485,3 +485,26 @@ if __name__ == "__main__":
             print(f"{t.__name__}: ERROR - {type(e).__name__}: {e}")
     print(f"\n{len(tests) - failed}/{len(tests)} passed")
     sys.exit(1 if failed else 0)
+
+
+def test_aep_headers_and_hms_round_trip(tmp_path):
+    """'% AEP Depth' input headers parse like '<T>yr' ones, the output
+    starts with an 'AEP (%)' column, and Prepare HEC-HMS project reads the
+    rows back with T = AEP (1 in x)."""
+    from mayim_tools.data.hec_hms_project import storms as stm
+
+    df = pd.DataFrame(
+        {
+            "Duration": ["5 min", "10 min", "15 min", "30 min", "1 h", "2 h"],
+            "50% AEP Depth (mm)": [8, 12, 15, 20, 26, 32],
+            "10% AEP Depth (mm)": [14, 20, 25, 34, 45, 56],
+            "10% AEP Lower (mm)": [1, 1, 1, 1, 1, 1],
+        }
+    )
+    tables = parse_idf_table(df)
+    assert sorted(tables) == [2.0, 10.0]
+    path = tmp_path / "inc.csv"
+    write_incremental_depth([(2.0, 60.0), (10.0, 60.0)], 5.0, tables, path)
+    assert path.read_text(encoding="utf-8-sig").startswith("AEP (%),")
+    rows = stm.read_alternating_block_csv(str(path))
+    assert sorted(r["ari"] for r in rows) == [2.0, 10.0]

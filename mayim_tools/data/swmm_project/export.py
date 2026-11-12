@@ -257,7 +257,7 @@ def write_csv(path: str, m: SwmmModel, inputs: list, results=None) -> str:
             [(ser.run_name, ser.storm) for ser in m.series],
         )
         if results:
-            section("Critical storm per method and return period (SWMM)")
+            section("Critical storm per method and AEP (SWMM)")
             w.writerow(
                 [
                     "method",

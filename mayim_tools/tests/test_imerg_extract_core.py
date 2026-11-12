@@ -1,4 +1,4 @@
-﻿"""
+"""
 Tests for imerg_extract/core.py. Run: python3 tests/test_core.py
 """
 
@@ -23,7 +23,6 @@ from mayim_tools.rainfall.imerg_extract.core import (
     fetch_granule_based_timeseries,
     read_point_from_dataset,
     read_point_from_dataset_with_center,
-    save_earthdata_credentials,
 )
 
 
@@ -822,99 +821,6 @@ def test_fetch_granule_based_timeseries_reads_real_julian_calendar_file():
 # pattern), but must preserve unrelated .netrc entries - unlike
 # .cdsapirc, .netrc is a shared, multi-service file by convention.
 # ----------------------------------------------------------------------
-
-
-def test_save_earthdata_credentials_writes_new_file():
-    import tempfile
-
-    tmp_path = Path(tempfile.mkdtemp()) / ".netrc"
-    result_paths = save_earthdata_credentials("myuser", "mypass", config_path=tmp_path)
-    assert result_paths == [tmp_path]
-    content = tmp_path.read_text()
-    assert "machine urs.earthdata.nasa.gov" in content
-    assert "login myuser" in content
-    assert "password mypass" in content
-    print("test_save_earthdata_credentials_writes_new_file: PASS")
-
-
-def test_save_earthdata_credentials_writes_both_files_on_windows():
-    """Regression test for a real bug found on first live use: Python's
-    own netrc module - and by extension earthaccess/requests - defaults
-    to looking for '_netrc' (underscore) on Windows, not '.netrc' (dot).
-    A version of this function that only wrote '.netrc' created the
-    file correctly, but nothing on Windows actually read it - confirmed
-    directly by a live-run error ('No .netrc found at ...\\_netrc').
-    Mocks platform.system() rather than requiring an actual Windows
-    environment to test this."""
-    import tempfile
-    import unittest.mock as mock
-
-    tmp_home = Path(tempfile.mkdtemp())
-    with (
-        mock.patch("platform.system", return_value="Windows"),
-        mock.patch("pathlib.Path.home", return_value=tmp_home),
-    ):
-        result_paths = save_earthdata_credentials("winuser", "winpass")
-
-    assert (tmp_home / ".netrc") in result_paths
-    assert (tmp_home / "_netrc") in result_paths
-    assert (tmp_home / ".netrc").exists()
-    assert (tmp_home / "_netrc").exists()
-    assert "login winuser" in (tmp_home / "_netrc").read_text()
-    print("test_save_earthdata_credentials_writes_both_files_on_windows: PASS")
-
-
-def test_save_earthdata_credentials_only_dotfile_on_non_windows():
-    import tempfile
-    import unittest.mock as mock
-
-    tmp_home = Path(tempfile.mkdtemp())
-    with (
-        mock.patch("platform.system", return_value="Linux"),
-        mock.patch("pathlib.Path.home", return_value=tmp_home),
-    ):
-        result_paths = save_earthdata_credentials("linuxuser", "linuxpass")
-
-    assert result_paths == [tmp_home / ".netrc"]
-    assert not (tmp_home / "_netrc").exists()
-    print("test_save_earthdata_credentials_only_dotfile_on_non_windows: PASS")
-
-
-def test_save_earthdata_credentials_preserves_other_machine_entries():
-    """The critical difference from era5_extract's save_cds_credentials:
-    .netrc may already contain entries for OTHER services - those must
-    survive a save, not be silently wiped out."""
-    import tempfile
-
-    tmp_path = Path(tempfile.mkdtemp()) / ".netrc"
-    tmp_path.write_text("machine example.com\nlogin someoneelse\npassword unrelated\n")
-
-    save_earthdata_credentials("myuser", "mypass", config_path=tmp_path)
-    content = tmp_path.read_text()
-
-    assert "machine example.com" in content, "unrelated existing entry was wiped out"
-    assert "login someoneelse" in content
-    assert "machine urs.earthdata.nasa.gov" in content
-    assert "login myuser" in content
-    print("test_save_earthdata_credentials_preserves_other_machine_entries: PASS")
-
-
-def test_save_earthdata_credentials_replaces_existing_earthdata_entry():
-    """Saving a second time with new credentials must replace the old
-    Earthdata entry, not duplicate it."""
-    import tempfile
-
-    tmp_path = Path(tempfile.mkdtemp()) / ".netrc"
-    save_earthdata_credentials("olduser", "oldpass", config_path=tmp_path)
-    save_earthdata_credentials("newuser", "newpass", config_path=tmp_path)
-    content = tmp_path.read_text()
-
-    assert (
-        content.count("machine urs.earthdata.nasa.gov") == 1
-    ), "duplicate entry created"
-    assert "olduser" not in content
-    assert "login newuser" in content
-    print("test_save_earthdata_credentials_replaces_existing_earthdata_entry: PASS")
 
 
 def test_fetch_giovanni_timeseries_default_full_record():

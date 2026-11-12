@@ -53,6 +53,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
+from mayim_tools._common.frequency import aep_label_long_from_one_in_x
 from mayim_tools.rainfall._common.ddf import DDFTable, aep_band
 from mayim_tools.rainfall._common.events import (
     DEFAULT_IETD_HOURS,
@@ -83,7 +84,7 @@ from . import adjust as _adj
 # ---------------------------------------------------------------------------
 
 TOOL_NAME = "Adjust Sub-daily Rainfall to DDF"
-TOOL_VERSION = "1.0.0"
+TOOL_VERSION = "1.1.0"
 
 REFERENCE_TIERS = {
     1: "Tier 1 - published gauge-based DDF",
@@ -496,10 +497,14 @@ def embedded_burst_check(vals, native, duration, burst_t, ref, sub_durations, w_
         top = ref.depth_at_ari(dsub, max(ref.aris))[0]
         if (ok and t_sub > burst_t * (1 + 1e-9)) or (not ok and sub > top):
             flag = True
-            txt = f"1 in {t_sub:.3g} yr" if ok else f"> 1 in {max(ref.aris):g} yr"
+            txt = (
+                aep_label_long_from_one_in_x(t_sub)
+                if ok
+                else f"< {aep_label_long_from_one_in_x(max(ref.aris))}"
+            )
             detail.append(
                 f"{duration_label(dsub)} burst {txt} rarer than burst "
-                f"(1 in {burst_t:.3g} yr)"
+                f"({aep_label_long_from_one_in_x(burst_t)})"
             )
     return flag, "; ".join(detail)
 

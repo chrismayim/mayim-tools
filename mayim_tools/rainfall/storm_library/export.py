@@ -8,6 +8,8 @@ import math
 import numpy as np
 import pandas as pd
 
+from mayim_tools._common.frequency import aep_label_long_from_one_in_x
+
 
 def _fmt(value, ndigits=4):
     if value is None:
@@ -31,7 +33,7 @@ KEY_PREFIX = "# "
 CONSISTENCY_KEY = {
     "duration_min": "duration (min)",
     "duration": "duration label",
-    "return_period_yr": "annual-maximum return period T (years); AEP = 1/T",
+    "return_period_yr": "AEP (1 in x) of the annual-maximum series; AEP = 100 / x %",
     "aep_pct": "annual exceedance probability (%)",
     "reference_depth_mm": "reference DDF depth (mm)",
     "reference_flag": "how the reference depth was found (table, interpolated, extrapolated)",
@@ -63,11 +65,11 @@ EVENTS_KEY = {
     "event_depth_mm": "storm depth of the input series (mm)",
     "anchor_window_depth_mm": "largest anchor-duration depth inside the storm (mm)",
     "anchor_depth_corrected_mm": "anchor depth after the fixed-interval correction (mm)",
-    "return_period_in_product_yr": "return period of that depth in the product's own record (years)",
+    "return_period_in_product_yr": "AEP (1 in x) of that depth in the product's own record",
     "scale_factor": "pass-1 scale factor applied to the whole storm (-)",
     "rescaled_anchor_depth_mm": "anchor depth after pass 1 (mm)",
     "peak_concentration_factor": "pass-2 peak concentration factor (-)",
-    "range_flag": "in range, below or above the reference return periods",
+    "range_flag": "in range, below or above the reference AEPs",
     "touches_missing": "TRUE when the storm touches missing data (not reshaped)",
     "status": "VALIDATED or INDICATIVE - NOT VALIDATED (tier 3)",
 }
@@ -82,10 +84,10 @@ LIBRARY_KEY = {
     "raw_depth_mm": "depth of the input series over the pattern (mm)",
     "scale_factor": "pass-1 scale factor of the storm (-)",
     "rescaled_depth_mm": "depth of the adjusted series over the pattern (mm)",
-    "return_period_yr": "return period of that depth in the reference DDF (years)",
+    "return_period_yr": "AEP (1 in x) of that depth in the reference DDF",
     "aep_pct": "annual exceedance probability (%)",
     "aep_band": "AEP band (frequent, intermediate, rare)",
-    "range_flag": "in range, below or above the reference return periods",
+    "range_flag": "in range, below or above the reference AEPs",
     "shape": "Early, Middle or Late peak",
     "timestep_min": "time step of the increments (min)",
     "n_increments": "number of increments",
@@ -273,7 +275,7 @@ def _panel(ax, style, rows, key50, key05, key95, title, tol, anchor):
             ms=3,
             lw=1.5,
             color=colour,
-            label=f"1 in {t:g} years",
+            label=aep_label_long_from_one_in_x(t),
             zorder=3,
         )
     ticks = sorted({r["duration_min"] / 60.0 for r in rows})

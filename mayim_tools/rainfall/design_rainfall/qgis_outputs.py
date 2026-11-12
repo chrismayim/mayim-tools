@@ -25,6 +25,7 @@ from qgis.core import (
 )
 from qgis.PyQt.QtCore import QMetaType
 
+from mayim_tools._common.frequency import aep_from_one_in_x, format_aep
 from mayim_tools.hydrology.catchment_delineation.qgis_outputs import save_shapefile
 
 __all__ = [
@@ -49,6 +50,13 @@ class _StylePostProcessor(QgsProcessingLayerPostProcessorInterface):
     def postProcessLayer(self, layer, context, feedback):
         layer.loadNamedStyle(self.style_path)
         layer.triggerRepaint()
+
+
+def _field_key(r) -> str:
+    """Field name of a duration x AEP depth: '24h_2P' (2% AEP), '24h_0_5P'
+    (0.5% AEP)."""
+    aep = format_aep(aep_from_one_in_x(r.return_period)).replace(".", "_")
+    return f"{r.duration_label.replace(' ', '')}_{aep}P"
 
 
 def load_on_completion(
@@ -97,7 +105,7 @@ def grid_points_layer(estimates: dict, crs):
     sample_results = next(iter(estimates.values())).results
     combo_keys = []
     for r in sample_results:
-        key = f"{r.duration_label.replace(' ', '')}_{r.return_period}y"
+        key = _field_key(r)
         combo_keys.append(key)
         fields.append(QgsField(key, QMetaType.Type.Double))
         fields.append(QgsField(f"{key}_L", QMetaType.Type.Double))
@@ -112,10 +120,7 @@ def grid_points_layer(estimates: dict, crs):
         feat.setGeometry(
             QgsGeometry.fromPointXY(QgsPointXY(est.longitude, est.latitude))
         )
-        lookup = {
-            f"{r.duration_label.replace(' ', '')}_{r.return_period}y": r
-            for r in est.results
-        }
+        lookup = {_field_key(r): r for r in est.results}
         attrs = [label, est.map_mm, est.altitude_m, est.cluster]
         for key in combo_keys:
             r = lookup.get(key)

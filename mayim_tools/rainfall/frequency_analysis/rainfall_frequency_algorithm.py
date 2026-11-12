@@ -1,4 +1,4 @@
-﻿"""Processing Toolbox algorithm: Precipitation Data to DDF.
+"""Processing Toolbox algorithm: Precipitation Data to DDF.
 
 Time/Depth precipitation CSV in -> annual maximum series, per-duration
 distribution fits (diagnostic), a duration-consistent DDF model
@@ -31,6 +31,7 @@ from qgis.core import (
 )
 from qgis.PyQt.QtGui import QIcon
 
+from mayim_tools._common.frequency import format_aep, parse_aep_list
 from mayim_tools._common.output_files import (
     CSV,
     EXTENSIONS,
@@ -57,7 +58,7 @@ from mayim_tools.rainfall._common.rfa.timebase import EXTENDED_DURATIONS_MIN
 _ADVANCED = QgsProcessingParameterDefinition.Flag.FlagAdvanced
 
 TOOL_NAME = "Precipitation data to DDF"
-TOOL_VERSION = "2.0.0"
+TOOL_VERSION = "2.1.0"
 
 # Selectable outputs: key, dialog label, file-name description, folder
 # kind, ticked by default. The chart PNG goes to the Word folder.
@@ -186,7 +187,7 @@ class RainfallFrequencyAlgorithm(QgsProcessingAlgorithm):
             "precipitation time series - a gauge record, or a gridded product "
             "extracted at a point (ERA5, IMERG, CMORPH, CHIRPS ...). The recommended "
             "DDF is duration-consistent: depths always increase with duration and "
-            "with return period, so the curves never cross. Outputs the recommended "
+            "with AEP, so the curves never cross. Outputs the recommended "
             "DDF CSV (Design Rainfall column layout, feeds straight into DDF to "
             "Hyetographs, Design Storm Ensembles and Adjust Sub-daily Rainfall to "
             "DDF), a Word report and optional diagnostic CSVs.\n\n"
@@ -212,18 +213,18 @@ class RainfallFrequencyAlgorithm(QgsProcessingAlgorithm):
             "BACKGROUND\n"
             "Fitting each duration separately, and especially picking a different "
             "distribution per duration, can give a longer duration a smaller design "
-            "depth than a shorter one at the same return period - physically "
+            "depth than a shorter one at the same AEP - physically "
             "impossible and not defensible in review. Published DDF/IFD products "
             "(Smithers & Schulze 2003 for South Africa; ARR 2016/2019 IFDs for "
             "Australia) avoid this by treating all durations as one consistent "
             "family. The per-duration fits are kept as diagnostics and compared with "
             "the model in the report. A DDF from a gridded product is an areal, "
             "product-specific DDF: it is typically low at short durations and rare "
-            "return periods compared with gauge DDFs.\n\n"
+            "AEPs compared with gauge DDFs.\n\n"
             "PARAMETERS\n"
             "Rainfall CSV: incremental (not cumulative) depths at a fixed time step, "
             "e.g. straight from the Extract tools. At least 10 complete years; 20+ "
-            "recommended, 30+ for 100-year estimates.\n"
+            "recommended, 30+ for 1% AEP estimates.\n"
             "\n"
             "Timestamp / depth column names: exact CSV headers (e.g. Time / Depth, "
             "or ValidTime / PrecipitationMM for Extract-tool outputs).\n"
@@ -251,8 +252,9 @@ class RainfallFrequencyAlgorithm(QgsProcessingAlgorithm):
             "made without it. Use the same setting when this DDF is later used as "
             "a reference in Adjust Sub-daily Rainfall to DDF.\n"
             "\n"
-            "Exceedance probabilities (AEP, comma-separated): default 0.99 ... 0.002 "
-            "(1.01 to 500 years). T = 1/AEP.\n"
+            "Annual exceedance probabilities (AEP %, comma-separated): default "
+            "99 ... 0.2 % (1 in 1.01 to 1 in 500). Frequencies follow the Mayim "
+            "drainage terminology: annual-maximum series, AEP (1 in x) = 1/AEP.\n"
             "\n"
             "Minimum year completeness (0-1, default 0.90): years with less valid "
             "data are excluded. Typical 0.85-0.95; lower values risk missing the "
@@ -292,8 +294,8 @@ class RainfallFrequencyAlgorithm(QgsProcessingAlgorithm):
             "underscores and replace files of the same name; a file that is open "
             "in Excel, Word or QGIS cannot be replaced - close it and run again "
             "(the other outputs are still written). The recommended DDF CSV has "
-            "one row per duration with '{T}yr Depth (mm)' and '{T}yr Lower / "
-            "Upper (mm)' columns (the Design Rainfall layout). The CSVs are UTF-8 "
+            "one row per duration with '{AEP}% AEP Depth (mm)' and '{AEP}% AEP "
+            "Lower / Upper (mm)' columns (the Design Rainfall layout). The CSVs are UTF-8 "
             "with a byte-order mark; the diagnostic CSVs start with a column key "
             "('#' lines). The Word report follows the Mayim report standard.\n" + files
         )
@@ -353,8 +355,10 @@ class RainfallFrequencyAlgorithm(QgsProcessingAlgorithm):
         add(
             QgsProcessingParameterString(
                 self.EXCEEDANCE_PROBABILITIES,
-                "Exceedance probabilities (AEP, comma-separated)",
-                defaultValue=",".join(str(p) for p in DEFAULT_EXCEEDANCE_PROBABILITIES),
+                "Annual exceedance probabilities (AEP %, comma-separated)",
+                defaultValue=", ".join(
+                    format_aep(100.0 * p) for p in DEFAULT_EXCEEDANCE_PROBABILITIES
+                ),
             )
         )
         add(
@@ -487,14 +491,21 @@ class RainfallFrequencyAlgorithm(QgsProcessingAlgorithm):
         model_dist = self._MODEL_OPTIONS[
             self.parameterAsEnum(parameters, self.MODEL_DISTRIBUTION, context)
         ]
-        aeps = self._floats(
-            self.parameterAsString(parameters, self.EXCEEDANCE_PROBABILITIES, context),
-            "exceedance probabilities",
-        )
-        if not aeps or any(not 0 < a < 1 for a in aeps):
-            raise QgsProcessingException(
-                "Exceedance probabilities must be between 0 and 1 (e.g. 0.5,0.1,0.01)."
+        try:
+            aeps = tuple(
+                a / 100.0
+                for a in parse_aep_list(
+                    self.parameterAsString(
+                        parameters, self.EXCEEDANCE_PROBABILITIES, context
+                    )
+                )
             )
+        except ValueError as e:
+            raise QgsProcessingException(
+                f"{e}. Give the AEPs in %, e.g. 50, 20, 10, 2, 1."
+            ) from e
+        if not aeps:
+            raise QgsProcessingException("Give the AEPs in %, e.g. 50, 20, 10, 2, 1.")
         durations = self._floats(
             self.parameterAsString(parameters, self.DURATIONS, context), "durations"
         ) or tuple(EXTENDED_DURATIONS_MIN)

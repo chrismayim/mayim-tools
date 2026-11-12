@@ -190,8 +190,8 @@ def _recommendations(result) -> list[str]:
         out.append(
             "These are average-condition curve numbers (CN-II). The SCS-SA manual "
             "adjusts them for the catchment's soil moisture before design use "
-            "(Median Condition Method for return periods above 20 years, Joint "
-            "Association Method up to 20 years); re-run with the Median Condition "
+            "(Median Condition Method below 5% AEP (rarer than 1 in 20), Joint "
+            "Association Method from 5% AEP up); re-run with the Median Condition "
             "option and the change in storage for the catchment, or apply the "
             "adjustment in the design-flood calculation."
         )

@@ -9,6 +9,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
+from mayim_tools._common.frequency import aep_from_one_in_x, format_aep
+
 from . import tables as tb
 from .rainfall import TR102Station, areal_reduction, arf_eq310, tr102_point_depth
 
@@ -45,9 +47,16 @@ class MethodResult:
 
     @property
     def field_name(self) -> str:
-        if self.return_period is None:
-            return f"Q_{self.code}"
-        return f"Q_{self.code}_{self.return_period}"
+        return q_field_name(self.code, self.return_period)
+
+
+def q_field_name(code: str, t=None) -> str:
+    """Output-layer field of a method's peak flow at AEP (1 in t): 'QRAT2_2P'
+    (2% AEP), 'QCAPA_0p5P' (0.5% AEP), 'QRMF' (no AEP). At most 10 characters
+    for shapefiles; the 'P' marks a % AEP (fields before 0.30 were Q_<code>_<T>)."""
+    if t is None:
+        return f"Q{code}"
+    return f"Q{code}_{format_aep(aep_from_one_in_x(t)).replace('.', 'p')}P"
 
 
 @dataclass

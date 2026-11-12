@@ -46,7 +46,7 @@ def _model(ddf_path, settings=None, dem=None, peaks=(33, 50), extra=None):
 
 
 def test_names_steps_and_cumulative_storms(ddf_path):
-    assert sc.swmm_id("Freq 1in50 6h P50") == "Freq_1in50_6h_P50"
+    assert sc.swmm_id("Freq 2pc AEP 6h P50") == "Freq_2pc_AEP_6h_P50"
     c = stm.DdfCurves.from_csv(ddf_path)
     f = stm.frequency_storm(c, 50, 360, 50)
     t, cum = sc.storm_cumulative(f, 5, 5)
@@ -137,13 +137,13 @@ def test_inp_text(ddf_path):
     assert " FLOW_ROUTING          DYNWAVE" in text
     assert "INFILTRATION          CURVE_NUMBER" in text
     assert (
-        "RG1        CUMULATIVE 0:05       1.0        TIMESERIES Freq_1in2_1h_P33"
+        "RG1        CUMULATIVE 0:05       1.0        TIMESERIES Freq_50pc_AEP_1h_P33"
         in text
     )
-    assert "Freq_1in50_6h_P50 01/01/2000       0:00             0" in text
+    assert "Freq_2pc_AEP_6h_P50 01/01/2000       0:00             0" in text
     assert "\r\n" in text
-    other = inp.inp_text(m, "Huff_Q1_1in50_6h")
-    assert "TIMESERIES Huff_Q1_1in50_6h" in other
+    other = inp.inp_text(m, "Huff_Q1_2pc_AEP_6h")
+    assert "TIMESERIES Huff_Q1_2pc_AEP_6h" in other
 
 
 def test_report_parser():
@@ -184,19 +184,21 @@ def test_swmm_engine_runs_every_storm(tmp_path, ddf_path):
     assert len(res) == len(m.series)
     assert all(not r.errors for r in res)
     by = {r.run: r for r in res}
-    big = by["Freq 1in50 6h P50"]
-    assert big.peaks["Outlet-A1"][0] > by["Freq 1in2 6h P50"].peaks["Outlet-A1"][0] > 0
+    big = by["Freq 2pc AEP 6h P50"]
+    assert (
+        big.peaks["Outlet-A1"][0] > by["Freq 50pc AEP 6h P50"].peaks["Outlet-A1"][0] > 0
+    )
     assert abs(big.routing_error_pct) < 5 and abs(big.runoff_error_pct) < 1
     crit = ex.critical_rows(m, res)
     methods = {(row[0], row[1]) for row in crit}
-    assert ("Frequency", "1in50") in methods and ("Huff", "1in50") in methods
-    row = next(x for x in crit if x[:2] == ["Frequency", "1in50"])
+    assert ("Frequency", "2pc AEP") in methods and ("Huff", "2pc AEP") in methods
+    row = next(x for x in crit if x[:2] == ["Frequency", "2pc AEP"])
     assert row[2] == 4 and row[4] == max(
-        by[n].peaks["Outlet-A1"][0] for n in by if n.startswith("Freq 1in50")
+        by[n].peaks["Outlet-A1"][0] for n in by if n.startswith("Freq 2pc AEP")
     )
     path = ex.write_csv(str(tmp_path / "m.csv"), m, [("x", "y")], res)
     body = open(path, encoding="utf-8-sig").read()
-    assert "## Critical storm per method and return period (SWMM)" in body
+    assert "## Critical storm per method and AEP (SWMM)" in body
 
 
 def test_transect_model_runs(tmp_path, ddf_path):

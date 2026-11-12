@@ -38,6 +38,7 @@ from qgis.core import (
 from qgis.PyQt.QtCore import QMetaType
 from qgis.PyQt.QtGui import QIcon
 
+from mayim_tools._common.frequency import aep_label_long_from_one_in_x
 from mayim_tools._common.output_files import (
     CSV,
     EXTENSIONS,
@@ -58,7 +59,7 @@ from .export import field_definition, write_csv, write_results_json
 from .inputs import InputError, read_c_csv, read_tr102_csv
 from .methods import METHOD_ORDER, METHODS
 
-RP_OPTIONS = [f"1:{T} year" for T in tb.RETURN_PERIODS]
+RP_OPTIONS = [aep_label_long_from_one_in_x(T) for T in tb.RETURN_PERIODS]
 NOT_SET = "Not set (use the field, or skip)"
 BASIN_OPTIONS = [NOT_SET] + [f"{b} - {v[1]} ({v[0]})" for b, v in tb.SDF_BASINS.items()]
 BASIN_KEYS = [None] + list(tb.SDF_BASINS)
@@ -247,7 +248,7 @@ class SanralPeakFlowsAlgorithm(QgsProcessingAlgorithm):
             "field.\n"
             "\n"
             "RATIONAL:\tQ = C_T I A / 3.6. C_T = alpha C1 Ft + beta C2 + gamma C3 "
-            "(Ft from Table 3.8; 1.0 at 1:200). Alternative 2: TR102 + modified "
+            "(Ft from Table 3.8; 1.0 at 0.5% AEP). Alternative 2: TR102 + modified "
             "Hershfield (the SDF basin's station unless a TR102 CSV is given). "
             "Alternative 3: the DDF table. Tc below 15 min is raised to 15 min "
             "(switchable). ARF by Eq 3.10, or Pietersen et al (2024) for "
@@ -257,8 +258,8 @@ class SanralPeakFlowsAlgorithm(QgsProcessingAlgorithm):
             "TR102 station (Hershfield to 6 h, TR102 interpolation beyond, per "
             "Step 6), Eq 3.19 ARF and the calibrated C2/C100.\n"
             "\n"
-            "EMPIRICAL:\tMidgley & Pitman Eq 3.34 (1:10 - 1:100); Kovacs RMF "
-            "(Table 3.18) and 1:50 - 1:200 peaks from the QT/QRMF ratios (Table "
+            "EMPIRICAL:\tMidgley & Pitman Eq 3.34 (10% - 1% AEP); Kovacs RMF "
+            "(Table 3.18) and 2% - 0.5% AEP peaks from the QT/QRMF ratios (Table "
             "3D.1); CAPA with the digitised M diagram (DWS 2025 Figure 5-2) and "
             "Table 5-2.\n"
             "\n"
@@ -267,13 +268,14 @@ class SanralPeakFlowsAlgorithm(QgsProcessingAlgorithm):
             "method.\n"
             "\n"
             "OUTPUTS:\tTick the outputs wanted and choose the folders. The "
-            "catchments shapefile has one Q field per method and return period "
+            "catchments shapefile has one Q field per method and AEP, e.g. "
+            "QRAT2_2P = Rational (Alternative 2), 2% AEP; QRMF = RMF "
             "(loaded with the catchment style); the sectioned CSV (UTF-8 with a "
             "byte-order mark) starts with the abbreviations; the Word annexure "
             "follows the Mayim report standard (needs python-docx and "
             "matplotlib) and ends its results with a summary per catchment: "
             "the peak flows of every method in one table and a graph of peak "
-            "flow against return period by method, with the RMF as a "
+            "flow against AEP by method, with the RMF as a "
             "reference line; the calculation sheets (Word) give one sheet per "
             "catchment and method after the Drainage Manual Appendix 3C forms "
             "(R2, R3, S and E, plus CAPA); results.json (schema mayim.results/1, for the report "
@@ -343,7 +345,7 @@ class SanralPeakFlowsAlgorithm(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterEnum(
                 self.RETURN_PERIODS,
-                "Return periods",
+                "Annual exceedance probabilities (AEP)",
                 options=RP_OPTIONS,
                 allowMultiple=True,
                 defaultValue=list(range(len(RP_OPTIONS))),
@@ -566,9 +568,7 @@ class SanralPeakFlowsAlgorithm(QgsProcessingAlgorithm):
         chosen = self.parameterAsEnums(parameters, self.METHODS, context)
         rps = self.parameterAsEnums(parameters, self.RETURN_PERIODS, context)
         if not chosen or not rps:
-            raise QgsProcessingException(
-                "Choose at least one method and return period."
-            )
+            raise QgsProcessingException("Choose at least one method and AEP.")
         settings = Settings(
             methods=tuple(METHOD_ORDER[i] for i in sorted(chosen)),
             return_periods=tuple(tb.RETURN_PERIODS[i] for i in sorted(rps)),

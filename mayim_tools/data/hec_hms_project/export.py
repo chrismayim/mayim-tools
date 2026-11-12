@@ -9,6 +9,8 @@ from __future__ import annotations
 import csv
 import math
 
+from mayim_tools._common.frequency import format_aep
+
 from . import methods as mth
 from .core import ROUTE_LAG, ROUTE_MC, ROUTE_MUSKINGUM, TRANSFORM_CLARK, ProjectResult
 from .storms import SOURCE_LABELS, ari_label, duration_label
@@ -18,6 +20,7 @@ SUBBASIN_FIELDS = [
     ("downstream", "-", "element it drains to"),
     ("area_km2", "km2", "area"),
     ("cn", "-", "SCS curve number used (AMC as in the CN raster)"),
+    ("cn_table", "-", "CN of the CN raster before conversion to the chosen Ia / S"),
     ("cn_mean", "-", "area-weighted mean CN of the raster cells"),
     ("cn_runoff", "-", "runoff-equivalent CN at the CN design depth"),
     ("cn_p05", "-", "5th percentile of the cell CNs"),
@@ -76,7 +79,7 @@ REACH_FIELDS = [
 STORM_FIELDS = [
     ("run", "-", "simulation run and meteorologic model name"),
     ("source", "-", "rainfall source"),
-    ("ari_years", "years", "return period"),
+    ("aep_pct", "%", "annual exceedance probability (AEP 1 in x = 100 / aep_pct)"),
     ("duration", "-", "storm duration"),
     ("total_mm", "mm", "storm depth"),
     (
@@ -186,7 +189,7 @@ def storm_rows(r: ProjectResult) -> list[dict]:
             {
                 "run": run.name,
                 "source": SOURCE_LABELS.get(st.source, st.source),
-                "ari_years": st.ari,
+                "aep_pct": float(format_aep(100.0 / st.ari)),
                 "duration": duration_label(st.duration_min),
                 "total_mm": st.total_mm,
                 "peak_mmh": st.peak_intensity_mmh,
@@ -356,7 +359,7 @@ def write_arf_sections(w, section, storms, arf, named_storms) -> None:
     """'Areal reduction factors' and 'Burst check' CSV sections."""
     head, rows = arf_table(storms, arf)
     if rows:
-        section("Areal reduction factors (ARF by duration and return period)")
+        section("Areal reduction factors (ARF by duration and AEP)")
         w.writerow([f"# {arf_label(arf)}"])
         w.writerow(head)
         for row in rows:

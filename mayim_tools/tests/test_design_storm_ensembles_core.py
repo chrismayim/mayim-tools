@@ -182,7 +182,7 @@ def test_load_ddf_table_no_ari_columns_raises(tmp_path):
     df = pd.DataFrame({"Duration": ["1 h", "3 h"], "Notes": ["a", "b"]})
     path = tmp_path / "bad_ddf.csv"
     df.to_csv(path, index=False)
-    with pytest.raises(ValueError, match="(?i)return-period"):
+    with pytest.raises(ValueError, match="(?i)frequency depth columns"):
         load_ddf_table(str(path))
 
 
@@ -190,11 +190,25 @@ def test_ddf_table_assign_aep_in_range(tmp_path):
     path = make_ddf_csv(tmp_path)
     long_df = load_ddf_table(path)
     table = DDFTable(long_df)
-    # A depth roughly at the 10yr curve for 3h duration should be in-range
-    depth_10yr, _ = table.depth_at(180.0, aep_from_ari(10.0))
+    # the 10yr column is 10% AEP (AEP = 1/T, annual maximum)
+    depth_10yr, _ = table.depth_at(180.0, 10.0)
+    assert depth_10yr == pytest.approx(table.depth_at_ari(180.0, 10.0)[0])
     aep_pct, in_range = table.assign_aep(180.0, depth_10yr)
     assert in_range is True
-    assert abs(aep_pct - aep_from_ari(10.0)) < 0.5
+    assert aep_pct == pytest.approx(10.0, abs=1e-6)
+
+
+def test_ddf_table_columns_are_aep_one_in_x(tmp_path):
+    """Mayim drainage terminology: a T-year annual-maximum column is
+    AEP (1 in T), i.e. 100/T %, not the Poisson ARI conversion."""
+    path = make_ddf_csv(tmp_path)
+    long_df = load_ddf_table(path)
+    for t, aep in zip(long_df["ari_years"], long_df["aep_percent"], strict=True):
+        assert aep == pytest.approx(100.0 / t)
+    # the 5yr and 20yr band edges now fall where the bands say
+    assert aep_band(100.0 / 5.0) == "frequent"
+    assert aep_band(100.0 / 20.0) == "intermediate"
+    assert aep_band(100.0 / 21.0) == "rare"
 
 
 def test_ddf_table_assign_aep_out_of_range(tmp_path):

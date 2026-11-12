@@ -37,7 +37,7 @@ import numpy as np
 from . import methods as mth
 
 TOOL_NAME = "Prepare HEC-HMS project"
-TOOL_VERSION = "0.5.1"
+TOOL_VERSION = "0.6.0"
 HMS_VERSION = "4.14"  # default; 4.13 is also supported
 HMS_VERSIONS = ["4.14", "4.13"]
 
@@ -128,6 +128,7 @@ class Settings:
     sink_prefix: str = "Outlet-"
     # loss
     lambda_ia: float = 0.1
+    cn_lambda_basis: float | None = None  # Ia / S the CNs were calibrated for
     cn_method: str = CN_MEAN
     cn_design_depth_mm: float = 50.0
     # transform
@@ -292,6 +293,61 @@ def runoff_equivalent_cn(cn_cells: np.ndarray, p_mm: float, lam: float) -> float
         else:
             hi = mid
     return 0.5 * (lo + hi)
+
+
+def cn_for_lambda(cn: float, p_mm: float, lam_from: float, lam_to: float) -> float:
+    """The curve number that, with Ia = lam_to S, gives the same direct
+    runoff at depth ``p_mm`` as ``cn`` with Ia = lam_from S.
+
+    Curve number tables are calibrated for one initial abstraction ratio
+    (SCS-SA: 0.1, Schulze et al. 1992; TR-55: 0.2). Using another ratio
+    with the same CN changes the runoff, so the CN is converted by
+    matching the runoff at the design depth (the approach of Hawkins et
+    al. 2002, applied at one depth instead of their fitted 0.2 -> 0.05
+    relation, so it works for any pair of ratios). When the original CN
+    gives no runoff at that depth the CN is returned unchanged."""
+    if abs(lam_from - lam_to) < 1e-12:
+        return float(cn)
+    q = float(scs_runoff(p_mm, cn, lam_from))
+    if q <= 0:
+        return float(cn)
+    lo, hi = 1.0, 99.99
+    if float(scs_runoff(p_mm, hi, lam_to)) < q:
+        return hi
+    if float(scs_runoff(p_mm, lo, lam_to)) >= q:
+        return lo
+    for _ in range(80):
+        mid = 0.5 * (lo + hi)
+        if float(scs_runoff(p_mm, mid, lam_to)) < q:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
+
+
+def cn_raster_lambda(path: str) -> tuple[float | None, str]:
+    """(Ia / S, how it was found) of a curve number raster: the IA_RATIO
+    metadata written by SCS Curve Numbers 0.3.1 and later, else the table
+    named in its LOOKUP metadata (SCS-SA 0.1, TR-55 0.2), else (None, '')."""
+    from osgeo import gdal
+
+    ds = gdal.Open(str(path))
+    if ds is None:
+        return None, ""
+    meta = ds.GetMetadata() or {}
+    ds = None
+    value = meta.get("IA_RATIO")
+    if value:
+        try:
+            return float(value), "IA_RATIO metadata of the CN raster"
+        except ValueError:
+            pass
+    lookup = (meta.get("LOOKUP") or "").upper().replace(" ", "")
+    if "TR-55" in lookup or "TR55" in lookup:
+        return 0.2, f"TR-55 lookup ({meta.get('LOOKUP')})"
+    if "SCS-SA" in lookup or "SCSSA" in lookup:
+        return 0.1, f"SCS-SA lookup ({meta.get('LOOKUP')})"
+    return None, ""
 
 
 def zone_cn(cn_cells: np.ndarray, method: str, p_mm: float, lam: float) -> dict:

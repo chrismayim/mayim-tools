@@ -19,6 +19,7 @@ import datetime as _dt
 import math
 
 from mayim_tools._common.docx_report import Doc
+from mayim_tools._common.frequency import aep_header, aep_label_long_from_one_in_x
 from mayim_tools.land_cover.rational_c import tables as rc
 
 from . import tables as tb
@@ -62,7 +63,7 @@ LEGENDS = {
     "rational_alt2": (
         ("C1 classes and factors", "DM Table 3.7 (AG Table 3C.1)"),
         ("Dolomite factor", "AG Table 3C.4"),
-        ("Ft", "DM Table 3.8 (AG Table 3C.5); 1.0 at 1:200"),
+        ("Ft", "DM Table 3.8 (AG Table 3C.5); 1.0 at 0.5% AEP"),
         ("Tc", "DM Eq 3.11 (overland flow) or Eq 3.12 (defined watercourse)"),
         ("R (days of thunder)", "DM Figure 3.9"),
         ("M and the TR102 station", "TR102 (Adamson 1981); DM Figure 3.10"),
@@ -72,7 +73,7 @@ LEGENDS = {
     "rational_alt3": (
         ("C1 classes and factors", "DM Table 3.7 (AG Table 3C.1)"),
         ("Dolomite factor", "AG Table 3C.4"),
-        ("Ft", "DM Table 3.8 (AG Table 3C.5); 1.0 at 1:200"),
+        ("Ft", "DM Table 3.8 (AG Table 3C.5); 1.0 at 0.5% AEP"),
         ("Tc", "DM Eq 3.11 (overland flow) or Eq 3.12 (defined watercourse)"),
         ("Point rainfall", "Design rainfall DDF table (Smithers and Schulze 2003)"),
         ("ARF", "DM Eq 3.10, or Pietersen et al (2024) for D >= 24 h"),
@@ -270,7 +271,7 @@ def _rational_sheet(doc, sid, item, run, rps, context):
     ]
     if sid == "rational_alt2" and station is not None:
         pairs += [
-            ("2-year 1-day rainfall, M (mm)", num(station.m_mm, 1)),
+            ("50% AEP (1 in 2) 1-day rainfall, M (mm)", num(station.m_mm, 1)),
             ("Days of thunder per year, R", num(station.r_days, 0)),
             ("Weather Service station", station.label),
         ]
@@ -357,7 +358,7 @@ def _rational_sheet(doc, sid, item, run, rps, context):
             sources.setdefault(how, []).append(T)
     if sid == "rational_alt2" and sources:
         extra += [
-            f"Point rainfall, {', '.join(f'1:{T}' for T in ts)} years: {how}"
+            f"Point rainfall, {', '.join(aep_label_long_from_one_in_x(T) for T in ts)}: {how}"
             for how, ts in sources.items()
         ]
     arf = first.get("ARF_method")
@@ -379,7 +380,7 @@ def _rational_sheet(doc, sid, item, run, rps, context):
 
 
 def _per_t(doc, rows, rps, caption):
-    header = ["Return period (years), T"] + [str(T) for T in rps]
+    header = ["AEP (T = AEP 1 in x)"] + [aep_header(T, len(rps)) for T in rps]
     groups = [i for i, r in enumerate(rows) if len(r) == 1]
     rows = [r + [""] * (len(header) - len(r)) if len(r) == 1 else r for r in rows]
     doc.caption("Table", caption)
@@ -401,13 +402,13 @@ def _sdf_sheet(doc, item, rps, context):
         ("Longest watercourse, L (km)", num(c.lfp_km, 3)),
         ("Average slope, S1085 (m/m)", num(c.s1085, 5)),
         ("SDF basin", num(first.get("basin"), 0)),
-        ("2-year 1-day rainfall, M (mm)", num(first.get("M_mm"), 1)),
+        ("50% AEP (1 in 2) 1-day rainfall, M (mm)", num(first.get("M_mm"), 1)),
         ("TC = (0.87 L² / 1000 Sav)^0.385 (h)", num(tc, 3)),
         ("Time of concentration, t = 60 TC (min)", num(None if tc is None else 60 * tc, 1)),
         ("Days of thunder per year, R", num(first.get("R_days"), 0)),
         ("Weather Service station", station.label if station else "-"),
-        ("Calibration factor C2 (2-year) (%)", num(100 * first["C2"], 0)),
-        ("Calibration factor C100 (100-year) (%)", num(100 * first["C100"], 0)),
+        ("Calibration factor C2 (50% AEP) (%)", num(100 * first["C2"], 0)),
+        ("Calibration factor C100 (1% AEP) (%)", num(100 * first["C100"], 0)),
     ]  # fmt: skip
     _kv_table(doc, f"Physical characteristics, form {form}, catchment {cid}", pairs)
     if station is not None:
@@ -438,7 +439,7 @@ def _sdf_sheet(doc, item, rps, context):
             how = str(r.derivation.get("rain_source", "")).split("; ")[-1]
             sources.setdefault(how, []).append(T)
     extra = [
-        f"Point rainfall, {', '.join(f'1:{T}' for T in ts)} years: {how}"
+        f"Point rainfall, {', '.join(aep_label_long_from_one_in_x(T) for T in ts)}: {how}"
         for how, ts in sources.items()
     ]
     _notes(doc, results, extra)
@@ -592,7 +593,7 @@ def write_sheets(path, run: RunResult, run_info: dict, context=None) -> list[str
     doc.para(
         f"{n} calculation sheet(s) for {len(run.items)} catchment(s). Each sheet "
         "follows the rows of its Drainage Manual form: the physical "
-        "characteristics, the component tables and the values per return period "
+        "characteristics, the component tables and the values per AEP "
         "down to the peak flow. Values the tool does not have are shown as '-'."
     )
     doc.caption("Table", "Calculation sheets")
@@ -644,7 +645,7 @@ def write_sheets(path, run: RunResult, run_info: dict, context=None) -> list[str
         "C1 classes are shown only when the C CSV carries the breakdown (the "
         "Rational C tool writes it); the urban C2 is the area-weighted value, "
         "without the per-use rows of the form.",
-        "The forms' 'Max' (PMF) column is not calculated; return periods are "
+        "The forms' 'Max' (PMF) column is not calculated; AEPs are "
         "those chosen for the run.",
         "Forms R1 (Alternative 1), U (unit hydrograph) and C (SCS-SA) are not "
         "part of this tool. CAPA (DWS 2025) has no Drainage Manual form; its "

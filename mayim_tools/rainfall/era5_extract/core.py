@@ -551,7 +551,7 @@ def fetch_era5_point(
     progress_callback: Callable[[int], None] | None = None,
     work_dir: str | Path = ".",
     api_key: str | None = None,
-    save_credentials: bool = True,
+    save_credentials: bool = False,
     credentials_path: str | Path | None = None,
 ) -> Era5Result:
     """Orchestrates fetching every year-chunk in [start_date, end_date]
@@ -567,15 +567,10 @@ def fetch_era5_point(
     one CDS retrieve-and-download. Defaults to a real cdsapi-based
     implementation (see _default_cds_retrieve) reading credentials
     from ~/.cdsapirc via the official cdsapi client - the same
-    file-based pattern used for IMERG's Earthdata login. If api_key is
-    provided, it's SAVED to ~/.cdsapirc (see save_cds_credentials)
-    before being used for this run, so a key entered once via a QGIS
-    parameter is picked up automatically on every future run without
-    needing to be re-entered or ever appearing in a QGIS project file
-    or Processing history - the key lives only in the standard
-    cdsapi config file, never in this tool's own parameters/state.
-    Set save_credentials=False to use an api_key for this run only,
-    without persisting it.
+    file-based pattern used for IMERG's Earthdata login. An api_key
+    (from the tool's QGIS authentication configuration) is used for
+    this run only and not written anywhere; save_credentials=True
+    writes it to ~/.cdsapirc instead (see save_cds_credentials).
     """
     if product not in DATASETS:
         raise ValueError(
@@ -770,7 +765,7 @@ def fetch_era5_point_timeseries(
     read_fn: Callable = read_timeseries_csv_response,
     work_dir: str | Path = ".",
     api_key: str | None = None,
-    save_credentials: bool = True,
+    save_credentials: bool = False,
     credentials_path: str | Path | None = None,
 ) -> Era5Result:
     """The FAST access method - see TIMESERIES_DATASETS' own comment

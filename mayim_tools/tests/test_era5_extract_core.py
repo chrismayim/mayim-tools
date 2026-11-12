@@ -857,11 +857,12 @@ def test_fetch_era5_point_saves_provided_key_before_running():
         read_fn=fake_read,
         work_dir=tempfile.mkdtemp(),
         api_key="entered-via-qgis-parameter",
+        save_credentials=True,
         credentials_path=tmp_path,
     )
     assert (
         tmp_path.exists()
-    ), "providing api_key should have saved it to the credentials file"
+    ), "save_credentials=True should have saved it to the credentials file"
     assert "entered-via-qgis-parameter" in tmp_path.read_text()
     print("test_fetch_era5_point_saves_provided_key_before_running: PASS")
 

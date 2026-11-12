@@ -42,7 +42,7 @@ from . import lookup as lk
 from . import tables as tb
 
 TOOL_NAME = "SCS Curve Numbers"
-TOOL_VERSION = "0.3.0"
+TOOL_VERSION = "0.3.1"
 NODATA_OUT = -9999.0
 OUT_FILE = "curve_numbers.tif"
 # Output keys for RunSettings.outputs ({key: path}); without that map the
@@ -523,6 +523,9 @@ def run(
     dst.SetProjection(grid.crs_wkt)
     dst.SetMetadataItem("SOURCE", f"{TOOL_NAME} (mayim_tools) v{TOOL_VERSION}")
     dst.SetMetadataItem("LOOKUP", lookup.name)
+    # the Ia / S the curve numbers belong to (0.1 for SCS-SA, 0.2 for
+    # TR-55); Prepare HEC-HMS project reads it to keep CN and Ia consistent
+    dst.SetMetadataItem("IA_RATIO", f"{lam:g}")
     dst.SetMetadataItem("ANTECEDENT_MOISTURE", AMC_OPTIONS[s.amc])
     suffix = "" if s.amc == "none" else f"_{s.amc}"
     for i, (name, units) in enumerate(BANDS, 1):

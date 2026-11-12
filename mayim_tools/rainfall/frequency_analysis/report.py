@@ -16,6 +16,8 @@ from pathlib import Path
 
 import numpy as np
 
+from mayim_tools._common.frequency import aep_header, aep_label_long_from_one_in_x
+
 from . import charts
 
 TITLE = "Rainfall Depth-Duration-Frequency Analysis"
@@ -92,8 +94,8 @@ def _even(n_cols: int, first: float) -> list[float]:
 
 
 def _rp(t) -> str:
-    """Return period label: 1.0101 -> '1.01', 100.0 -> '100'."""
-    return f"{round(float(t), 2):g}"
+    """Label of return period t (AEP 1 in t): '2% AEP (1 in 50)'."""
+    return aep_label_long_from_one_in_x(float(t))
 
 
 def _chunks(seq, n):
@@ -202,7 +204,7 @@ def write_docx(result, path, inputs=None, context=None, charts_in=None) -> list[
                 )
                 summary_rows.append(
                     [
-                        f"Depth, {r['duration']}, {_rp(t)}-year (mm)",
+                        f"Depth, {r['duration']}, {_rp(t)} (mm)",
                         f"{_f(r['depth_mm'], 1)}{bounds}",
                     ]
                 )
@@ -217,8 +219,8 @@ def write_docx(result, path, inputs=None, context=None, charts_in=None) -> list[
         "out of every duration, so all durations share the same years. A time-zone "
         "offset, when given, is added before the calendar-year split.",
         "Annual maximum series (AMS) are extracted for each calendar year with "
-        "sliding windows at each duration. Return periods are annual-maximum values "
-        "(AEP = 1/T).",
+        "sliding windows at each duration. Frequencies are annual-maximum values, "
+        "reported as AEP (1 in T = 1/AEP, Mayim drainage terminology).",
     ]
     if md.get("fixed_interval_correction") not in (None, "off"):
         steps.append(
@@ -275,7 +277,7 @@ def write_docx(result, path, inputs=None, context=None, charts_in=None) -> list[
         ],
         ["Years left out", _list(excl) if excl else "none"],
         ["Durations analysed", _list([x.duration_label for x in ds_list])],
-        ["Return periods (years)", _list([round(t, 3) for t in rps])],
+        ["AEPs", ", ".join(_rp(t) for t in rps)],
         ["Fixed-interval correction", _txt(md.get("fixed_interval_correction"))],
         [
             "Distributions fitted per duration",
@@ -339,7 +341,7 @@ def write_docx(result, path, inputs=None, context=None, charts_in=None) -> list[
             + (", with the 5-95 % bootstrap bounds below each depth." if has_b else ".")
         )
         for part in _chunks(rps, RPS_PER_TABLE):
-            header = ["Duration"] + [f"{_rp(t)}-year" for t in part]
+            header = ["Duration"] + [aep_header(t, len(part)) for t in part]
             rows = []
             for dmin in durs:
                 row = [look[(dmin, rps[0])]["duration"]]
@@ -352,7 +354,7 @@ def write_docx(result, path, inputs=None, context=None, charts_in=None) -> list[
                 rows.append(row)
             d.caption(
                 "Table",
-                f"Recommended design depths (mm), {_rp(part[0])} to {_rp(part[-1])} years",
+                f"Recommended design depths (mm), {_rp(part[0])} to {_rp(part[-1])}",
             )
             d.table(header, rows, _even(len(header), 2.2))
         figure(
@@ -460,9 +462,7 @@ def write_docx(result, path, inputs=None, context=None, charts_in=None) -> list[
             for c in result.model_comparison
         }
         cdurs = sorted({c["duration_min"] for c in result.model_comparison})
-        header = ["Duration"] + [
-            f"{_rp(t)}-year model / GEV (difference)" for t in show
-        ]
+        header = ["Duration"] + [f"{_rp(t)} model / GEV (difference)" for t in show]
         rows = []
         for dmin in cdurs:
             row = [cl[(dmin, show[0])]["duration"] if (dmin, show[0]) in cl else "-"]
@@ -516,7 +516,7 @@ def write_docx(result, path, inputs=None, context=None, charts_in=None) -> list[
         "published regional DDF values (e.g. Smithers and Schulze 2003; ARR 2019 IFDs).",
         "Gridded products (ERA5, IMERG, CMORPH ...) are grid-cell averages: their DDF "
         "is an areal, product-specific DDF, typically low at short durations and rare "
-        "return periods compared with gauge DDFs. Use Adjust Sub-daily Rainfall to "
+        "AEPs compared with gauge DDFs. Use Adjust Sub-daily Rainfall to "
         "DDF to reconcile a gridded series with a gauge-based DDF.",
         "The bootstrap bounds express sampling uncertainty only, not uncertainty in "
         "the data or in the choice of model.",

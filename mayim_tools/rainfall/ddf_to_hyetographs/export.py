@@ -2,7 +2,7 @@
 CSV export for Alternating Block Method hyetographs.
 
 Three wide-format outputs, all sharing the same row/column structure
-(one row per Return Period + Target Duration, one column block per
+(one row per AEP + Target Duration, one column block per
 peak ratio in order 25/33/50/66/75%, each column labelled by the
 actual cumulative time it represents) so they're directly comparable
 side by side - only the VALUE at each cell differs:
@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import csv
 from pathlib import Path
+
+from mayim_tools._common.frequency import aep_from_one_in_x, format_aep
 
 from .core import PEAK_RATIOS, build_hyetograph
 
@@ -84,7 +86,7 @@ def _write_wide(
         _n_steps_for_duration(d, timestep_min) for _, d in return_periods_and_durations
     )
 
-    header = ["ReturnPeriodYears", "TargetDurationMin"]
+    header = ["AEP (%)", "TargetDurationMin"]
     for ratio in PEAK_RATIOS:
         pct = f"{int(ratio * 100)}%"
         for step in range(1, max_steps + 1):
@@ -108,7 +110,7 @@ def _write_wide(
                 allow_short_duration_extrapolation,
                 (lambda t, rt=rt: arf_model.factor(t, rt)) if areal else None,
             )
-            row = [rt, target_duration]
+            row = [float(format_aep(aep_from_one_in_x(rt))), target_duration]
             for ratio in PEAK_RATIOS:
                 values = hyeto[ratio][value_key]
                 padded = [round(v, decimals) for v in values] + [""] * (

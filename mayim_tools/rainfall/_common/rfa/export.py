@@ -14,6 +14,8 @@ from pathlib import Path
 
 import numpy as np
 
+from mayim_tools._common.frequency import aep_depth_header
+
 from .schemas import FrequencyAnalysisResult
 
 CSV_ENCODING = "utf-8-sig"
@@ -167,7 +169,7 @@ def write_quantiles(result: FrequencyAnalysisResult, path: str | Path) -> None:
     with _open(path) as f:
         w = csv.writer(f)
         header = ["Duration", "Distribution", "Recommended"] + [
-            f"AEP_{aep}_RT{round(1/aep,1)}yr" for aep in aeps
+            aep_depth_header(100.0 * aep) for aep in aeps
         ]
         _write_key(f, QUANTILES_KEY, header)
         w.writerow(header)
@@ -213,8 +215,8 @@ def write_recommended_ddf(result: FrequencyAnalysisResult, path: str | Path) -> 
     duration and return period, plus 5-95% bootstrap bounds when the
     bootstrap was run.
 
-    Column naming ('{RT}yr Depth (mm)', '{RT}yr Lower (mm)', '{RT}yr
-    Upper (mm)') matches the Design Rainfall (South Africa) CSV layout,
+    Column naming ('{AEP}% AEP Depth (mm)', '... Lower (mm)', '... Upper
+    (mm)', Mayim drainage terminology) matches the Design Rainfall (South Africa) CSV layout,
     so the table feeds straight into DDF to Hyetographs, Design Storm
     Ensembles and Adjust Sub-daily Rainfall to DDF. Falls back to the
     per-duration best-fit table (with a note) if the model could not be
@@ -236,11 +238,11 @@ def write_recommended_ddf(result: FrequencyAnalysisResult, path: str | Path) -> 
         w = csv.writer(f)
         header = ["Duration", "Distribution"]
         for t in rps:
-            header.append(f"{round(t, 3):g}yr Depth (mm)")
+            header.append(aep_depth_header(100.0 / t))
             if has_bounds:
                 header += [
-                    f"{round(t, 3):g}yr Lower (mm)",
-                    f"{round(t, 3):g}yr Upper (mm)",
+                    aep_depth_header(100.0 / t, "Lower"),
+                    aep_depth_header(100.0 / t, "Upper"),
                 ]
         w.writerow(header)
         for d in durs:
@@ -292,7 +294,7 @@ def write_per_duration_best_fit_ddf(
             w.writerow(["No recommended distributions available - see warnings."])
             return
         header = ["Duration", "RecommendedDistribution"] + [
-            f"{round(1/aep, 3):g}yr Depth (mm)" for aep in aeps
+            aep_depth_header(100.0 * aep) for aep in aeps
         ]
         w.writerow(header)
         for dur in durations:

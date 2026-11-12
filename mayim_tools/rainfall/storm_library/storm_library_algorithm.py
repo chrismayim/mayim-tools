@@ -27,6 +27,7 @@ from qgis.core import (
 )
 from qgis.PyQt.QtGui import QIcon
 
+from mayim_tools._common.frequency import aep_label_from_one_in_x
 from mayim_tools._common.output_files import CSV, WORD, OutputSpec, clean_name_part
 from mayim_tools.rainfall._common.ddf import DDFTable, read_ddf_csv
 
@@ -164,7 +165,7 @@ class AdjustToDdfAlgorithm(QgsProcessingAlgorithm):
             "annual-maximum curve G is fitted at the anchor duration (default 24 h). "
             "Storms (IETD separation) in the annual-maximum range are scaled so "
             "their anchor-duration depth equals the reference DDF depth at the "
-            "storm's own return period in G. Smaller storms and light rain follow a "
+            "storm's own AEP in G. Smaller storms and light rain follow a "
             "power curve f(x) = f(x0)(x/x0)^gamma joined continuously to it, with "
             "gamma solved so the adjusted series reproduces the target mean annual "
             "precipitation (MAP) exactly. gamma > 1 moves the annual total out of "
@@ -196,7 +197,8 @@ class AdjustToDdfAlgorithm(QgsProcessingAlgorithm):
             "is a statistical reconstruction for design and continuous simulation, "
             "not a corrected historical record, and cannot create detail finer than "
             "the native time step. Fixed-interval maxima use the Weiss (1964) factor "
-            "1/(1-1/(8n)); return periods are annual-maximum values (AEP = 1/T). "
+            "1/(1-1/(8n)); frequencies are annual-maximum values, reported as % AEP "
+            "(AEP 1 in T = 1/AEP, Mayim drainage terminology). "
             "Tier 3 (gridded-only) references are stamped INDICATIVE - NOT "
             "VALIDATED in every output. Supply an ARF-applied reference if the series "
             "must represent a catchment rather than a point.\n\n"
@@ -224,8 +226,8 @@ class AdjustToDdfAlgorithm(QgsProcessingAlgorithm):
             "\n"
             "Reference DDF CSV: Design Rainfall (South Africa) output (single- or "
             "multi-site), Precipitation data to DDF output, or any table with a "
-            "'Duration' column and '<T>yr Depth (mm)' columns (T = annual-maximum "
-            "return period, AEP = 1/T). Lower/Upper bound columns are carried "
+            "'Duration' column and '<AEP>% AEP Depth (mm)' columns (or the older "
+            "'<T>yr Depth (mm)', T = AEP 1 in T). Lower/Upper bound columns are carried "
             "separately; continuous '24 h' is preferred over fixed '1 day'; day-"
             "labelled durations are converted with the Weiss factor.\n"
             "\n"
@@ -256,8 +258,8 @@ class AdjustToDdfAlgorithm(QgsProcessingAlgorithm):
             "\n"
             "Anchor duration (default 24 h): the duration at which pass 1 matches "
             "each storm's magnitude to the DDF (storm depth over the anchor -> its "
-            "return period in the product's own record -> scaled to the DDF depth "
-            "at that return period). Shorter durations are then corrected by pass 2"
+            "AEP in the product's own record -> scaled to the DDF depth "
+            "at that AEP). Shorter durations are then corrected by pass 2"
             " without changing the anchor totals. 24 h is recommended: gridded "
             "products are most reliable near daily totals, it is the best-supported"
             " part of gauge DDFs, and most storms fit within it. Use 12 h for short"
@@ -276,7 +278,7 @@ class AdjustToDdfAlgorithm(QgsProcessingAlgorithm):
             " than the anchor, are then independent validation. Keep at least one "
             "duration unfitted between rungs so the result can be validated.\n"
             "\n"
-            "Peak concentration varies with return period (default on): lets rarer "
+            "Peak concentration varies with AEP (default on): lets rarer "
             "storms be sharpened more than frequent ones, which matches the known "
             "behaviour of reanalysis products. Switch off only for a simpler "
             "single-factor adjustment.\n"
@@ -466,7 +468,7 @@ class AdjustToDdfAlgorithm(QgsProcessingAlgorithm):
         add(
             QgsProcessingParameterBoolean(
                 self.RARITY_DEPENDENT,
-                "Let peak concentration vary with return period",
+                "Let peak concentration vary with AEP",
                 defaultValue=True,
             )
         )
@@ -715,8 +717,10 @@ class AdjustToDdfAlgorithm(QgsProcessingAlgorithm):
             f"{grid.index.min()} to {grid.index.max()}"
         )
         feedback.pushInfo(
-            f"Reference DDF: {len(ref.durations)} durations, return periods "
-            f"{', '.join(f'{t:g}' for t in ref.aris)} yr"
+            f"Reference DDF: {len(ref.durations)} durations, AEPs "
+            + ", ".join(
+                aep_label_from_one_in_x(t) for t in sorted(ref.aris, reverse=True)
+            )
         )
         for conv in ref_info.get("fixed_day_durations", []):
             feedback.pushInfo(f"Reference fixed-day duration converted: {conv}")

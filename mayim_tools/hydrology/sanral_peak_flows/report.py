@@ -14,6 +14,11 @@ import math
 from pathlib import Path
 
 from mayim_tools._common.docx_report import Doc
+from mayim_tools._common.frequency import (
+    aep_header,
+    aep_label_long_from_one_in_x,
+    format_aep,
+)
 
 from . import tables as tb
 from .core import RunResult
@@ -67,8 +72,8 @@ METHOD_TEXT = {
     ),
     "midgley_pitman": (
         "Q_T = 0.0377 K_T P A^0.6 C^0.2 with C = A S^0.5 / (L Lc) (DM Eq 3.34 and "
-        "3.35) and K_T for the generalised veld-type zone (Table 3.17), 1:10 to "
-        "1:100 years."
+        "3.35) and K_T for the generalised veld-type zone (Table 3.17), 10% AEP "
+        "(1 in 10) to 1% AEP (1 in 100)."
     ),
     "rmf": (
         "Regional maximum flood (Kovacs 1988, TR137; DM Table 3.18) for the "
@@ -76,7 +81,7 @@ METHOD_TEXT = {
         "for the effective area (Francou-Rodier, DM Eq 3.36, with a custom K)."
     ),
     "rmf_ratio": (
-        "1:50, 1:100 and 1:200 year peaks as Q_T/Q_RMF fractions of the RMF "
+        "2%, 1% and 0.5% AEP (1 in 50, 100 and 200) peaks as Q_T/Q_RMF fractions of the RMF "
         "(DM Appendix 3D, Table 3D.1), interpolated linearly in Ae."
     ),
     "capa": (
@@ -91,7 +96,7 @@ EQUATIONS = (
     (
         "Runoff coefficient C_T (-)",
         "α C1 Ft + β C2 + γ C3",
-        "Rural, urban and lakes components; Ft from DM Table 3.8 (1.0 at 1:200)",
+        "Rural, urban and lakes components; Ft from DM Table 3.8 (1.0 at 0.5% AEP)",
     ),
     (
         "Point rainfall P (mm)",
@@ -168,8 +173,14 @@ def _txt(v) -> str:
 # ---------------------------------------------------------------- chart
 
 
+def _bar_aeps(rps):
+    """The two AEPs of the bar chart: 2% and 1% AEP (1 in 50 and 1 in 100)
+    when chosen, else the two rarest."""
+    return [T for T in (50, 100) if T in rps] or list(rps)[-2:]
+
+
 def chart_figure(item, rps):
-    """(PNG stream, style warnings) of the 1:50 and 1:100 year peak flows per
+    """(PNG stream, style warnings) of the 2% and 1% AEP peak flows per
     method as horizontal bars in the house chart style, or (None, []) when
     there is nothing to draw. Raises ImportError without matplotlib."""
     from matplotlib.patches import Patch
@@ -177,7 +188,7 @@ def chart_figure(item, rps):
 
     from mayim_tools._common.report_figures import ChartStyle
 
-    show = [T for T in (50, 100) if T in rps] or list(rps)[-2:]
+    show = _bar_aeps(rps)
     methods = [
         m
         for m in METHOD_ORDER
@@ -210,7 +221,10 @@ def chart_figure(item, rps):
             )  # fmt: skip
             handles.append(
                 Patch(
-                    facecolor=colour, edgecolor="#000000", lw=0.75, label=f"1:{T} year"
+                    facecolor=colour,
+                    edgecolor="#000000",
+                    lw=0.75,
+                    label=aep_label_long_from_one_in_x(T),
                 )
             )
         ax.set_yticks([i + height * (len(show) - 1) / 2 for i in range(len(methods))])
@@ -237,7 +251,7 @@ def chart_figure(item, rps):
 
 
 def curve_figure(item, rps):
-    """(PNG stream, style warnings) of the peak flow against return period
+    """(PNG stream, style warnings) of the peak flow against AEP
     for every method of one catchment (house chart style), with the RMF as a
     black dashed reference line; (None, []) when there is nothing to draw.
     Raises ImportError without matplotlib."""
@@ -291,12 +305,12 @@ def curve_figure(item, rps):
         ticks = sorted({T for _m, pts in series for T, _q in pts})
         ax.set_xlim(min(ticks) / 1.15, max(ticks) * 1.15)
         ax.set_ylim(bottom=0)
-        ax.set_xlabel("Return period (years)")
+        ax.set_xlabel("AEP (%)")
         ax.set_ylabel("Peak flow (m³/s)")
         style.axes(ax)
         ax.xaxis.set_major_locator(FixedLocator(ticks))
         ax.xaxis.set_minor_locator(NullLocator())
-        ax.set_xticklabels([f"1:{T}" for T in ticks])
+        ax.set_xticklabels([f"{format_aep(100.0 / T)}%" for T in ticks])
         for label in ax.get_xticklabels():
             label.set_fontproperties(style.font_props())
         fmt = ScalarFormatter(useOffset=False)
@@ -321,7 +335,7 @@ def curve_figure(item, rps):
 def _results_table(doc, item, rps, cid, caption=None):
     by = {(r.method, r.return_period): r for r in item.results}
     methods = [m for m in METHOD_ORDER if any(r.method == m for r in item.results)]
-    header = ["Method"] + [f"1:{T}" for T in rps] + ["RMF"]
+    header = ["Method"] + [aep_header(T, len(rps)) for T in rps] + ["RMF"]
     rows = []
     for m in methods:
         if m == "rmf":
@@ -354,9 +368,9 @@ def _derivation_tables(doc, item, cid):
                 doc.para(
                     str(first[k]), bold_lead=k.replace("_", " ").capitalize() + ":"
                 )
-        header = ["T (years)"] + [DERIVATION_LABELS[k][0] for k in keys] + ["Q (m³/s)"]
+        header = ["AEP"] + [DERIVATION_LABELS[k][0] for k in keys] + ["Q (m³/s)"]
         rows = [
-            [str(r.return_period)]
+            [aep_header(r.return_period)]
             + [num(r.derivation.get(k), DERIVATION_LABELS[k][1]) for k in keys]
             + [q_text(r.q_m3s)]
             for r in results
@@ -415,8 +429,9 @@ def write_report(path, run: RunResult, run_info: dict, context=None) -> list[str
     doc.heading("Summary", 1)
     doc.para(
         f"Design peak flows were calculated for {len(run.items)} catchment(s) with "
-        f"{len(run.settings.methods)} method(s) and return periods of "
-        f"{', '.join(f'1:{T}' for T in rps)} years. Each catchment is an independent "
+        f"{len(run.settings.methods)} method(s) and annual exceedance probabilities "
+        f"of {', '.join(aep_label_long_from_one_in_x(T) for T in rps)}. Each "
+        "catchment is an independent "
         "design point; no flood routing is applied. The Manual (Section 3.2.2) asks "
         "for the methods to be compared, not weighted, and for the SDF always to be "
         "included; the design value is the engineer's choice."
@@ -430,7 +445,7 @@ def write_report(path, run: RunResult, run_info: dict, context=None) -> list[str
             + [_range(item, T) for T in show]
         )
     header = ["Catchment", "Area (km²)", "Tc (min)"] + [
-        f"1:{T} year, range of methods (m³/s)" for T in show
+        f"{aep_header(T)}, range of methods (m³/s)" for T in show
     ]
     doc.caption("Table", "Summary of peak flows")
     doc.table(header, rows, widths_cm=[3.0, 2.2, 2.0] + [9.3 / len(show)] * len(show))
@@ -524,7 +539,9 @@ def write_report(path, run: RunResult, run_info: dict, context=None) -> list[str
             notes.append("Charts not drawn: matplotlib is not available.")
         if stream is not None:
             doc.picture(
-                stream, f"1:50 and 1:100 year peak flows by method, catchment {cid}"
+                stream,
+                f"{' and '.join(aep_label_long_from_one_in_x(T) for T in _bar_aeps(rps))}"
+                f" peak flows by method, catchment {cid}",
             )
         doc.heading("Parameter derivations", 3)
         _derivation_tables(doc, item, cid)
@@ -538,8 +555,8 @@ def write_report(path, run: RunResult, run_info: dict, context=None) -> list[str
     doc.heading("Summary of peak flows", 1)
     doc.para(
         "The peak flows of every method are collected here per catchment, with "
-        "the peak flow against return period for each method. The RMF (Kovacs) "
-        "is shown as a reference line; it has no return period."
+        "the peak flow against AEP for each method. The RMF (Kovacs) "
+        "is shown as a reference line; it has no AEP."
     )
     for item in run.items:
         cid = item.catchment.catchment_id
@@ -559,7 +576,7 @@ def write_report(path, run: RunResult, run_info: dict, context=None) -> list[str
         if stream is not None:
             doc.picture(
                 stream,
-                f"Peak flow against return period by method, catchment {cid}",
+                f"Peak flow against AEP by method, catchment {cid}",
             )
 
     # ------------------------------------------------------------ outputs

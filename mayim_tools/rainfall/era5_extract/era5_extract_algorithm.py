@@ -19,6 +19,7 @@ from qgis.core import (
     QgsProcessingContext,
     QgsProcessingException,
     QgsProcessingFeedback,
+    QgsProcessingParameterAuthConfig,
     QgsProcessingParameterEnum,
     QgsProcessingParameterFeatureSource,
     QgsProcessingParameterField,
@@ -28,6 +29,8 @@ from qgis.core import (
 )
 from qgis.PyQt.QtGui import QIcon
 
+from mayim_tools._common.credentials import SETUP_HELP, basic_auth_values
+from mayim_tools._common.data_sources import data_source_help, log_data_source
 from mayim_tools._common.output_files import CSV, OutputSpec
 from mayim_tools.rainfall._common.extract_outputs import (
     OUTPUT_CSV,
@@ -68,6 +71,9 @@ OUTPUT_SPECS = extract_specs(
 )
 
 
+TOOL_VERSION = "0.7.0"
+
+
 class Era5ExtractAlgorithm(QgsProcessingAlgorithm):
     POINT = "POINT"
     INPUT_POINTS = "INPUT_POINTS"
@@ -77,7 +83,7 @@ class Era5ExtractAlgorithm(QgsProcessingAlgorithm):
     START_DATE = "START_DATE"
     END_DATE = "END_DATE"
     YEARS_PER_CHUNK = "YEARS_PER_CHUNK"
-    CDS_API_KEY = "CDS_API_KEY"
+    CDS_AUTH = "CDS_AUTH"
     OUTPUT_CSV = "OUTPUT_CSV"
     OUTPUT_ANOMALIES = "OUTPUT_ANOMALIES"
     OUTPUT_MATCHED_POINTS = "OUTPUT_MATCHED_POINTS"
@@ -110,11 +116,17 @@ class Era5ExtractAlgorithm(QgsProcessingAlgorithm):
         return "rainfall_tools"
 
     def shortHelpString(self):
-        return self._base_help() + "\n\n" + files_help(OUTPUT_SPECS)
+        return (
+            self._base_help()
+            + "\n\n"
+            + files_help(OUTPUT_SPECS)
+            + "\n\n"
+            + data_source_help("era5")
+        )
 
     def _base_help(self):
         return (
-            "Extract: ERA5 precipitation (version 0.6.0)\n"
+            f"Extract: ERA5 precipitation (version {TOOL_VERSION})\n"
             "\n"
             "PURPOSE:\tExtracts ERA5 or ERA5-Land total precipitation at a "
             "point for a specified date range or the full available record "
@@ -169,16 +181,15 @@ class Era5ExtractAlgorithm(QgsProcessingAlgorithm):
             "correct on its own.\n"
             "\n"
             "BACKGROUND:\tRequires a free CDS account "
-            "(https://cds.climate.copernicus.eu). Enter your Personal "
-            "Access Token (from https://cds.climate.copernicus.eu/profile) "
-            "into the 'CDS API Key' parameter the FIRST time you run this "
-            "tool - it will be saved to ~/.cdsapirc automatically (the "
-            "standard config file the official cdsapi client reads) and "
-            "picked up on every run after that, so you only need to enter "
-            "it once. Leave the field blank on subsequent runs. The key is "
-            "never stored anywhere inside this tool or a QGIS project file "
-            "- only in that one standard config file, exactly as if you'd "
-            "created it yourself by hand. You must also accept the "
+            "(https://cds.climate.copernicus.eu). Choose your CDS login in "
+            "the 'CDS login' parameter: a QGIS authentication configuration "
+            "(set up once under Settings > Options > Authentication > Add, "
+            "method 'Basic authentication', any username such as 'cds', and "
+            "your Personal Access Token from "
+            "https://cds.climate.copernicus.eu/profile as the password). QGIS "
+            "keeps it encrypted under your master password, so the key is "
+            "never written to the processing history, the log or a project "
+            "file. Without a login chosen, an existing ~/.cdsapirc is used. You must also accept the "
             "dataset's Terms of Use on the CDS website (logged in, visit "
             "the dataset page and accept the licence at the bottom of the "
             "download form) before the API will serve data - a one-time "
@@ -207,9 +218,8 @@ class Era5ExtractAlgorithm(QgsProcessingAlgorithm):
             "larger failure if something goes wrong partway through. Not "
             "used by the Fast method, which always makes one request "
             "covering the whole date range.\n"
-            "  CDS API Key: enter this ONCE - it's saved to ~/.cdsapirc "
-            "automatically and every later run reads it from there, so "
-            "leave this blank after the first successful run.\n"
+            "  CDS login: the QGIS authentication configuration holding your "
+            "CDS Personal Access Token (see BACKGROUND).\n"
             "  Output: matched grid cell location: one point per site, at "
             "the actual nearest-gridpoint coordinate the data was pulled "
             "from - the same location reported in the 'matched to the "
@@ -292,9 +302,9 @@ class Era5ExtractAlgorithm(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
-            QgsProcessingParameterString(
-                self.CDS_API_KEY,
-                "CDS API Key (enter once - saved automatically for future runs)",
+            QgsProcessingParameterAuthConfig(
+                self.CDS_AUTH,
+                "CDS login (QGIS authentication configuration)",
                 optional=True,
             )
         )
@@ -340,6 +350,7 @@ class Era5ExtractAlgorithm(QgsProcessingAlgorithm):
     def processAlgorithm(
         self, parameters, context: QgsProcessingContext, feedback: QgsProcessingFeedback
     ):
+        log_data_source(feedback, "era5")
         self._post_processors = []
         sites = self.collect_sites(parameters, context, feedback)
         feedback.pushInfo(f"{len(sites)} site(s) to process.")
@@ -356,7 +367,13 @@ class Era5ExtractAlgorithm(QgsProcessingAlgorithm):
         )
         end_date = self.parameterAsString(parameters, self.END_DATE, context) or None
         years_per_chunk = self.parameterAsInt(parameters, self.YEARS_PER_CHUNK, context)
-        api_key = self.parameterAsString(parameters, self.CDS_API_KEY, context) or None
+        authcfg = self.parameterAsString(parameters, self.CDS_AUTH, context)
+        api_key = None
+        if authcfg:
+            try:
+                api_key = basic_auth_values(authcfg)[1]
+            except ValueError as e:
+                raise QgsProcessingException(str(e)) from e
         out = ExtractOutputs(
             self, OUTPUT_SPECS, parameters, context, feedback, STYLES_DIR
         )
@@ -376,10 +393,11 @@ class Era5ExtractAlgorithm(QgsProcessingAlgorithm):
             )
 
         if api_key:
-            # Never log the key itself - only confirm that saving happened.
+            # never log the key itself
+            feedback.pushInfo("CDS login: QGIS authentication configuration.")
+        else:
             feedback.pushInfo(
-                "CDS API key provided - will be saved to ~/.cdsapirc for future runs "
-                "(leave this field blank next time)."
+                "No CDS login chosen - using ~/.cdsapirc if it exists. " + SETUP_HELP
             )
 
         results_by_site = {}

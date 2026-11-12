@@ -10,6 +10,12 @@ from __future__ import annotations
 import csv
 import math
 
+from mayim_tools._common.frequency import (
+    aep_from_one_in_x,
+    aep_label_long_from_one_in_x,
+    format_aep,
+)
+
 from . import cells as cl
 from . import lookup as lk
 from . import tables as tb
@@ -23,7 +29,11 @@ C_DETAIL_COLUMNS = tuple(
     f"{p}{i}_pct" for p in ("cs", "cp", "cv") for i in range(1, 5)
 ) + ("cs", "cp", "cv", "c1_base", "d_pct", "d_factor", "map_mm")
 SHORT = ("vlei", "flat", "hill", "steep")
-PERIOD_FIELDS = [(t, f"C_{t}") for t in tb.RETURN_PERIODS] + [("PMF", "C_PMF")]
+# 'C_2P' = C at 2% AEP (AEP 1 in 50); fields before 0.30 were C_<T>
+PERIOD_FIELDS = [
+    (t, f"C_{format_aep(aep_from_one_in_x(t)).replace('.', 'p')}P")
+    for t in tb.RETURN_PERIODS
+] + [("PMF", "C_PMF")]
 
 # field -> definition (all fields of the catchment layer, at most 10 characters)
 FIELDS = {
@@ -66,7 +76,7 @@ FIELDS = {
     "MAP_mm": "Mean annual precipitation (mm)",
     "MAP_band": "Table 3.7 MAP band (mm)",
     **{
-        f: f"C_T = alpha C1D Ft + beta C2 + gamma C3, {t}-year"
+        f: f"C_T = alpha C1D Ft + beta C2 + gamma C3, {aep_label_long_from_one_in_x(t)}"
         for t, f in PERIOD_FIELDS[:-1]
     },
     "C_PMF": "C for the PMF: C1 = Cs + Cp,max + Cv,max, C2 = 1, Ft = 1",
@@ -360,7 +370,8 @@ def write_results_csv(path: str, r: RunResult, inputs: list | None = None) -> No
         w.writerow(["Dolomite factor"] + list(tb.SLOPE_CLASSES))
         w.writerow([""] + list(tb.DOLOMITE_FACTORS))
         w.writerow(
-            ["Ft (Table 3.8)", "return period (years)"] + list(tb.RETURN_PERIODS)
+            ["Ft (Table 3.8)", "AEP"]
+            + [aep_label_long_from_one_in_x(t) for t in tb.RETURN_PERIODS]
         )
         for key, vals in tb.FT.items():
             w.writerow(["Ft", tb.FT_LABELS[key], *vals])

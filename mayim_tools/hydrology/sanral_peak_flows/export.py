@@ -7,6 +7,7 @@ from __future__ import annotations
 import csv
 import math
 
+from mayim_tools._common.frequency import aep_label_long, aep_label_long_from_one_in_x
 from mayim_tools._common.results_json import build_results, result_entry, write_results
 
 from . import tables as tb
@@ -34,12 +35,16 @@ ABBREVIATIONS = (
     ("Lc", "km", "outlet to the point on L nearest the centroid"),
     ("SA", "m/m", "mean catchment slope (CAPA)"),
     ("Tc", "h", "time of concentration"),
-    ("T", "years", "return period (AEP = 1/T)"),
+    ("AEP", "%", "annual exceedance probability; T = AEP (1 in x) = 1/AEP"),
     ("P", "mm", "point rainfall depth for duration Tc"),
     ("Pi, I", "mm/h", "point intensity P/Tc; catchment intensity Pi x ARF"),
     ("ARF", "%", "areal reduction factor"),
     ("C_T, Ft", "-", "runoff coefficient for T; rural C1 adjustment (Table 3.8)"),
-    ("M, R", "mm, days", "2-year 1-day TR102 depth; days per year with thunder"),
+    (
+        "M, R",
+        "mm, days",
+        "50% AEP (1 in 2) 1-day TR102 depth; days per year with thunder",
+    ),
     ("K_T, K_P", "-", "Midgley & Pitman (Table 3.17) / CAPA (Table 5-2) factors"),
     ("Q", "m3/s", "peak flow"),
 )
@@ -98,7 +103,7 @@ def settings_rows(run: RunResult) -> list:
     s = run.settings
     rows = [
         ("Methods", ", ".join(METHODS[m][1] for m in METHOD_ORDER if m in s.methods)),
-        ("Return periods (years)", " ".join(str(T) for T in s.return_periods)),
+        ("AEPs", ", ".join(aep_label_long_from_one_in_x(T) for T in s.return_periods)),
         ("Tc floor 15 min (Rational)", "yes" if s.tc_floor else "no"),
         ("Apply ARF (Rational)", "yes" if s.apply_arf else "no"),
         (
@@ -201,12 +206,13 @@ def write_csv(path, run: RunResult, run_info: dict) -> None:
 
 
 def field_definition(name: str) -> str:
-    parts = name.split("_")
-    code = parts[1]
+    """'QRAT2_2P' -> 'Rational (...): 2% AEP (1 in 50) peak flow'."""
+    code, _, tag = name[1:].partition("_")
     label = next(v[1] for v in METHODS.values() if v[0] == code)
-    if len(parts) == 2:
+    if not tag:
         return f"{label}: peak flow"
-    return f"{label}: 1:{parts[2]} year peak flow"
+    aep = float(tag.rstrip("P").replace("p", "."))
+    return f"{label}: {aep_label_long(aep)} peak flow"
 
 
 def build_results_json(run: RunResult, tool: dict, inputs: dict) -> dict:

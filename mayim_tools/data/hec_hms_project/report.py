@@ -22,7 +22,7 @@ from .storms import (
     SOURCE_ENSEMBLE,
     SOURCE_HUFF,
     SOURCE_LABELS,
-    ari_label,
+    ari_label_long,
     duration_label,
     nested_cumulative,
 )
@@ -141,7 +141,7 @@ def _loss_methods_text(d, s, m) -> None:
             f"maximum retention S = 25400/CN - 254 (mm) and Ia = {s.lambda_ia:g} S. "
             f"Each sub-basin's curve number is the {m['cn']} of the CN raster cells "
             "within it (or the CN field given). The antecedent moisture condition is "
-            "that of the CN raster. " + imp
+            "that of the CN raster. " + _lambda_note(s) + imp
         )
         return
     ks = (
@@ -230,9 +230,7 @@ def add_arf_sections(
         if len(storms) and any(st.arf_values for st in storms):
             head, rows = arf_table(storms, arf)
             if rows:
-                d.caption(
-                    "Table", "Areal reduction factor by duration and return period"
-                )
+                d.caption("Table", "Areal reduction factor by duration and AEP")
                 d.table(head, [[r[0]] + [f"{v:.3f}" for v in r[1:]] for r in rows])
     head, rows = burst_table(named_storms)
     if rows:
@@ -249,12 +247,12 @@ def add_arf_sections(
             "rainfall (e.g. ERA5, hourly averages over about 30 km cells) applied "
             "to a small catchment, and the peak flows of those storms may then be "
             "low. Frequency storms follow the areal DDF by construction (100 %). "
-            f"The table lists the {ari_label(tmax)} year storms; every storm is in "
+            f"The table lists the {ari_label_long(tmax)} storms; every storm is in "
             "the CSV output (section 'Burst check')."
         )
         d.caption(
             "Table",
-            f"Burst check, {ari_label(tmax)} year storms (% of the areal DDF depth)",
+            f"Burst check, {ari_label_long(tmax)} storms (% of the areal DDF depth)",
         )
         d.table(
             head,
@@ -578,7 +576,7 @@ def write_report(
         d.para(
             "The storm depth from the DDF table is distributed with the ensemble "
             "pattern of the matching duration, AEP band (frequent, intermediate or "
-            "rare, from the return period) and storm shape.",
+            "rare, from the AEP) and storm shape.",
             bold_lead="Ensembles.",
         )
     d.para(
@@ -682,7 +680,7 @@ def write_report(
         rows.append(
             [
                 run.name,
-                ari_label(st.ari),
+                ari_label_long(st.ari),
                 duration_label(st.duration_min),
                 _f(st.total_mm, 1),
                 _f(st.peak_intensity_mmh, 1),
@@ -690,7 +688,7 @@ def write_report(
             ]
         )
     d.table(
-        ["Run", "Return period", "Duration", "Depth (mm)", "Peak (mm/h)", "Pattern"],
+        ["Run", "AEP", "Duration", "Depth (mm)", "Peak (mm/h)", "Pattern"],
         rows,
     )
     try:
@@ -702,7 +700,7 @@ def write_report(
             tmax = max(run.storm.ari for run in r.runs)
             d.picture(
                 style.png(fig),
-                f"Cumulative rainfall of the {ari_label(tmax)} year storms",
+                f"Cumulative rainfall of the {ari_label_long(tmax)} storms",
             )
     except Exception as e:  # noqa: BLE001
         notes.append(f"Storm figure not drawn: {e}")
@@ -710,12 +708,12 @@ def write_report(
     if r.ensembles:
         d.heading("Ensemble analyses", 2)
         d.para(
-            "Each storm method and return period is an ensemble analysis in "
+            "Each storm method and AEP is an ensemble analysis in "
             "HEC-HMS, with all its durations and peak positions / patterns as "
             "members and the outflow of every element as an analysis point. "
             "HEC-HMS reports the statistics (minimum, mean, maximum) of the "
             "members' hydrographs; the largest peak is the critical storm of that "
-            "method and return period. The runs share one control specification, "
+            "method and AEP. The runs share one control specification, "
             "as HEC-HMS ensemble members need the same time window."
         )
         d.caption("Table", "Ensemble analyses")
@@ -728,7 +726,7 @@ def write_report(
             )
         else:
             d.table(
-                ["Ensemble", "Method", "Return period", "Members"],
+                ["Ensemble", "Method", "AEP", "Members"],
                 [[x[0], x[1], x[2], str(x[3])] for x in rows],
                 widths_cm=[5.0, 4.5, 3.5, 3.5],
             )
@@ -802,3 +800,21 @@ def write_report(
         d.para(ref)
     d.doc.save(path)
     return notes
+
+
+def _lambda_note(s) -> str:
+    """Sentence on the Ia / S of the curve numbers (H4)."""
+    basis = getattr(s, "cn_lambda_basis", None)
+    if basis is None:
+        return ""
+    if abs(basis - s.lambda_ia) < 1e-12:
+        return (
+            f"The curve numbers belong to Ia / S = {basis:g} (the ratio of their "
+            "source table), the same ratio used here. "
+        )
+    return (
+        f"The curve numbers belong to Ia / S = {basis:g}; for Ia / S = "
+        f"{s.lambda_ia:g} each sub-basin's CN was converted to the value that "
+        f"gives the same runoff at the CN design depth of "
+        f"{s.cn_design_depth_mm:g} mm (Hawkins et al. 2002 principle). "
+    )

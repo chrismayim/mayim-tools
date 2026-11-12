@@ -323,8 +323,9 @@ def test_run_catchment_all_methods_and_fields():
     )
     got = set(cr.by_field())
     assert got == set(field_names(s))
-    assert "Q_RMF" in got and "Q_MP_10" in got and "Q_RMFR_200" in got
-    assert "Q_CAPA_2" in got and "Q_MP_2" not in got
+    assert "QRMF" in got and "QMP_10P" in got and "QRMFR_0p5P" in got
+    assert all(len(n) <= 10 for n in got)
+    assert "QCAPA_50P" in got and "QMP_50P" not in got
 
 
 def test_run_skips_with_notes():
@@ -419,7 +420,7 @@ def test_csv_export(tmp_path):
     text = p.read_text(encoding="utf-8-sig")
     for n in range(1, 10):
         assert f"# {n} " in text
-    assert "Q_SDF_100" in text and "8059.42" in text
+    assert "QSDF_1P" in text and "8059.42" in text
     assert (
         "," not in text.split("# 4")[1].splitlines()[2].split(",")[1]
     )  # no 1,000 separators
@@ -484,7 +485,7 @@ def test_word_report(tmp_path):
     # catchment
     n = len(_full_run().items)
     assert text.count("Summary of peak flows (m³/s), catchment") == n
-    assert text.count("Peak flow against return period by method") == n
+    assert text.count("Peak flow against AEP by method") == n
     cells = "\n".join(c.text for t in doc.tables for r in t.rows for c in r.cells)
     assert "MC2025_014" in cells and "Table 1:" in text
     assert not re.search(r"\d,\d{3}", cells)  # no thousands separators

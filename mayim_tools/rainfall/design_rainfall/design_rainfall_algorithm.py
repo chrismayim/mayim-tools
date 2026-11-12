@@ -48,6 +48,8 @@ from qgis.core import (
 )
 from qgis.PyQt.QtGui import QIcon
 
+from mayim_tools._common.data_sources import log_data_source
+from mayim_tools._common.frequency import aep_label_long_from_one_in_x
 from mayim_tools._common.output_files import (
     CSV,
     EXTENSIONS,
@@ -79,7 +81,7 @@ from .report import (
     write_report_docx,
 )
 
-TOOL_VERSION = "1.3.0"
+TOOL_VERSION = "1.4.0"
 
 WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
 
@@ -203,6 +205,13 @@ class DesignRainfallPointAlgorithm(QgsProcessingAlgorithm):
             "'Design Rainfall Estimation in South Africa' program. The "
             "nearest daily rainfall stations are listed for reference only "
             "and are NOT used in the grid-based calculation.<br><br>"
+            "<b>DATA SOURCE AND LICENCE</b><br>"
+            "The bundled grid was extracted from the Water Research "
+            "Commission's publicly available 'Design Rainfall Estimation in "
+            "South Africa' program. Copyright remains with the WRC and the "
+            "authors; the grid is not covered by the plugin's GPL-3 licence "
+            "(see DATA_NOTICE.md). Acknowledge Smithers &amp; Schulze (2002), "
+            "WRC Report K5/1060, wherever the results are used.<br><br>"
             "<b>PARAMETERS</b><br>"
             "<i>Point of interest</i> - click the map or type coordinates; "
             "OR <i>point layer</i> - every feature is processed (optional "
@@ -211,8 +220,10 @@ class DesignRainfallPointAlgorithm(QgsProcessingAlgorithm):
             "prefix and shown on the report's title page.<br>"
             "<i>Project / site name</i> - optional, shown on the report's "
             "title page only (not used in file names).<br>"
-            "<i>Durations / Return periods</i> - the combinations to "
-            "estimate.<br>"
+            "<i>Durations / AEPs</i> - the combinations to estimate. "
+            "Frequencies follow the Mayim drainage terminology: the grid's "
+            "T-year values are annual-maximum, so AEP = 1/T (2% AEP is 1 in "
+            "50).<br>"
             "<i>Nearest rainfall stations to list</i> - number of stations "
             "per site, reference only, not used in the calculation (0 = "
             "none).<br>"
@@ -232,17 +243,18 @@ class DesignRainfallPointAlgorithm(QgsProcessingAlgorithm):
             + files.replace("\n", "<br>")
             + "<br><br>"
             "<i>Snapped grid point(s)</i> - the grid point(s) used, with the "
-            "duration x return-period depths as attributes (field names "
+            "duration x AEP depths as attributes, e.g. 24h_2P = 24 h, 2% AEP "
+            "(field names "
             "over 10 characters are shortened for the shapefile).<br>"
             "<i>Point(s) of interest (POI)</i> - the requested location(s), "
             "independently of the snapped grid points.<br>"
             "<i>Nearest rainfall stations</i> - the stations listed above, "
             "as a point layer (reference only).<br>"
-            "<i>Depth table (CSV)</i> - duration x return period table "
+            "<i>Depth table (CSV)</i> - duration x AEP table "
             "(depth, lower, upper), with the nearest stations appended.<br>"
             "<i>DDF table (CSV)</i> - the duration-depth-frequency table "
-            "only: Duration and one '&lt;T&gt;yr Depth (mm)' column per return "
-            "period, without the lower and upper bounds, the site details "
+            "only: Duration and one '&lt;AEP&gt;% AEP Depth (mm)' column per "
+            "AEP, without the lower and upper bounds, the site details "
             "or the stations (a leading Site column with several sites).<br>"
             "<i>Design rainfall report (Word)</i> - annexure in the Mayim "
             "report standard: title page, summary, method, inputs, "
@@ -302,8 +314,8 @@ class DesignRainfallPointAlgorithm(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterEnum(
                 self.RETURN_PERIODS,
-                "Return periods (years)",
-                options=[str(rt) for rt in RETURN_PERIODS],
+                "Annual exceedance probabilities (AEP)",
+                options=[aep_label_long_from_one_in_x(rt) for rt in RETURN_PERIODS],
                 allowMultiple=True,
                 defaultValue=list(range(len(RETURN_PERIODS))),
             )
@@ -392,6 +404,7 @@ class DesignRainfallPointAlgorithm(QgsProcessingAlgorithm):
     def processAlgorithm(
         self, parameters, context: QgsProcessingContext, feedback: QgsProcessingFeedback
     ):
+        log_data_source(feedback, "wrc_design_rainfall")
         self._post_processors = []
         self._warnings = []
         sites = self._collect_sites(parameters, context, feedback)

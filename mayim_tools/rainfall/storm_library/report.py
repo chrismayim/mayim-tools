@@ -13,6 +13,8 @@ from __future__ import annotations
 import datetime as _dt
 import math
 
+from mayim_tools._common.frequency import aep_label, aep_label_long_from_one_in_x
+
 REFERENCES = [
     "Ball, J., Babister, M., Nathan, R., Weeks, W., Weinmann, E., Retallick, M. "
     "and Testoni, I. (eds) (2019). Australian Rainfall and Runoff: A Guide to "
@@ -199,8 +201,9 @@ def write_docx(
             "out of every duration. A time-zone offset, when given, is applied before "
             "calendar years and months are assigned.",
             "Annual-maximum series (AMS) are extracted with sliding windows at each "
-            "duration and fitted with the chosen distribution; return periods are "
-            "annual-maximum values (AEP = 1/T), as in the reference table. Maxima from "
+            "duration and fitted with the chosen distribution; frequencies are "
+            "annual-maximum values, given as % AEP (AEP 1 in T = 1/AEP, Mayim drainage "
+            "terminology), as in the reference table. Maxima from "
             "fixed-interval data are multiplied by the Weiss (1964) factor.",
             "Storms are separated by the inter-event time definition (IETD) and a "
             "minimum storm depth.",
@@ -208,8 +211,8 @@ def write_docx(
             f"is fitted at the anchor duration ({_f(anchor_h, 0)} h). Each storm's "
             "anchor depth x is mapped to a target depth f(x) and the whole storm is "
             "multiplied by f(x)/x, which keeps its timing. In the annual-maximum range "
-            f"(x ≥ x0, the product's depth at T0 = {_f(mi.get('transfer_t0_yr'), 1)} "
-            "years) f(x) is the reference depth at the storm's own return period in G. "
+            f"(x ≥ x0, the product's depth at AEP 1 in {_f(mi.get('transfer_t0_yr'), 1)}) "
+            "f(x) is the reference depth at the storm's own AEP in G. "
             "Smaller storms follow f(x) = f(x0)(x/x0)^γ, with γ solved so that the "
             "adjusted series reproduces the target mean annual precipitation (MAP); "
             "γ > 1 moves the annual total out of light rain into fewer, heavier storms "
@@ -276,13 +279,21 @@ def write_docx(
         ["Reference tier", _txt(md.get("reference_tier"))],
         ["Reference already areal (ARF applied)", _txt(md.get("reference_is_areal"))],
         ["Reference durations (min)", _list(md.get("reference_durations_min"))],
-        ["Reference return periods (years)", _list(md.get("reference_return_periods_yr"))],
+        [
+            "Reference AEPs",
+            ", ".join(
+                aep_label_long_from_one_in_x(float(t))
+                for t in str(md.get("reference_return_periods_yr") or "").split(",")
+                if t.strip()
+            )
+            or "-",
+        ],
         ["Reference conversions", conversions or "none"],
         ["Target MAP source", _txt(mi.get("map_target_source"))],
         ["Anchor duration (h)", _f(anchor_h, 0)],
         ["Calibration durations (min)", _list(ap.get("calibration_durations_min"))],
         ["Validation durations (min)", _list(ap.get("validation_durations_min"))],
-        ["Peak concentration varies with return period", _txt(md.get("rarity_dependent"))],
+        ["Peak concentration varies with AEP", _txt(md.get("rarity_dependent"))],
         ["Distribution / fitting", _txt(md.get("distribution"))],
         ["Fixed-interval correction", _txt(md.get("fixed_interval_correction"))],
         ["IETD (h)", _f(md.get("ietd_hours"), 1)],
@@ -402,7 +413,7 @@ def write_docx(
     durs = sorted({r["duration_min"] for r in result.after_rows})
     look = {(r["duration_min"], r["return_period_yr"]): r for r in result.after_rows}
     if aris and durs:
-        rp_head = [f"1:{t:g} (-)" for t in aris]
+        rp_head = [f"{aep_label(100.0 / t)} (-)" for t in aris]
         rows = []
         for dur in durs:
             first = look[(dur, aris[0])]
@@ -416,7 +427,7 @@ def write_docx(
         d.caption(
             "Table",
             "Ratio F (implied / reference), before / after adjustment, by duration "
-            "and return period (fitted = calibration rung, check = validation)",
+            "and AEP (fitted = calibration rung, check = validation)",
         )
         d.table(
             ["Duration", "Role"] + rp_head,
@@ -434,7 +445,7 @@ def write_docx(
         ]
         d.caption("Table", "Depth (mm), reference / adjusted series")
         d.table(
-            ["Duration"] + [f"1:{t:g} (mm)" for t in aris],
+            ["Duration"] + [f"{aep_label(100.0 / t)} (mm)" for t in aris],
             rows,
             _even(len(aris) + 1, 2.4),
         )
@@ -474,7 +485,7 @@ def write_docx(
         ]
         d.caption("Table", "Ensemble spread of F (5-95 % across realisations)")
         d.table(
-            ["Duration"] + [f"1:{t:g} (-)" for t in aris],
+            ["Duration"] + [f"{aep_label(100.0 / t)} (-)" for t in aris],
             erows,
             _even(len(aris) + 1, 2.4),
         )

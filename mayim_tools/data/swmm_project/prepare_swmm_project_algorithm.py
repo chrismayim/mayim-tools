@@ -33,6 +33,7 @@ from ..hec_hms_project import core as hms
 from ..hec_hms_project import storms as stm
 from ..hec_hms_project.prepare_hec_hms_project_algorithm import (
     CN_METHODS,
+    LAMBDA_DEFAULT,
     LAMBDA_OPTIONS,
     QUARTILES,
     SOURCES,
@@ -125,7 +126,7 @@ class PrepareSwmmProjectAlgorithm(PrepareHecHmsProjectAlgorithm):
             "rainfall time series. The file opens in EPA SWMM 5 and PCSWMM and imports "
             "into Autodesk Storm and Sanitary Analysis (File > Import > EPA SWMM input "
             "file); the tool can also compute every storm in the EPA SWMM engine and "
-            "report the critical storm per method and return period.\n"
+            "report the critical storm per method and AEP.\n"
             "\n"
             "METHOD\n"
             "Network and rainfall as in Prepare HEC-HMS project: each sub-catchment "
@@ -135,7 +136,12 @@ class PrepareSwmmProjectAlgorithm(PrepareHecHmsProjectAlgorithm):
             "Subcatchments: area, % impervious (optional field), width from the "
             "'Catchments: 1. Delineation' field chosen (w_flow_m by default; sqrt(area) when "
             "missing), slope from s_mean_pc (else a default), Manning n and depression "
-            "storage, Curve Number infiltration from the CN raster (or a CN field).\n"
+            "storage, Curve Number infiltration from the CN raster (or a CN field). "
+            "SWMM's Curve Number infiltration is not the SCS event equation used by "
+            "Prepare HEC-HMS project: it treats the CN as an infiltration capacity "
+            "with no separate initial abstraction ratio and recovers it between "
+            "storms, so SWMM and HEC-HMS runoff from the same CN differ; the Ia / S "
+            "parameter here only weights the runoff-equivalent CN.\n"
             "Nodes: invert = lowest DEM cell near the node, lowered where needed so every "
             "conduit falls at least the minimum slope; without a DEM, relative inverts "
             "from the reach slopes.\n"
@@ -161,7 +167,7 @@ class PrepareSwmmProjectAlgorithm(PrepareHecHmsProjectAlgorithm):
             "Streams / nodes: 'Catchments: 1. Delineation' or Stream Network layers (name, "
             "ds_name, length_m, slope).\n"
             "DEM: for the node inverts and DEM transects.\n"
-            "Peak positions, return periods, durations: as in Prepare HEC-HMS project.\n"
+            "Peak positions, AEPs (%), durations: as in Prepare HEC-HMS project.\n"
             "Compute in SWMM: needs swmm-toolkit in QGIS's Python "
             "(python -m pip install swmm-toolkit).\n"
             "Areal reduction factor: method (advanced: ARF area in km2, 0 = automatic; Pietersen region 1 - 5; user table CSV with DurationMin, ARF and optionally AreaKm2; constant).\n"
@@ -357,8 +363,8 @@ class PrepareSwmmProjectAlgorithm(PrepareHecHmsProjectAlgorithm):
         P(
             QgsProcessingParameterString(
                 self.ARIS,
-                "Return periods (years; blank = all in the table)",
-                defaultValue="2, 5, 10, 20, 50, 100",
+                "AEPs (%; blank = all in the table)",
+                defaultValue="50, 20, 10, 5, 2, 1",
                 optional=True,
             )
         )
@@ -407,7 +413,7 @@ class PrepareSwmmProjectAlgorithm(PrepareHecHmsProjectAlgorithm):
         )
         D = QgsProcessingParameterNumber.Double
         adv = [
-            QgsProcessingParameterEnum(self.LAMBDA, "Ia / S for the runoff-equivalent CN", options=[lbl for _, lbl in LAMBDA_OPTIONS], defaultValue=0),
+            QgsProcessingParameterEnum(self.LAMBDA, "Ia / S for the runoff-equivalent CN", options=[lbl for _, lbl in LAMBDA_OPTIONS], defaultValue=LAMBDA_DEFAULT),
             QgsProcessingParameterNumber(self.CN_DEPTH, "CN design depth for the runoff-equivalent CN (mm)", D, defaultValue=50.0, minValue=1.0),
             QgsProcessingParameterField(self.IMPERV_FIELD, "Impervious area field (% of the sub-catchment; optional)", parentLayerParameterName=self.SUBCATCHMENTS, type=QgsProcessingParameterField.Numeric, optional=True),
             QgsProcessingParameterNumber(self.TC_MIN, "Minimum time of concentration (min)", D, defaultValue=5.0, minValue=0.5),
@@ -507,6 +513,10 @@ class PrepareSwmmProjectAlgorithm(PrepareHecHmsProjectAlgorithm):
         extra = self._sub_extra(parameters, context, source, subs)
         cn_layer = self.parameterAsRasterLayer(parameters, self.CN_RASTER, context)
         lam = LAMBDA_OPTIONS[self.parameterAsEnum(parameters, self.LAMBDA, context)][0]
+        if lam is None:  # same as the curve numbers (0.1 when not recorded)
+            lam = 0.1
+            if cn_layer is not None and not cn_field:
+                lam = hms.cn_raster_lambda(cn_layer.source())[0] or 0.1
         cn_method = CN_METHODS[
             self.parameterAsEnum(parameters, self.CN_METHOD, context)
         ][0]

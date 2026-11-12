@@ -38,6 +38,7 @@ from qgis.core import (
 from qgis.PyQt.QtCore import QMetaType
 from qgis.PyQt.QtGui import QIcon
 
+from mayim_tools._common.frequency import one_in_x_list_from_aeps, parse_aep_list
 from mayim_tools._common.output_files import (
     CSV,
     SHAPEFILE,
@@ -56,7 +57,9 @@ LAMBDA_OPTIONS = [
     (0.1, "0.1 (SCS-SA, Schulze et al. 1992)"),
     (0.2, "0.2 (NEH 630 / TR-55)"),
     (0.05, "0.05 (Hawkins et al. 2002)"),
+    (None, "Same as the curve numbers (0.1 SCS-SA, 0.2 TR-55)"),
 ]
+LAMBDA_DEFAULT = 3
 CN_METHODS = [
     (core.CN_MEAN, "Area-weighted mean of the raster cells"),
     (core.CN_RUNOFF, "Runoff-equivalent CN at the CN design depth"),
@@ -338,7 +341,7 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
             "terrain, the curve number raster as a Curve Number grid, one "
             "meteorologic model and simulation run per design storm, the control "
             "specification(s), the precipitation gages and their DSS time series, "
-            "and one ensemble analysis per storm method and return period. The "
+            "and one ensemble analysis per storm method and AEP. The "
             "project opens complete and computes in HEC-HMS as it is; the tool can "
             "also compute every run and read back the peak flows.\n"
             "\n"
@@ -357,7 +360,12 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
             "Loss: SCS curve number from the CN raster (band 'cn_design' of SCS "
             "Curve Numbers, else band 1) - the area-weighted mean of the cells, or "
             "the runoff-equivalent CN at the CN design depth - or a CN field; "
-            "Ia = lambda S with S = 25400/CN - 254 mm. Initial and Constant: "
+            "Ia = lambda S with S = 25400/CN - 254 mm. A curve number holds only "
+            "for the Ia / S of its source table (SCS-SA 0.1, TR-55 0.2; recorded in "
+            "the raster by SCS Curve Numbers 0.3.1 and later). The default ratio is "
+            "that of the curve numbers; choosing another ratio converts each "
+            "sub-basin's CN to give the same runoff at the CN design depth, and the "
+            "report and sub-basin CSV show both CNs. Initial and Constant: "
             "initial loss from an il_mm field, else Ia from the CN, else the "
             "default; constant rate from a cl_mmh field, else the soil Ksat "
             "(geometric mean over the sub-basin, x the Ksat factor), else the "
@@ -383,7 +391,7 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
             "time, K = the rest (or lagk_lag_h / lagk_k_h fields). Kinematic wave: "
             "the Muskingum-Cunge trapezoid (or kw_n / kw_width_m fields) with "
             "sub-reaches of about one time step of travel.\n"
-            "Rainfall (one run per return period, duration and peak position or "
+            "Rainfall (one run per AEP, duration and peak position or "
             "pattern): DDF table -> HEC-HMS frequency storm (depths at 5 min ... the "
             "duration, nested with the peak at each chosen position); Alternating "
             "Block CSV -> its hyetographs for each chosen peak position; Huff CSV or "
@@ -391,8 +399,8 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
             "written as precipitation gages in a DSS file (needs the hecdss "
             "package: python -m pip install hecdss).\n"
             "Areal reduction: the DDF depths are point rainfall (also Design Rainfall SA, which is gridded but holds point values, and gridded rainfall adjusted to a point DDF) and are reduced to catchment rainfall: SANRAL Drainage Manual Eq 3.10 (default), Pietersen et al. (2024) regional ARFs for 24 h - 7 days (South Africa; Eq 3.10 below 24 h), the UK Flood Estimation Handbook ARF (Keers and Wescott 1977), a user ARF table, a constant, or none (DDF already areal, e.g. unadjusted gridded rainfall). Nested frequency storms and alternating block storms are reduced per duration (each nested / cumulative depth with the ARF of its own duration, so they follow the areal DDF curve); Huff and ensemble storms with the ARF of the storm duration. The ARF area is the total area draining to the outlet (the largest system if there are several) unless given. Alternating Block CSVs already reduced by that tool (ArfMethod column) are not reduced again. The CSV and report list the ARF per duration and a burst check: the largest 15 min ... depth inside each hyetograph as a % of the areal DDF depth (well below 100 %: the pattern is smoother than the DDF, typical of ERA5 patterns on a small catchment).\n"
-            "Ensemble analyses: one per storm method and return period (e.g. "
-            "'Frequency 1in50'), with every duration and peak position / pattern "
+            "Ensemble analyses: one per storm method and AEP (e.g. "
+            "'Frequency 2pc AEP'), with every duration and peak position / pattern "
             "of it as members and every element's outflow as an analysis point. "
             "HEC-HMS ensemble members must share the time window, so the runs then "
             "use one control specification ('Design storms': the longest storm "
@@ -428,7 +436,8 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
             "Peak positions: tick one or more (25, 33, 50, 67, 75 %; all by "
             "default) - each is a run of every frequency and Alternating Block "
             "storm.\n"
-            "Return periods: e.g. '2, 5, 10, 20, 50, 100' (blank: all in the DDF "
+            "AEPs (%): e.g. '50, 20, 10, 5, 2, 1' (Mayim drainage terminology; "
+            "the DDF table's T-year columns are AEP 1 in T; blank: all in the DDF "
             "table / hyetograph CSV). Durations: e.g. '1h, 3h, 6h, 12h, 24h' (DDF "
             "frequency storms need HEC-HMS durations: 5, 10, 15, 30 min, 1, 2, 3, 6, "
             "12, 24 h, 2, 3, 4, 7, 10 days).\n"
@@ -572,7 +581,7 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
                 self.LAMBDA,
                 "Initial abstraction ratio Ia / S",
                 options=[label for _, label in LAMBDA_OPTIONS],
-                defaultValue=0,
+                defaultValue=LAMBDA_DEFAULT,
             )
         )
         self.addParameter(
@@ -637,8 +646,8 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterString(
                 self.ARIS,
-                "Return periods (years; blank = all in the table)",
-                defaultValue="2, 5, 10, 20, 50, 100",
+                "AEPs (%; blank = all in the table)",
+                defaultValue="50, 20, 10, 5, 2, 1",
                 optional=True,
             )
         )
@@ -663,7 +672,7 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterBoolean(
                 self.ENSEMBLES,
-                "HEC-HMS ensemble analyses (one per storm method and return period)",
+                "HEC-HMS ensemble analyses (one per storm method and AEP)",
                 defaultValue=True,
             )
         )
@@ -1207,9 +1216,14 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
         ]
         if not chosen:
             raise QgsProcessingException("Choose at least one design storm source.")
-        aris = stm.parse_number_list(
-            self.parameterAsString(parameters, self.ARIS, context)
-        )
+        try:
+            aris = one_in_x_list_from_aeps(
+                parse_aep_list(self.parameterAsString(parameters, self.ARIS, context))
+            )
+        except ValueError as e:
+            raise QgsProcessingException(
+                f"{e}. Give the AEPs in %, e.g. 50, 20, 10, 2, 1."
+            ) from e
         durs = stm.parse_duration_list(
             self.parameterAsString(parameters, self.DURATIONS, context)
         )
@@ -1301,9 +1315,7 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
                 "its first segment's power law (may underestimate short bursts)."
             )
         if "extrap_T" in flagged:
-            warnings.append(
-                "Some return periods lie outside the DDF table (extrapolated)."
-            )
+            warnings.append("Some AEPs lie outside the DDF table (extrapolated).")
         if "extrap_long" in flagged:
             warnings.append(
                 "Some durations are longer than the DDF table (extrapolated)."
@@ -1361,7 +1373,38 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
         )
         cn_layer = self.parameterAsRasterLayer(parameters, self.CN_RASTER, context)
         loss = LOSSES[self.parameterAsEnum(parameters, self.LOSS, context)][0]
-        lam = LAMBDA_OPTIONS[self.parameterAsEnum(parameters, self.LAMBDA, context)][0]
+        lam_choice = LAMBDA_OPTIONS[
+            self.parameterAsEnum(parameters, self.LAMBDA, context)
+        ][0]
+        # the Ia / S the curve numbers were calibrated for (H4: a CN only
+        # holds for its own ratio; another ratio needs a converted CN)
+        cn_lam, cn_lam_how = None, ""
+        if cn_layer is not None and not cn_field:
+            cn_lam, cn_lam_how = core.cn_raster_lambda(cn_layer.source())
+        if lam_choice is None:
+            if cn_lam is None:
+                lam = 0.1
+                feedback.pushWarning(
+                    "The Ia / S of the curve numbers is not recorded (CN field, or "
+                    "a CN raster from before SCS Curve Numbers 0.3.1): 0.1 "
+                    "(SCS-SA) is assumed. Choose the ratio explicitly if the CNs "
+                    "come from TR-55 (0.2)."
+                )
+            else:
+                lam = cn_lam
+            cn_lam = lam
+        else:
+            lam = lam_choice
+            if cn_lam is None:
+                cn_lam = lam
+                feedback.pushInfo(
+                    f"Ia / S = {lam:g}; the curve numbers are used as given (their "
+                    "own Ia / S is not recorded)."
+                )
+        if cn_lam_how:
+            feedback.pushInfo(
+                f"Curve numbers belong to Ia / S = {cn_lam:g} ({cn_lam_how})."
+            )
         cn_method = CN_METHODS[
             self.parameterAsEnum(parameters, self.CN_METHOD, context)
         ][0]
@@ -1379,7 +1422,7 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
                 wkts.append(gg.asWkt())
             try:
                 stats, band = core.zonal_cn_from_raster(
-                    cn_layer.source(), wkts, cn_method, cn_depth, lam
+                    cn_layer.source(), wkts, cn_method, cn_depth, cn_lam
                 )
             except core.HmsProjectError as e:
                 raise QgsProcessingException(str(e)) from e
@@ -1401,6 +1444,19 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
                 f"No curve number for {len(missing)} sub-catchment(s): "
                 + ", ".join(missing[:10])
             )
+        if abs(cn_lam - lam) > 1e-12:
+            # same runoff at the CN design depth with the chosen Ia / S
+            for x in subs:
+                if x.cn is not None:
+                    converted = core.cn_for_lambda(x.cn, cn_depth, cn_lam, lam)
+                    if x.cn_stats is not None:
+                        x.cn_stats = {**x.cn_stats, "cn_table": x.cn}
+                    x.cn = converted
+            feedback.pushInfo(
+                f"Curve numbers converted from Ia / S = {cn_lam:g} to {lam:g} so "
+                f"that each sub-basin gives the same runoff at {cn_depth:g} mm."
+            )
+            cn_label += f"; CN converted from Ia/S {cn_lam:g} to {lam:g}"
         soil_label = self._soil_values(
             parameters, context, feedback, crs, geoms, subs, loss
         )
@@ -1441,6 +1497,7 @@ class PrepareHecHmsProjectAlgorithm(QgsProcessingAlgorithm):
             ),
             sink_prefix=self.parameterAsString(parameters, self.SINK_PREFIX, context),
             lambda_ia=lam,
+            cn_lambda_basis=cn_lam,
             cn_method=cn_method,
             cn_design_depth_mm=cn_depth,
             transform=TRANSFORMS[

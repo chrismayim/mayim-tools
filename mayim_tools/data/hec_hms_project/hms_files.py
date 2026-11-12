@@ -642,7 +642,7 @@ def ensemble_text(ens, r: ProjectResult) -> str:
     lines = [
         f"Ensemble Analysis: {ens.name}",
         f"{IND}Description: {len(ens.runs)} runs - all durations and peak positions "
-        "/ patterns of this storm method and return period",
+        "/ patterns of this storm method and AEP",
         f"{IND}Version: {r.settings.hms_version}",
         f"{IND}Log File: {stem}.log",
         f"{IND}DSS File: {stem}.dss",

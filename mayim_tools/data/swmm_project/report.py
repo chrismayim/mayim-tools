@@ -15,7 +15,7 @@ from mayim_tools._common.docx_report import Doc
 
 from ..hec_hms_project.core import ENSEMBLE_METHOD_NAMES
 from ..hec_hms_project.report import _schematic, add_arf_sections, arf_references
-from ..hec_hms_project.storms import ari_label, duration_label
+from ..hec_hms_project.storms import ari_label_long, duration_label
 from .core import TOOL_NAME, TOOL_VERSION, XS_TRANSECT, SwmmModel
 from .export import critical_rows, outlets
 
@@ -94,11 +94,9 @@ def write_report(
     if results:
         crit = critical_rows(m, results)
         if crit:
-            d.caption(
-                "Table", "Largest computed peak per storm method and return period"
-            )
+            d.caption("Table", "Largest computed peak per storm method and AEP")
             d.table(
-                ["Method", "Return period", "Outfall", "Peak (m3/s)", "Critical storm"],
+                ["Method", "AEP", "Outfall", "Peak (m3/s)", "Critical storm"],
                 [[x[0], x[1], x[3], _f(x[4], 3), x[5]] for x in crit],
                 widths_cm=[3.4, 2.6, 3.0, 2.5, 5.0],
             )
@@ -148,7 +146,11 @@ def write_report(
         "SCS runoff relation, applied to the event's cumulative rainfall, and "
         "recovers that capacity between storms "
         f"over the drying time ({s.dry_days:g} days). It is close to, but not the same "
-        "as, the SCS event equation with an explicit initial abstraction."
+        "as, the SCS event equation with an explicit initial abstraction "
+        "Ia = lambda S used by Prepare HEC-HMS project: SWMM has no separate "
+        "initial abstraction ratio, so runoff from the same curve number differs "
+        "between the two models, most for small storms. Compare the two models' "
+        "runoff volumes before using one to check the other."
     )
     d.heading("Channels and nodes", 2)
     xs = (
@@ -250,12 +252,12 @@ def write_report(
     d.heading("Design storms", 1)
     d.caption("Table", "Design storms in the SWMM file")
     d.table(
-        ["Time series", "Method", "Return period", "Duration", "Depth (mm)"],
+        ["Time series", "Method", "AEP", "Duration", "Depth (mm)"],
         [
             [
                 ser.name,
                 ENSEMBLE_METHOD_NAMES.get(ser.storm.source, ser.storm.source),
-                ari_label(ser.storm.ari),
+                ari_label_long(ser.storm.ari),
                 duration_label(ser.storm.duration_min),
                 _f(ser.cumulative_mm[-1], 1),
             ]

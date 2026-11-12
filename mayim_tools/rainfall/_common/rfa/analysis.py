@@ -276,7 +276,7 @@ def run_frequency_analysis(
                 warnings.append(
                     "The DDF model needed an isotonic correction of "
                     f"{100 * iso_change:.1f}% to keep depths increasing with duration "
-                    "and return period - check the longest durations / rarest AEPs."
+                    "and AEP - check the longest durations / rarest AEPs."
                 )
         # model vs independent per-duration GEV (diagnostic only)
         comparison = []

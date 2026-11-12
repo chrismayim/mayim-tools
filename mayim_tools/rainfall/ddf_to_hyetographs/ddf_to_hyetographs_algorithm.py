@@ -29,6 +29,7 @@ from qgis.core import (
 )
 from qgis.PyQt.QtGui import QIcon
 
+from mayim_tools._common.frequency import aep_label_from_one_in_x
 from mayim_tools._common.output_files import (
     CSV,
     EXTENSIONS,
@@ -44,7 +45,7 @@ from .export import (
     write_incremental_intensity,
 )
 
-TOOL_VERSION = "0.5.0"
+TOOL_VERSION = "0.6.0"
 
 # Selectable outputs: key, dialog label, file-name description, folder
 # kind, ticked by default. All three share the CSV folder.
@@ -117,16 +118,16 @@ class DdfToHyetographsAlgorithm(QgsProcessingAlgorithm):
         return (
             f"DDF to Alternating Block Design Hyetographs (version {TOOL_VERSION})\n"
             "\n"
-            "PURPOSE:\tConverts a DDF/IDF table (Duration x Return Period "
+            "PURPOSE:\tConverts a DDF/IDF table (Duration x AEP "
             "depths) into design storm hyetographs at 5 peak-position "
             "ratios (25/33/50/66/75% of storm duration before the peak), "
-            "for one or more target storm durations, across every return "
-            "period in the table. Three outputs: incremental depth (the "
+            "for one or more target storm durations, across every AEP "
+            "in the table. Three outputs: incremental depth (the "
             "original hyetograph), cumulative depth, and incremental "
             "intensity - all versus time, all sharing the same row/column "
             "layout so they're directly comparable.\n"
             "\n"
-            "METHOD:\t\tFor each return period, interpolates a continuous "
+            "METHOD:\t\tFor each AEP, interpolates a continuous "
             "cumulative-depth-vs-duration curve from the input table "
             "(piecewise log-log, exact at every tabulated point, no "
             "extrapolation beyond the table's own duration range). Divides "
@@ -142,8 +143,9 @@ class DdfToHyetographsAlgorithm(QgsProcessingAlgorithm):
             "this plugin's original 'SCS Design Storm' working name - "
             "renamed specifically to avoid that confusion.\n"
             "\n"
-            "BACKGROUND:\tInput accepts either the '{RT}yr Depth (mm)' "
-            "header format (matching the Design Rainfall and Rainfall "
+            "BACKGROUND:\tInput accepts the '{AEP}% AEP Depth (mm)' "
+            "header format (and the older '{T}yr Depth (mm)', T = AEP 1 in "
+            "T) (matching the Design Rainfall and Rainfall "
             "Frequency Analysis plugins' recommended-DDF output - feeds in "
             "with zero reformatting) or bare AEP-percent column headers "
             "(e.g. '50%', '1%'). Duration values accept a bare number "
@@ -176,8 +178,10 @@ class DdfToHyetographsAlgorithm(QgsProcessingAlgorithm):
             "'Time', or similar).\n"
             "  Target storm duration(s): comma-separated minutes (e.g. "
             "'60,120,1440' for 1h/2h/24h design storms) - one hyetograph "
-            "set is generated per (return period, target duration) "
-            "combination across every return period found in the table.\n"
+            "set is generated per (AEP, target duration) "
+            "combination across every AEP found in the table. The output "
+            "CSVs start with an 'AEP (%)' column (Mayim drainage "
+            "terminology).\n"
             "  Timestep: the hyetograph's block width in minutes.\n"
             "  Allow short-duration extrapolation: off by default - see "
             "BACKGROUND above.\n"
@@ -363,7 +367,12 @@ class DdfToHyetographsAlgorithm(QgsProcessingAlgorithm):
             tables = parse_idf_table(df, duration_col=duration_col)
         except ValueError as e:
             raise QgsProcessingException(str(e)) from e
-        feedback.pushInfo(f"Return periods found: {sorted(tables.keys())}")
+        feedback.pushInfo(
+            "AEPs found: "
+            + ", ".join(
+                aep_label_from_one_in_x(t) for t in sorted(tables, reverse=True)
+            )
+        )
         feedback.pushInfo(
             f"Target duration(s): {target_durations} min. Timestep: {timestep_min} min. "
             f"Peak ratios: {PEAK_RATIOS}"
@@ -396,7 +405,7 @@ class DdfToHyetographsAlgorithm(QgsProcessingAlgorithm):
             and allow_short_duration_extrapolation
         ):
             feedback.pushWarning(
-                f"Short-duration extrapolation is active: at least one return period's table has no "
+                f"Short-duration extrapolation is active: at least one AEP's table has no "
                 f"tabulated data below {min(tables[rt][0][0] for rt in tables):g} min, but the "
                 f"{timestep_min:g}-min timestep needs values there. Extrapolated using the first "
                 f"tabulated segment's own power-law slope - this may UNDERESTIMATE short-duration "
@@ -478,7 +487,7 @@ class DdfToHyetographsAlgorithm(QgsProcessingAlgorithm):
             )
         feedback.pushInfo(
             f"{n_rows} row(s) written to each of {len(written)} output(s) "
-            f"({len(tables)} return period(s) x {len(target_durations)} target duration(s))."
+            f"({len(tables)} AEP(s) x {len(target_durations)} target duration(s))."
         )
         for label, path in written:
             feedback.pushInfo(f"{label}: {path}")

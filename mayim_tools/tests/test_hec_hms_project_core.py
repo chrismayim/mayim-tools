@@ -81,7 +81,7 @@ def test_top_node_and_node_below():
 
 def test_hms_name_and_file_stem():
     assert core.hms_name(" A1/b: x ") == "A1-b- x"
-    assert core.file_stem("1in50 24h") == "1in50_24h"
+    assert core.file_stem("2pc AEP 24h") == "2pc_AEP_24h"
     with pytest.raises(core.HmsProjectError):
         core.hms_name(" / ")
 
@@ -206,7 +206,7 @@ def test_assemble_parameters(ddf_path):
     assert by["R-A3"].params["method"] == core.ROUTE_LAG
     assert "lag_fallback" in by["R-A3"].flags
     assert r.tail_h >= 1 and r.controls[0].end > r.controls[0].start
-    assert r.runs[0].name == "Freq 1in50 24h P50" and r.runs[0].gage_name is None
+    assert r.runs[0].name == "Freq 2pc AEP 24h P50" and r.runs[0].gage_name is None
 
 
 def test_assemble_muskingum_cunge_and_clark(ddf_path):
@@ -277,7 +277,7 @@ def test_alternating_block_csv_from_the_real_tool(tmp_path):
     s60 = next(s for s in storms if s.duration_min == 60)
     assert len(s60.increments) == 12
     assert s60.total_mm == pytest.approx(52.4, rel=1e-3)
-    assert s60.name == "AB 1in50 1h P50"
+    assert s60.name == "AB 2pc AEP 1h P50"
     # 67 % peak maps to the tool's 66 % column
     storms67, _ = stm.alternating_block_storms(rows, [2], [60], 67, 0.9)
     assert storms67[0].total_mm == pytest.approx(0.9 * 25.3, rel=1e-3)
@@ -310,7 +310,7 @@ def test_huff_storms(tmp_path, ddf_path):
     assert (1, "P50") in huff and (2, "Mean") in huff
     c = stm.DdfCurves.from_csv(ddf_path)
     storms, warns = stm.huff_storms(c, huff, [50], [360, 720, 1440], 5, None, "P50")
-    assert [s.name for s in storms] == ["Huff Q1 1in50 6h", "Huff Q2 1in50 12h"]
+    assert [s.name for s in storms] == ["Huff Q1 2pc AEP 6h", "Huff Q2 2pc AEP 12h"]
     assert "Q3" in warns[0]
     s6 = storms[0]
     assert len(s6.increments) == 72 and s6.total_mm == pytest.approx(79.1)
@@ -345,9 +345,9 @@ def test_ensemble_storms(tmp_path, ddf_path):
     c = stm.DdfCurves.from_csv(ddf_path)
     storms, warns = stm.ensemble_storms(c, ens, [2, 100], [60], ["Early", "Late"])
     assert [s.name for s in storms] == [
-        "Ens 1in2 1h Early",
-        "Ens 1in2 1h Late",
-        "Ens 1in100 1h Early",
+        "Ens 50pc AEP 1h Early",
+        "Ens 50pc AEP 1h Late",
+        "Ens 1pc AEP 1h Early",
     ]
     assert len(warns) == 1 and "rare Late" in warns[0]
     assert storms[0].total_mm == pytest.approx(25.3)
@@ -381,7 +381,7 @@ def test_text_files(ddf_path):
     prj = hf.project_text(r, n)
     assert prj.startswith("Project: T1\r\n") and "DSS File Name: T1.dss" in prj
     assert (
-        "Precipitation: Freq 1in50 6h P50\r\n     Filename: Freq_1in50_6h_P50.met"
+        "Precipitation: Freq 2pc AEP 6h P50\r\n     Filename: Freq_2pc_AEP_6h_P50.met"
         in prj
     )
     assert "Control: 6h storm\r\n     FileName: 6h_storm.control" in prj
@@ -398,13 +398,13 @@ def test_text_files(ddf_path):
     assert "Percent of Duration Before Peak Rainfall: 50" in freq
     hy = hf.met_text(r, r.runs[2])
     assert "Precipitation Method: Specified Average" in hy
-    assert "Subbasin: A1\r\n" in hy and "     Gage: Huff Q1 1in50 6h\r\n" in hy
+    assert "Subbasin: A1\r\n" in hy and "     Gage: Huff Q1 2pc AEP 6h\r\n" in hy
     gage = hf.gage_text(r, n)
     assert "Data Source Type: External DSS" in gage
-    assert "Pathname: //HUFF Q1 1IN50 6H/PRECIP-INC/01JAN2000/5MIN/MAYIM/" in gage
+    assert "Pathname: //HUFF Q1 2PC AEP 6H/PRECIP-INC/01JAN2000/5MIN/MAYIM/" in gage
     run = hf.run_text(r)
-    assert "Run: Freq 1in2 6h P50\r\n" in run
-    assert "     Precip: Freq 1in2 6h P50\r\n" in run
+    assert "Run: Freq 50pc AEP 6h P50\r\n" in run
+    assert "     Precip: Freq 50pc AEP 6h P50\r\n" in run
     assert "     Control: 6h storm\r\n" in run
     assert "Time Series Results Manager Start:\r\n" in run
     ctl = hf.control_text(r.controls[0])
@@ -452,13 +452,13 @@ def test_write_project(tmp_path, ddf_path):
     )
     folder = tmp_path / "T1_Model"
     assert (folder / "T1_Model.hms").is_file() and (folder / "Existing.basin").is_file()
-    assert (folder / "Freq_1in2_6h_P50.met").is_file() and (
+    assert (folder / "Freq_50pc_AEP_6h_P50.met").is_file() and (
         folder / "6h_storm.control"
     ).is_file()
     assert (folder / "T1_Model.gage").is_file() and (
         folder / "run_all_simulations.cmd"
     ).is_file()
-    assert len(got) == 1 and got[0][0].startswith("//HUFF Q1 1IN50 6H/")
+    assert len(got) == 1 and got[0][0].startswith("//HUFF Q1 2PC AEP 6H/")
     assert files["Basin geometry"].endswith("Existing.sqlite")
     con = sqlite3.connect(files["Basin geometry"])
     tables = {
@@ -471,7 +471,7 @@ def test_write_project(tmp_path, ddf_path):
     ).fetchone() == (32735,)
     con.close()
     script = (folder / "run_all_simulations.py").read_text()
-    assert "OpenProject(PROJECT, FOLDER)" in script and "'Huff Q1 1in50 6h'" in script
+    assert "OpenProject(PROJECT, FOLDER)" in script and "'Huff Q1 2pc AEP 6h'" in script
 
 
 def test_real_dss_round_trip(tmp_path, ddf_path):
@@ -523,16 +523,16 @@ def test_zonal_cn_from_raster(tmp_path):
 def test_read_results(tmp_path):
     folder = tmp_path / "results"
     folder.mkdir()
-    (folder / "RUN_1in50_6h.results").write_text(
-        """<?xml version="1.0" encoding="UTF-8"?><RunResults><RunName>1in50 6h</RunName>
+    (folder / "RUN_2pc_AEP_6h.results").write_text(
+        """<?xml version="1.0" encoding="UTF-8"?><RunResults><RunName>2pc AEP 6h</RunName>
 <BasinElement name="Outlet-A1" type="Sink"><Statistics>
 <StatisticMeasure type="Outflow Maximum" value="48.67" units="M3/S" />
 <StatisticMeasure type="Outflow Maximum Time" value="01Jan2000, 03:38" />
 <StatisticMeasure type="Outflow Volume" value="167576.9" units="M3" />
 </Statistics></BasinElement></RunResults>"""
     )
-    rows, missing = rs.read_results(str(tmp_path), ["1in50 6h", "1in2 6h"])
-    assert missing == ["1in2 6h"]
+    rows, missing = rs.read_results(str(tmp_path), ["2pc AEP 6h", "50pc AEP 6h"])
+    assert missing == ["50pc AEP 6h"]
     assert rows[0].element == "Outlet-A1" and rows[0].peak_m3s == pytest.approx(48.67)
     assert rows[0].peak_time == "01Jan2000, 03:38"
 
@@ -584,9 +584,9 @@ def test_hms_safe_project_names():
     assert core.project_stem("HEC-HMS_Model") == "HEC_HMS_Model"
     assert core.project_stem("MC2026-01 HEC-HMS Model") == "MC2026_01_HEC_HMS_Model"
     assert core.folder_stem("MC2026-01 HEC-HMS Model") == "MC2026-01_HEC-HMS_Model"
-    assert core.file_stem("Freq 1in50 6h P50") == "Freq_1in50_6h_P50"
-    assert "-" not in core.file_stem("AB-1in2")
-    assert hf.hms_component_file("Frequency 1in50", ".ens") == "Frequency_1in50.ens"
+    assert core.file_stem("Freq 2pc AEP 6h P50") == "Freq_2pc_AEP_6h_P50"
+    assert "-" not in core.file_stem("AB-50pc AEP")
+    assert hf.hms_component_file("Frequency 2pc AEP", ".ens") == "Frequency_2pc_AEP.ens"
 
 
 def test_multiple_peak_positions_and_ensembles(ddf_path):
@@ -599,21 +599,21 @@ def test_multiple_peak_positions_and_ensembles(ddf_path):
         for p in (25, 50, 75)
     ]
     r = core.assemble(subs, reaches, [], storms, core.Settings(dt_min=5))
-    assert [e.name for e in r.ensembles] == ["Frequency 1in2", "Frequency 1in50"]
+    assert [e.name for e in r.ensembles] == ["Frequency 50pc AEP", "Frequency 2pc AEP"]
     assert len(r.ensembles[1].runs) == 6
-    assert {run.name for run in r.ensembles[1].runs} >= {"Freq 1in50 6h P75"}
+    assert {run.name for run in r.ensembles[1].runs} >= {"Freq 2pc AEP 6h P75"}
     # ensemble members need the same time window: one shared control
     assert len(r.controls) == 1 and r.controls[0].name == "Design storms"
     assert r.controls[0].duration_min == 360
     text = hf.ensemble_text(r.ensembles[1], r)
-    assert text.startswith("Ensemble Analysis: Frequency 1in50\r\n")
+    assert text.startswith("Ensemble Analysis: Frequency 2pc AEP\r\n")
     assert "     Ensemble Member Type: Simulation Run\r\n" in text
-    assert "          Ensemble Member: Freq 1in50 1h P25\r\n" in text
+    assert "          Ensemble Member: Freq 2pc AEP 1h P25\r\n" in text
     assert (
         "     Analysis Point: Outlet-A1\r\n     Time Series Type: Outflow\r\n" in text
     )
     assert "     End Analysis Point: \r\n" in text  # HEC-HMS needs the space
-    assert text.endswith("End Ensemble Analysis: Frequency 1in50\r\n")
+    assert text.endswith("End Ensemble Analysis: Frequency 2pc AEP\r\n")
     # without ensembles: one control per duration
     r2 = core.assemble(
         subs, reaches, [], storms, core.Settings(dt_min=5, ensembles=False)
@@ -634,9 +634,9 @@ def test_alternating_block_several_peaks(tmp_path):
     rows = stm.read_alternating_block_csv(str(path))
     storms, warns = stm.alternating_block_storms(rows, [50], [60], [25, 50, 67], 1.0)
     assert [s.name for s in storms] == [
-        "AB 1in50 1h P25",
-        "AB 1in50 1h P50",
-        "AB 1in50 1h P66",
+        "AB 2pc AEP 1h P25",
+        "AB 2pc AEP 1h P50",
+        "AB 2pc AEP 1h P66",
     ]
     assert not warns and all(
         s.total_mm == pytest.approx(52.4, rel=1e-3) for s in storms
@@ -657,7 +657,7 @@ def test_project_folder_names_and_ensemble_files(tmp_path, ddf_path):
     assert prj.startswith("Project: MC_1_HEC_HMS_Model\n")
     assert (folder / "MC_1_HEC_HMS_Model.run").is_file()
     assert "DSS File Name: MC_1_HEC_HMS_Model.dss" in prj
-    assert (folder / "ensemble" / "Frequency_1in50.ens").is_file()
+    assert (folder / "ensemble" / "Frequency_2pc_AEP.ens").is_file()
     assert "MC_1_HEC_HMS_Model" in (folder / "run_all_simulations.py").read_text()
 
 
@@ -712,3 +712,40 @@ def test_map_layers_and_cn_grid_files(tmp_path, ddf_path):
     g = gdal.Open(out)
     arr = g.GetRasterBand(1).ReadAsArray()
     assert g.RasterCount == 1 and float(arr.max()) == 77.0
+
+
+def test_cn_for_lambda_keeps_runoff():
+    from mayim_tools.data.hec_hms_project import core as hc
+
+    p = 60.0
+    for cn, lam_from, lam_to in [(75, 0.1, 0.2), (75, 0.2, 0.05), (88, 0.1, 0.05)]:
+        new = hc.cn_for_lambda(cn, p, lam_from, lam_to)
+        q0 = float(hc.scs_runoff(p, cn, lam_from))
+        q1 = float(hc.scs_runoff(p, new, lam_to))
+        assert q1 == pytest.approx(q0, rel=1e-6)
+    # a larger Ia / S needs a higher CN for the same runoff
+    assert hc.cn_for_lambda(75, p, 0.1, 0.2) > 75
+    assert hc.cn_for_lambda(75, p, 0.2, 0.05) < 75
+    assert hc.cn_for_lambda(75, p, 0.1, 0.1) == 75
+    # no runoff at this depth: unchanged
+    assert hc.cn_for_lambda(40, 5.0, 0.2, 0.05) == 40
+
+
+def test_cn_raster_lambda_from_metadata(tmp_path):
+    gdal = pytest.importorskip("osgeo.gdal")
+    from mayim_tools.data.hec_hms_project import core as hc
+
+    def raster(name, meta):
+        path = str(tmp_path / name)
+        ds = gdal.GetDriverByName("GTiff").Create(path, 2, 2, 1, gdal.GDT_Float32)
+        for k, v in meta.items():
+            ds.SetMetadataItem(k, v)
+        ds = None
+        return path
+
+    assert hc.cn_raster_lambda(raster("a.tif", {"IA_RATIO": "0.2"}))[0] == 0.2
+    tr55 = raster("b.tif", {"LOOKUP": "ESA WorldCover - TR-55 / NEH 630"})
+    assert hc.cn_raster_lambda(tr55)[0] == 0.2
+    sa = raster("c.tif", {"LOOKUP": "ESA WorldCover - SCS-SA Table 5.1"})
+    assert hc.cn_raster_lambda(sa)[0] == 0.1
+    assert hc.cn_raster_lambda(raster("d.tif", {}))[0] is None

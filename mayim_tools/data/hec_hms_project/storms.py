@@ -31,6 +31,14 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from mayim_tools._common.frequency import (
+    aep_from_one_in_x,
+    aep_label_long_from_one_in_x,
+    aep_name,
+    format_aep,
+    one_in_x_of_label,
+)
+
 # HEC-HMS 4.13 / 4.14 frequency storm durations (min) - the "Depth <d>:" keys.
 HMS_FREQ_DURATIONS = [
     5,
@@ -145,7 +153,13 @@ def duration_label(minutes: float) -> str:
 
 
 def ari_label(ari: float) -> str:
-    return f"1in{ari:g}"
+    """Name label of return period ari (AEP 1 in ari): '2pc AEP'."""
+    return aep_name(aep_from_one_in_x(ari))
+
+
+def ari_label_long(ari: float) -> str:
+    """Report label of return period ari: '2% AEP (1 in 50)'."""
+    return aep_label_long_from_one_in_x(ari)
 
 
 def parse_number_list(text: str | None) -> list[float]:
@@ -377,12 +391,14 @@ def read_alternating_block_csv(path: str) -> list[dict]:
         raise StormError("The Alternating Block CSV is empty.")
     header = [c.strip() for c in rows[0]]
     low = [h.lower() for h in header]
+    # 'AEP (%)' from 0.30, 'ReturnPeriodYears' (AEP 1 in x) before
+    aep_col = "aep (%)" in low
     try:
-        i_t = low.index("returnperiodyears")
+        i_t = low.index("aep (%)") if aep_col else low.index("returnperiodyears")
         i_d = low.index("targetdurationmin")
     except ValueError as e:
         raise StormError(
-            "Not an Alternating Block hyetograph CSV (expected ReturnPeriodYears, "
+            "Not an Alternating Block hyetograph CSV (expected AEP (%), "
             "TargetDurationMin and '50%_5min'-style columns)."
         ) from e
     cols: dict[str, list[tuple[int, float]]] = {}
@@ -402,8 +418,10 @@ def read_alternating_block_csv(path: str) -> list[dict]:
     for r in rows[1:]:
         r = r + [""] * (len(header) - len(r))
         t, dur = _num(r[i_t]), _num(r[i_d])
-        if t is None or dur is None:
+        if t is None or dur is None or t <= 0:
             continue
+        if aep_col:
+            t = one_in_x_of_label(f"{format_aep(t)}% AEP")
         pats = {}
         for key, idx in cols.items():
             vals = [_num(r[j]) for j, _ in idx]
@@ -579,9 +597,7 @@ def alternating_block_storms(
                 )
             )
     if (aris or durations) and not out:
-        warnings.append(
-            "No Alternating Block rows match the return periods / durations."
-        )
+        warnings.append("No Alternating Block rows match the AEPs / durations.")
     return out, warnings
 
 

@@ -1,4 +1,4 @@
-﻿"""Processing Toolbox algorithm: point of interest in -> MERRA-2
+"""Processing Toolbox algorithm: point of interest in -> MERRA-2
 bias-corrected hourly precipitation (PRECTOTCORR) time series out, as
 CSV.
 
@@ -20,6 +20,7 @@ from qgis.core import (
     QgsProcessingContext,
     QgsProcessingException,
     QgsProcessingFeedback,
+    QgsProcessingParameterAuthConfig,
     QgsProcessingParameterFeatureSource,
     QgsProcessingParameterField,
     QgsProcessingParameterNumber,
@@ -28,6 +29,12 @@ from qgis.core import (
 )
 from qgis.PyQt.QtGui import QIcon
 
+from mayim_tools._common.credentials import (
+    SETUP_HELP,
+    basic_auth_values,
+    temporary_environment,
+)
+from mayim_tools._common.data_sources import data_source_help, log_data_source
 from mayim_tools.rainfall._common.extract_outputs import (
     OUTPUT_CSV,
     OUTPUT_QUERY_POINTS,
@@ -45,7 +52,6 @@ from .core import (
     RECORD_START,
     fetch_merra2_timeseries,
     get_earthdata_token,
-    save_earthdata_credentials,
 )
 
 WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
@@ -53,6 +59,9 @@ WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
 STYLES_DIR = Path(__file__).resolve().parent / "styles"
 
 OUTPUT_SPECS = extract_specs("MERRA2", matched=False)
+
+
+TOOL_VERSION = "0.4.0"
 
 
 class Merra2ExtractAlgorithm(QgsProcessingAlgorithm):
@@ -65,8 +74,7 @@ class Merra2ExtractAlgorithm(QgsProcessingAlgorithm):
     VARIABLE = "VARIABLE"
     CHUNK_MONTHS = "CHUNK_MONTHS"
     MAX_WORKERS = "MAX_WORKERS"
-    EARTHDATA_USERNAME = "EARTHDATA_USERNAME"
-    EARTHDATA_PASSWORD = "EARTHDATA_PASSWORD"
+    EARTHDATA_AUTH = "EARTHDATA_AUTH"
     OUTPUT_CSV = "OUTPUT_CSV"
     OUTPUT_QUERY_POINTS = "OUTPUT_QUERY_POINTS"
 
@@ -93,11 +101,17 @@ class Merra2ExtractAlgorithm(QgsProcessingAlgorithm):
         return "rainfall_tools"
 
     def shortHelpString(self):
-        return self._base_help() + "\n\n" + files_help(OUTPUT_SPECS)
+        return (
+            self._base_help()
+            + "\n\n"
+            + files_help(OUTPUT_SPECS)
+            + "\n\n"
+            + data_source_help("merra2")
+        )
 
     def _base_help(self):
         return (
-            "MERRA-2 Point Extractor (version 0.3.0)\n"
+            f"MERRA-2 Point Extractor (version {TOOL_VERSION})\n"
             "\n"
             "PURPOSE:\tExtracts the full available NASA MERRA-2 bias-"
             "corrected hourly precipitation (PRECTOTCORR) record "
@@ -133,11 +147,15 @@ class Merra2ExtractAlgorithm(QgsProcessingAlgorithm):
             "free NASA Earthdata Login account "
             "(https://urs.earthdata.nasa.gov) with 'NASA GESDISC DATA "
             "ARCHIVE' authorized under your profile's Applications tab. "
-            "Enter your Earthdata username/password into this tool's "
-            "parameters the FIRST time you run it - saved automatically "
-            "(~/.netrc, and on Windows also ~/_netrc) and picked up on "
-            "every run after that, so you only need to enter them once - "
-            "same pattern as the IMERG Point Extractor plugin. IMPORTANT: "
+            "Choose your Earthdata login in the 'Earthdata login' parameter: a "
+            "QGIS authentication configuration (set up once under Settings > "
+            "Options > Authentication > Add, method 'Basic authentication', "
+            "with your Earthdata username and password). QGIS keeps it "
+            "encrypted under your master password, so it is never written to "
+            "the processing history, the log or a project file. Without a "
+            "login chosen, an existing ~/.netrc entry for "
+            "urs.earthdata.nasa.gov is used. "
+            "IMPORTANT: "
             "the exact Giovanni response format for MERRA-2 was not "
             "independently verified against a live response when this "
             "tool was built - the same metadata-preamble-tolerant parser "
@@ -153,8 +171,8 @@ class Merra2ExtractAlgorithm(QgsProcessingAlgorithm):
             "  Months per request chunk: default 12.\n"
             "  Concurrent requests: default 8 - higher is faster but "
             "places more load on the shared NASA service.\n"
-            "  Earthdata Username/Password: enter these ONCE - saved "
-            "automatically, leave blank after the first successful run.\n"
+            "  Earthdata login: the QGIS authentication configuration with "
+            "your Earthdata username and password (see BACKGROUND).\n"
             "  Output: POI (query point(s)): echoes the site(s) actually "
             "requested (the point clicked/typed, or every feature from "
             "the input point layer) as its own vector layer, loaded with "
@@ -234,16 +252,9 @@ class Merra2ExtractAlgorithm(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
-            QgsProcessingParameterString(
-                self.EARTHDATA_USERNAME,
-                "Earthdata Username (enter once - saved automatically)",
-                optional=True,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterString(
-                self.EARTHDATA_PASSWORD,
-                "Earthdata Password (enter once - saved automatically)",
+            QgsProcessingParameterAuthConfig(
+                self.EARTHDATA_AUTH,
+                "Earthdata login (QGIS authentication configuration)",
                 optional=True,
             )
         )
@@ -290,6 +301,27 @@ class Merra2ExtractAlgorithm(QgsProcessingAlgorithm):
     def processAlgorithm(
         self, parameters, context: QgsProcessingContext, feedback: QgsProcessingFeedback
     ):
+        log_data_source(feedback, "merra2")
+        authcfg = self.parameterAsString(parameters, self.EARTHDATA_AUTH, context)
+        env = {}
+        if authcfg:
+            try:
+                username, password = basic_auth_values(authcfg)
+            except ValueError as e:
+                raise QgsProcessingException(str(e)) from e
+            env = {"EARTHDATA_USERNAME": username, "EARTHDATA_PASSWORD": password}
+            # never log the credentials themselves
+            feedback.pushInfo("Earthdata login: QGIS authentication configuration.")
+        else:
+            feedback.pushInfo(
+                "No Earthdata login chosen - using ~/.netrc if it exists. " + SETUP_HELP
+            )
+        with temporary_environment(**env):
+            return self._process_algorithm(parameters, context, feedback)
+
+    def _process_algorithm(
+        self, parameters, context: QgsProcessingContext, feedback: QgsProcessingFeedback
+    ):
         self._post_processors = []
         sites = self._collect_sites(parameters, context, feedback)
         feedback.pushInfo(f"{len(sites)} site(s) to process.")
@@ -301,32 +333,9 @@ class Merra2ExtractAlgorithm(QgsProcessingAlgorithm):
         variable = self.parameterAsString(parameters, self.VARIABLE, context)
         chunk_months = self.parameterAsInt(parameters, self.CHUNK_MONTHS, context)
         max_workers = self.parameterAsInt(parameters, self.MAX_WORKERS, context)
-        earthdata_username = (
-            self.parameterAsString(parameters, self.EARTHDATA_USERNAME, context) or None
-        )
-        earthdata_password = (
-            self.parameterAsString(parameters, self.EARTHDATA_PASSWORD, context) or None
-        )
         out = ExtractOutputs(
             self, OUTPUT_SPECS, parameters, context, feedback, STYLES_DIR
         )
-
-        if earthdata_username and earthdata_password:
-            saved_paths = save_earthdata_credentials(
-                earthdata_username, earthdata_password
-            )
-            # never log the credentials themselves - only confirm where they were saved
-            saved_paths_str = ", ".join(str(p) for p in saved_paths)
-            feedback.pushInfo(
-                f"Earthdata credentials saved to: {saved_paths_str} "
-                "- leave these fields blank on future runs."
-            )
-        elif earthdata_username or earthdata_password:
-            feedback.pushWarning(
-                "Both Earthdata Username and Password are needed to save credentials - "
-                "only one was provided, so nothing was saved. Falling back to ~/.netrc "
-                "if it already exists."
-            )
 
         try:
             token = get_earthdata_token()

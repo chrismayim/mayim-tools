@@ -1,4 +1,4 @@
-﻿"""
+"""
 Tests for the Mayim Tools Processing provider.
 
 These tests require the qgis package. When run outside the QGIS Python
@@ -10,6 +10,18 @@ from __future__ import annotations
 import pytest
 
 pytest.importorskip("qgis")
+
+
+@pytest.fixture(scope="module", autouse=True)
+def qgis_app():
+    """A QgsApplication, which addAlgorithm needs outside QGIS."""
+    from qgis.core import QgsApplication
+
+    app = QgsApplication.instance()
+    if app is None:
+        app = QgsApplication([], False)
+        app.initQgis()
+    yield app
 
 
 def loaded_provider():
@@ -33,7 +45,7 @@ def test_provider_name() -> None:
     assert provider.name() == "Mayim Tools"
 
 
-def test_provider_registers_seven_algorithms() -> None:
+def test_provider_registers_all_algorithms() -> None:
     provider = loaded_provider()
 
     algorithms = provider.algorithms()
@@ -280,3 +292,42 @@ def test_provider_registers_seven_algorithms() -> None:
         assert algorithm.displayName() == display_name
         assert algorithm.group() == group
         assert algorithm.groupId() == group_id
+
+
+def test_provider_lists_every_algorithm_once() -> None:
+    from mayim_tools.processing.provider import ALGORITHMS
+
+    ids = [entry[2] for entry in ALGORITHMS]
+    assert len(ids) == len(set(ids)) == 38
+
+
+def test_missing_package_gives_placeholder() -> None:
+    from mayim_tools.processing.provider import (
+        UnavailableAlgorithm,
+        load_algorithm,
+    )
+
+    alg = load_algorithm(
+        "no_such_package_for_test.module",
+        "Nothing",
+        "grib_to_csv",
+        "GRIB to CSV",
+        ("Data Tools", "data_tools"),
+    )
+    assert isinstance(alg, UnavailableAlgorithm)
+    assert alg.name() == "grib_to_csv"
+    assert alg.displayName() == "GRIB to CSV (unavailable)"
+    assert alg.groupId() == "data_tools"
+    # A missing mayim_tools module is reported as a tool error, not a
+    # package to install.
+    assert "error in the tool" in alg.shortHelpString()
+
+
+def test_unavailable_message_names_pip_package() -> None:
+    from mayim_tools.processing.provider import unavailable_message
+
+    exc = ModuleNotFoundError("No module named 'docx'", name="docx")
+    msg = unavailable_message("Some tool", exc)
+    assert "python -m pip install python-docx" in msg
+    exc = ModuleNotFoundError("No module named 'xarray.core'", name="xarray.core")
+    assert "pip install xarray" in unavailable_message("GRIB to CSV", exc)

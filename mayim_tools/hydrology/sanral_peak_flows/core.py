@@ -24,7 +24,7 @@ from .methods import (
 )
 from .rainfall import TR102Station, basin_station
 
-TOOL_VERSION = "0.4.0"
+TOOL_VERSION = "0.5.0"
 
 
 @dataclass
@@ -251,8 +251,8 @@ def run(
 
 
 def field_names(settings: Settings) -> list[str]:
-    """Output-layer field names for the chosen methods and return periods."""
-    from .methods import METHODS
+    """Output-layer field names for the chosen methods and AEPs."""
+    from .methods import METHODS, q_field_name
 
     rps = settings.return_periods
     allowed = {
@@ -270,7 +270,7 @@ def field_names(settings: Settings) -> list[str]:
             continue
         code = METHODS[m][0]
         for T in allowed[m]:
-            names.append(f"Q_{code}" if T is None else f"Q_{code}_{T}")
+            names.append(q_field_name(code, T))
     return names
 
 

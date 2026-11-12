@@ -3,12 +3,14 @@ DDF (depth-duration-frequency) table handling shared by the rainfall
 tools: duration-label parsing, AEP/ARI conversion, AEP band
 classification and the DDFTable interpolation / inversion class.
 
-Moved from design_storm_ensembles/core.py (behaviour unchanged). The
-ARI-space helpers DDFTable.depth_at_ari() and DDFTable.ari_of_depth()
-were added so callers working with annual-maximum-series return
-periods (AEP = 1/T) can use the table without going through the exact
-Poisson AEP<->ARI conversion that aep_from_ari()/ari_from_aep()
-implement.
+The '<T>yr' columns of every DDF table in this suite are annual-maximum
+return periods, i.e. AEP (1 in x), so AEP = 100/T % (see
+mayim_tools/_common/frequency.py, the Mayim drainage terminology). Up to
+version 0.29 the AEP of a table column was taken as the Poisson
+conversion of an ARI (2 years -> 39.35%), which put Design Storm
+Ensembles events near 5 and 20 years into the wrong AEP band; it is now
+100/T (2 years -> 50%). aep_from_ari and ari_from_aep remain for true
+ARI values (equations 4 and 5) and are not used for table columns.
 """
 
 from __future__ import annotations
@@ -17,6 +19,8 @@ import re
 
 import numpy as np
 import pandas as pd
+
+from mayim_tools._common.frequency import one_in_x_of_label
 
 from .csvio import read_csv_any_delimiter
 
@@ -47,7 +51,13 @@ UNIT_TO_MINUTES = {
     "m": 1,
 }
 
-ARI_COL_RE = re.compile(r"([\d.]+)\s*yr", re.IGNORECASE)
+ARI_COL_RE = re.compile(r"([\d.]+)\s*yr", re.IGNORECASE)  # older '<T>yr' headers
+
+
+def table_t_of_column(col):
+    """T = AEP (1 in x) of a DDF depth column: '2% AEP Depth (mm)' (from
+    0.30) or '50yr Depth (mm)' (older files). None for other columns."""
+    return one_in_x_of_label(col)
 
 
 def parse_duration_to_minutes(text):
@@ -66,15 +76,26 @@ def parse_duration_to_minutes(text):
 
 
 def aep_from_ari(ari_years):
-    """Exact AEP/ARI relationship (ARR Book 1 s2.2.5 / Poisson process),
-    not the 1/ARI approximation."""
+    """AEP (%) of a true ARI (Mayim terminology equation 5). Not for DDF
+    table columns, which are AEP (1 in x): use aep_from_table_t()."""
     return (1.0 - np.exp(-1.0 / ari_years)) * 100.0
 
 
 def ari_from_aep(aep_percent):
+    """ARI (years) of an AEP (%) (Mayim terminology equation 4)."""
     p = aep_percent / 100.0
     p = min(max(p, 1e-9), 1 - 1e-9)
     return -1.0 / np.log(1.0 - p)
+
+
+def aep_from_table_t(t_years):
+    """AEP (%) of a DDF table return period T (annual maximum, AEP 1 in x)."""
+    return 100.0 / t_years
+
+
+def table_t_from_aep(aep_percent):
+    """DDF table return period T (AEP 1 in x) of an AEP (%)."""
+    return 100.0 / aep_percent
 
 
 def aep_band(aep_percent):
@@ -111,17 +132,17 @@ def load_ddf_table(path, duration_col=None, fixed_day_to_continuous=False):
     for col in df.columns:
         if col == duration_col:
             continue
-        m = ARI_COL_RE.search(str(col))
-        # central estimates only - '<T>yr Lower/Upper (mm)' bound columns
+        t = table_t_of_column(col)
+        # central estimates only - 'Lower/Upper (mm)' bound columns
         # (Design Rainfall and Precipitation data to DDF layouts) are not
-        # depths and must not be read as extra return-period columns
-        if m and not re.search(r"\b(lower|upper)\b", str(col), re.IGNORECASE):
-            ari_cols.append((col, float(m.group(1))))
+        # depths and must not be read as extra frequency columns
+        if t is not None and not _BOUND_RE.search(str(col)):
+            ari_cols.append((col, t))
 
     if not ari_cols:
         raise ValueError(
-            "No return-period depth columns found in the DDF table "
-            "(expected column names like '10yr Depth (mm)')."
+            "No frequency depth columns found in the DDF table "
+            "(expected column names like '10% AEP Depth (mm)' or '10yr Depth (mm)')."
         )
 
     # one row per duration in minutes, the continuous label preferred
@@ -152,7 +173,7 @@ def load_ddf_table(path, duration_col=None, fixed_day_to_continuous=False):
                     {
                         "duration_min": dur_min,
                         "ari_years": ari,
-                        "aep_percent": aep_from_ari(ari),
+                        "aep_percent": aep_from_table_t(ari),
                         "depth_mm": float(depth) * factor,
                     }
                 )
@@ -214,10 +235,10 @@ class DDFTable:
         duration/AEP. Returns (depth_mm, flag) where flag is one of
         'interp', 'extrap_aep', 'extrap_duration'.
 
-        The AEP is converted to the table's ARI columns with the exact
-        Poisson relationship (ari_from_aep). Callers working directly
-        in annual-maximum return periods should use depth_at_ari()."""
-        return self.depth_at_ari(duration_min, ari_from_aep(aep_percent))
+        The AEP is converted to the table's return period T = 100/AEP
+        (annual maximum, AEP 1 in x). Callers working directly in T
+        should use depth_at_ari()."""
+        return self.depth_at_ari(duration_min, table_t_from_aep(aep_percent))
 
     def depth_at_ari(self, duration_min, target_ari):
         """Same as depth_at(), but addressed directly by the table's own
@@ -253,7 +274,7 @@ class DDFTable:
         if duration_min not in self._aep_curve_cache:
             curve_x, curve_y = [], []
             for ari in self.aris:
-                depth, _ = self.depth_at(duration_min, aep_from_ari(ari))
+                depth, _ = self.depth_at_ari(duration_min, ari)
                 curve_x.append(np.log(ari))
                 curve_y.append(depth)
             curve_x = np.array(curve_x)
@@ -271,9 +292,8 @@ class DDFTable:
         curve_x, curve_y = self._aep_curve(duration_min)
         if obs_depth_mm < curve_y[0] or obs_depth_mm > curve_y[-1]:
             return None, False
-        ln_ari = np.interp(obs_depth_mm, curve_y, curve_x)
-        ari = np.exp(ln_ari)
-        return aep_from_ari(ari), True
+        ln_t = np.interp(obs_depth_mm, curve_y, curve_x)
+        return aep_from_table_t(np.exp(ln_t)), True
 
     def ari_of_depth(self, duration_min, depth_mm):
         """Inverse of depth_at_ari(): the table return period T (years,
@@ -368,14 +388,14 @@ def read_ddf_csv(path, site=None, fixed_day_to_continuous=True):
     for i, r in enumerate(rows):
         cells = [c.strip() for c in r]
         if any(c.lower() == "duration" for c in cells) and any(
-            ARI_COL_RE.search(c) for c in cells
+            table_t_of_column(c) is not None for c in cells
         ):
             header_i = i
             break
     if header_i is None:
         raise ValueError(
             "Could not find the DDF table header (a 'Duration' column plus "
-            "'<T>yr ...' depth columns) in the reference DDF file."
+            "'<AEP>% AEP ...' or '<T>yr ...' depth columns) in the DDF file."
         )
     header = [c.strip() for c in rows[header_i]]
     body = []
@@ -399,17 +419,16 @@ def read_ddf_csv(path, site=None, fixed_day_to_continuous=True):
     dur_col = next(c for c in header if c.lower() == "duration")
     depth_cols, bound_cols = {}, {}
     for c in header:
-        m = ARI_COL_RE.search(c)
-        if not m or c == dur_col:
+        T = table_t_of_column(c)
+        if T is None or c == dur_col:
             continue
-        T = float(m.group(1))
         b = _BOUND_RE.search(c)
         if b:
             bound_cols[(T, b.group(1).lower())] = c
         else:
             depth_cols[T] = c
     if not depth_cols:
-        raise ValueError("No central-estimate '<T>yr' depth columns found.")
+        raise ValueError("No central-estimate depth columns ('% AEP Depth') found.")
 
     # choose one row per duration in minutes (continuous label preferred)
     chosen_rows = {}

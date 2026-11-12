@@ -301,7 +301,7 @@ def test_ddf_table_csv_depths_only(tmp_path):
     write_ddf_csv({"Site 1": est}, path)
     assert path.read_bytes().startswith(b"\xef\xbb\xbf")
     rows = list(csv.reader(path.open(encoding="utf-8-sig")))
-    depths = ["2yr Depth (mm)", "50yr Depth (mm)", "200yr Depth (mm)"]
+    depths = ["50% AEP Depth (mm)", "2% AEP Depth (mm)", "0.5% AEP Depth (mm)"]
     assert rows[0] == ["Duration", *depths]
     assert [r[0] for r in rows[1:]] == ["5 min", "1.5 h", "24 h", "1 day", "3 day"]
     lookup = {(r.duration_label, r.return_period): r.depth for r in est.results}
@@ -321,3 +321,17 @@ def test_ddf_table_csv_multi_site(tmp_path):
     assert rows[0][:2] == ["Site", "Duration"]
     assert len(rows) == 1 + 2 * 5
     assert {r[0] for r in rows[1:]} == {"A", "B"}
+
+
+def test_ddf_table_csv_reads_back_as_aep(tmp_path):
+    """The % AEP headers read back through the shared DDF readers as
+    T = AEP (1 in x)."""
+    from mayim_tools.rainfall._common.ddf import load_ddf_table, read_ddf_csv
+    from mayim_tools.rainfall.design_rainfall.report import write_ddf_csv
+
+    est = make_estimate()
+    path = tmp_path / "ddf.csv"
+    write_ddf_csv({"Site 1": est}, path)
+    long_df, _ = read_ddf_csv(str(path))
+    assert sorted(set(long_df["ari_years"])) == [2, 50, 200]
+    assert sorted(set(load_ddf_table(str(path))["aep_percent"])) == [0.5, 2, 50]

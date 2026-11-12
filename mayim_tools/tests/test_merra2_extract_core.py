@@ -1,4 +1,4 @@
-﻿"""
+"""
 Tests for merra2_extract/core.py. Run: python3 tests/test_core.py
 """
 
@@ -19,7 +19,6 @@ from mayim_tools.rainfall.merra2_extract.core import (
     _parse_giovanni_csv,
     _split_date_range,
     fetch_merra2_timeseries,
-    save_earthdata_credentials,
 )
 
 # ----------------------------------------------------------------------
@@ -357,37 +356,6 @@ def test_fetch_merra2_timeseries_default_full_record():
 # Earthdata credential saving - identical logic/tests to imerg_extract,
 # re-verified here since this is a separate, self-contained copy
 # ----------------------------------------------------------------------
-
-
-def test_save_earthdata_credentials_preserves_other_machine_entries():
-    import tempfile
-
-    tmp_path = Path(tempfile.mkdtemp()) / ".netrc"
-    tmp_path.write_text("machine example.com\nlogin someoneelse\npassword unrelated\n")
-
-    save_earthdata_credentials("myuser", "mypass", config_path=tmp_path)
-    content = tmp_path.read_text()
-
-    assert "machine example.com" in content
-    assert "machine urs.earthdata.nasa.gov" in content
-    assert "login myuser" in content
-    print("test_save_earthdata_credentials_preserves_other_machine_entries: PASS")
-
-
-def test_save_earthdata_credentials_writes_both_files_on_windows():
-    import tempfile
-    import unittest.mock as mock
-
-    tmp_home = Path(tempfile.mkdtemp())
-    with (
-        mock.patch("platform.system", return_value="Windows"),
-        mock.patch("pathlib.Path.home", return_value=tmp_home),
-    ):
-        result_paths = save_earthdata_credentials("winuser", "winpass")
-
-    assert (tmp_home / ".netrc") in result_paths
-    assert (tmp_home / "_netrc") in result_paths
-    print("test_save_earthdata_credentials_writes_both_files_on_windows: PASS")
 
 
 if __name__ == "__main__":

@@ -27,6 +27,7 @@ from qgis.core import (
 )
 from qgis.PyQt.QtGui import QIcon
 
+from mayim_tools._common.data_sources import data_source_help, log_data_source
 from mayim_tools.rainfall._common.extract_outputs import (
     OUTPUT_CSV,
     OUTPUT_MATCHED_POINTS,
@@ -47,6 +48,9 @@ WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
 STYLES_DIR = Path(__file__).resolve().parent / "styles"
 
 OUTPUT_SPECS = extract_specs("CMORPH")
+
+
+TOOL_VERSION = "0.5.1"
 
 
 class CmorphExtractAlgorithm(QgsProcessingAlgorithm):
@@ -81,11 +85,17 @@ class CmorphExtractAlgorithm(QgsProcessingAlgorithm):
         return "rainfall_tools"
 
     def shortHelpString(self):
-        return self._base_help() + "\n\n" + files_help(OUTPUT_SPECS)
+        return (
+            self._base_help()
+            + "\n\n"
+            + files_help(OUTPUT_SPECS)
+            + "\n\n"
+            + data_source_help("cmorph")
+        )
 
     def _base_help(self):
         return (
-            "CMORPH CDR Point Extractor (version 0.5.0)\n"
+            f"CMORPH CDR Point Extractor (version {TOOL_VERSION})\n"
             "\n"
             "PURPOSE:\tExtracts the full available NOAA CMORPH CDR "
             "(bias-adjusted, Climate Data Record quality) precipitation "
@@ -249,6 +259,7 @@ class CmorphExtractAlgorithm(QgsProcessingAlgorithm):
     def processAlgorithm(
         self, parameters, context: QgsProcessingContext, feedback: QgsProcessingFeedback
     ):
+        log_data_source(feedback, "cmorph")
         self._post_processors = []
         sites = self._collect_sites(parameters, context, feedback)
         feedback.pushInfo(f"{len(sites)} site(s) to process.")

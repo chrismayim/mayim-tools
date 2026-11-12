@@ -257,7 +257,7 @@ def test_csv_and_report_list_the_arf(tmp_path, ddf_path):
     r = core.assemble(subs, reaches, [], storms, core.Settings(ensembles=False))
     r.arf = m
     head, rows = arf_table(r.storms, m)
-    assert head == ["duration", "1in2", "1in50"] and rows[0][0] == "5min"
+    assert head == ["duration", "50pc AEP", "2pc AEP"] and rows[0][0] == "5min"
     assert rows[0][1] == pytest.approx(m(5), abs=1e-4)
     p = write_csv(str(tmp_path / "s.csv"), r, [])
     text = open(p, encoding="utf-8").read()

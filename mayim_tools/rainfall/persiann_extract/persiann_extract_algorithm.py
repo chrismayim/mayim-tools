@@ -31,6 +31,7 @@ from qgis.core import (
 )
 from qgis.PyQt.QtGui import QIcon
 
+from mayim_tools._common.data_sources import data_source_help, log_data_source
 from mayim_tools.rainfall._common.extract_outputs import (
     OUTPUT_CSV,
     OUTPUT_MATCHED_POINTS,
@@ -61,6 +62,9 @@ PRODUCT_OPTIONS = [
     "Daily (PERSIANN-CDR, 0.25 deg)",
     "3-Hourly (PERSIANN-CCS-CDR, 0.04 deg / ~4km)",
 ]
+
+
+TOOL_VERSION = "0.4.1"
 
 
 class PersiannExtractAlgorithm(QgsProcessingAlgorithm):
@@ -97,11 +101,17 @@ class PersiannExtractAlgorithm(QgsProcessingAlgorithm):
         )
 
     def shortHelpString(self):
-        return self._base_help() + "\n\n" + files_help(OUTPUT_SPECS)
+        return (
+            self._base_help()
+            + "\n\n"
+            + files_help(OUTPUT_SPECS)
+            + "\n\n"
+            + data_source_help("persiann")
+        )
 
     def _base_help(self):
         return (
-            "PERSIANN Point Extractor (version 0.4.0)\n"
+            f"PERSIANN Point Extractor (version {TOOL_VERSION})\n"
             "\n"
             "PURPOSE:\tExtracts PERSIANN precipitation at a point, for "
             "a specified date range or the full available record "
@@ -265,6 +275,7 @@ class PersiannExtractAlgorithm(QgsProcessingAlgorithm):
     def processAlgorithm(
         self, parameters, context: QgsProcessingContext, feedback: QgsProcessingFeedback
     ):
+        log_data_source(feedback, "persiann")
         self._post_processors = []
         sites = self._collect_sites(parameters, context, feedback)
         feedback.pushInfo(f"{len(sites)} site(s) to process.")

@@ -15,6 +15,7 @@ from datetime import datetime
 import numpy as np
 
 from mayim_tools._common.docx_report import Doc
+from mayim_tools._common.frequency import aep_header
 
 from . import cells as cl
 from . import lookup as lk
@@ -47,7 +48,7 @@ MAPS = [
     ("perm_class", "Permeability class of the rural area (Cp, Table 3.7)"),
     ("veg_class", "Vegetation class of the rural area (Cv, Table 3.7)"),
     ("c1", "Rural run-off coefficient C1 = Cs + Cp + Cv per cell"),
-    ("c50", "Run-off coefficient C for the 1:50-year flood per cell"),
+    ("c50", "Run-off coefficient C for the 2% AEP (1 in 50) flood per cell"),
 ]
 FALLBACK_COLOURS = {
     "role": {1: "#00CC00", 2: "#FF0000", 3: "#0000FF", 4: "#7F7F7F"},
@@ -119,7 +120,7 @@ def write_report(
         "by their area shares in the catchment's rural area, as on the Drainage "
         "Manual calculation form; the urban C2 is the area-weighted Table 3.7 "
         f"value ({s.position} end of each range); lakes and dams take C3 = "
-        f"{s.c3:g}. The weighted C for each return period is C_T = alpha C1D Ft + "
+        f"{s.c3:g}. The weighted C for each AEP is C_T = alpha C1D Ft + "
         "beta C2 + gamma C3."
     )
     d.caption("Table", "Run-off coefficients per catchment")
@@ -206,7 +207,8 @@ def write_report(
         "between). Ft is "
         + ("applied" if s.ft_on_c2 else "not applied")
         + " to C2 (Drainage Manual p. 3-20).",
-        "C_T = alpha C1D Ft + beta C2 + gamma C3 for 2 to 100 years, and for the "
+        "C_T = alpha C1D Ft + beta C2 + gamma C3 for 50% AEP (1 in 2) to 1% AEP "
+        "(1 in 100), and for the "
         "PMF with C1 = Cs + Cp,max + Cv,max, C2 = 1 and Ft = 1.",
         "Uncertainty: the lower (P05) and upper (P95) C1 combine the soil range "
         "(the 5 % and 95 % soil groups from the group probabilities) and the "
@@ -282,7 +284,8 @@ def write_report(
     )
     d.caption("Table", "Adjustment factor Ft for C1 (DM Table 3.8)")
     d.table(
-        ["Catchment"] + [f"{t} years" for t in tb.RETURN_PERIODS],
+        ["Catchment"]
+        + [aep_header(t, len(tb.RETURN_PERIODS)) for t in tb.RETURN_PERIODS],
         [[tb.FT_LABELS[k]] + [f"{v:.2f}" for v in vals] for k, vals in tb.FT.items()],
         [4.5] + [2.0] * 6,
     )
@@ -372,7 +375,7 @@ def write_report(
             [2.1] + [w] * len(keys) + [1.3, 2.0],
         )
 
-    d.heading("Run-off coefficient per return period", 2)
+    d.heading("Run-off coefficient per AEP", 2)
     d.caption("Table", "Weighted run-off coefficient C_T per catchment")
     rows = []
     for c in cats:
@@ -385,7 +388,9 @@ def write_report(
                 + ["-"]
             )
     d.table(
-        ["Catchment"] + [f"{t} yr" for t in tb.RETURN_PERIODS] + ["PMF"],
+        ["Catchment"]
+        + [aep_header(t, len(tb.RETURN_PERIODS)) for t in tb.RETURN_PERIODS]
+        + ["PMF"],
         rows,
         [3.4] + [1.87] * 7,
     )

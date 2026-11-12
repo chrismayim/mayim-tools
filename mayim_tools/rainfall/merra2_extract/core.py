@@ -65,9 +65,10 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
 
 import pandas as pd
+
+from mayim_tools._common.credentials import earthdata_login
 
 RECORD_START = "1980-01-01"  # confirmed directly from Giovanni's live WMS listing
 # confirmed directly from Giovanni's live WMS listing
@@ -229,100 +230,15 @@ def fetch_giovanni_chunk(
     return _parse_giovanni_csv(resp.text)
 
 
-def get_earthdata_token(config_path: str | Path | None = None) -> str:
-    """Authenticates via earthaccess (tries a stored .netrc first, then
-    environment variables - no interactive prompt, since this runs
-    inside a non-interactive QGIS Processing algorithm) and returns a
-    bearer token for the Giovanni API. Identical logic to
-    imerg_extract's own get_earthdata_token() - MERRA-2 uses the same
-    NASA Earthdata Login as IMERG (both are GES DISC products)."""
-    try:
-        import earthaccess
-    except ImportError as exc:
-        raise RuntimeError(
-            "The 'earthaccess' package is required. Install it into QGIS's Python: "
-            "python -m pip install earthaccess"
-        ) from exc
+def get_earthdata_token() -> str:
+    """Log in to NASA Earthdata (see _common.credentials.earthdata_login:
+    the tool's QGIS authentication configuration first, then ~/.netrc)
+    and return a bearer token for the Giovanni API."""
+    import earthaccess
 
-    auth = earthaccess.login(strategy="netrc")
-    if not auth.authenticated:
-        auth = earthaccess.login(strategy="environment")
-    if not auth.authenticated:
-        raise RuntimeError(
-            "Could not authenticate with Earthdata Login. Enter your "
-            "Earthdata username/password into this tool's parameters once "
-            "(saved automatically for future runs to ~/.netrc, and on "
-            "Windows also to ~/_netrc - Python's own netrc handling looks "
-            "for that underscore-prefixed name on Windows specifically), "
-            "or set up the file by hand yourself (machine "
-            "urs.earthdata.nasa.gov). Also confirm 'NASA GESDISC DATA "
-            "ARCHIVE' is an authorized application on your Earthdata "
-            "profile: https://urs.earthdata.nasa.gov/profile"
-        )
+    earthdata_login()
     token = earthaccess.get_edl_token()
     return token["access_token"] if isinstance(token, dict) else token
-
-
-EARTHDATA_NETRC_MACHINE = "urs.earthdata.nasa.gov"
-
-
-def save_earthdata_credentials(
-    username: str, password: str, config_path: str | Path | None = None
-) -> list:
-    """Writes/updates a netrc-format file with an entry for
-    urs.earthdata.nasa.gov. Identical logic to imerg_extract's own
-    save_earthdata_credentials() - see that plugin's dev/README.md
-    for why this preserves unrelated existing entries (netrc is a
-    shared, multi-service file, unlike era5_extract's single-purpose
-    .cdsapirc) and why both '.netrc' and, on Windows, '_netrc' are
-    written (Python's own netrc handling looks for the underscore-
-    prefixed name on Windows specifically)."""
-    import platform
-
-    if config_path:
-        return [_write_netrc_entry(Path(config_path), username, password)]
-
-    paths = [Path.home() / ".netrc"]
-    if platform.system() == "Windows":
-        paths.append(Path.home() / "_netrc")
-
-    return [_write_netrc_entry(p, username, password) for p in paths]
-
-
-def _write_netrc_entry(path: Path, username: str, password: str) -> Path:
-    entry = (
-        f"machine {EARTHDATA_NETRC_MACHINE}\nlogin {username}\npassword {password}\n"
-    )
-
-    if path.exists():
-        existing = path.read_text()
-        blocks = _split_netrc_blocks(existing)
-        blocks = [
-            b
-            for b in blocks
-            if not b.strip().startswith(f"machine {EARTHDATA_NETRC_MACHINE}")
-        ]
-        blocks.append(entry.strip())
-        new_content = "\n".join(b.strip() for b in blocks if b.strip()) + "\n"
-    else:
-        new_content = entry
-
-    path.write_text(new_content)
-    return path
-
-
-def _split_netrc_blocks(content: str) -> list:
-    blocks = []
-    current = []
-    for line in content.splitlines():
-        if line.strip().startswith("machine") and current:
-            blocks.append("\n".join(current))
-            current = [line]
-        else:
-            current.append(line)
-    if current:
-        blocks.append("\n".join(current))
-    return [b for b in blocks if b.strip()]
 
 
 def fetch_merra2_timeseries(

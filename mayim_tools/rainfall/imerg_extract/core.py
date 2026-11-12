@@ -38,15 +38,10 @@ scale problem:
    above a granule-count threshold unless explicitly forced - NOT
    suitable for the full multi-decade record.
 
-CREDENTIALS (aligned with era5_extract's v0.2 "enter once, remembered"
-pattern): get_earthdata_token()/the granule-based path both read
-~/.netrc by default. save_earthdata_credentials() lets a QGIS
-parameter entry be written to .netrc automatically on first use, the
-same UX as ERA5's CDS API Key parameter - BUT .netrc is a shared,
-multi-service file by convention (unlike .cdsapirc, which exists
-solely for one purpose), so saving here must preserve any OTHER
-machine entries already present, only adding/replacing the
-urs.earthdata.nasa.gov entry specifically - never a blind overwrite.
+CREDENTIALS: both methods log in through
+_common.credentials.earthdata_login(): the Earthdata login chosen in
+the tool (a QGIS authentication configuration, passed in for the run
+only) first, then an existing ~/.netrc. Nothing is written to disk.
 
 IMPORTANT - things verified vs assumed (see dev/README.md for detail
 and sources): the Giovanni API endpoint, its single-point restriction,
@@ -67,9 +62,10 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
 
 import pandas as pd
+
+from mayim_tools._common.credentials import earthdata_login
 
 RECORD_START = "2000-06-01"  # confirmed: IMERG Final Run's actual record start
 DEFAULT_GIOVANNI_VARIABLE = (
@@ -87,8 +83,6 @@ GIOVANNI_TIMESERIES_URL = "https://api.giovanni.earthdata.nasa.gov/timeseries"
 GRANULE_COUNT_WARN_THRESHOLD = 3000
 
 DEFAULT_MAX_WORKERS = 8  # matches chirps_extract's default and reasoning
-
-EARTHDATA_NETRC_MACHINE = "urs.earthdata.nasa.gov"
 
 
 @dataclass
@@ -254,124 +248,13 @@ def fetch_giovanni_chunk(
     return _parse_giovanni_csv(resp.text)
 
 
-def save_earthdata_credentials(
-    username: str, password: str, config_path: str | Path | None = None
-) -> list:
-    """Writes/updates a netrc-format file with an entry for
-    urs.earthdata.nasa.gov, so a username/password entered once via a
-    QGIS parameter is picked up automatically on every future run -
-    the same UX as era5_extract's CDS API Key parameter.
+def get_earthdata_token() -> str:
+    """Log in to NASA Earthdata (see _common.credentials.earthdata_login:
+    the tool's QGIS authentication configuration first, then ~/.netrc)
+    and return a bearer token for the Giovanni API."""
+    import earthaccess
 
-    WINDOWS FILENAME QUIRK (found via a real live-run failure, not
-    anticipated in advance): Python's own netrc module - and by
-    extension earthaccess/requests, which rely on it - defaults to
-    looking for `_netrc` (leading underscore) on Windows, NOT `.netrc`
-    (leading dot), a genuine documented platform difference. A version
-    of this function that only wrote `.netrc` correctly created the
-    file, but on Windows nothing was actually reading it - the earlier
-    live-run error ("No .netrc found at ...\\_netrc") revealed this
-    directly. Fixed by writing BOTH `.netrc` and, on Windows
-    specifically, `_netrc` as well - harmless on non-Windows (the
-    second write is skipped), and covers whichever convention any
-    given library on Windows happens to check, rather than betting on
-    one.
-
-    UNLIKE .cdsapirc (which exists solely for one purpose), netrc
-    files are shared, multi-service files by convention - a user may
-    already have entries for other machines in them. This function
-    preserves any such existing entries in EACH file it touches,
-    replacing ONLY the urs.earthdata.nasa.gov block if one already
-    exists there, or appending a new one if not - never a blind
-    overwrite of the whole file.
-
-    config_path is overridable (used by tests to write to a temp
-    location instead of the real home directory) - when given
-    explicitly, only that one exact path is written (no Windows-
-    specific second file), so tests stay precise about what they're
-    checking. Returns the list of paths actually written.
-    """
-    if config_path:
-        return [_write_netrc_entry(Path(config_path), username, password)]
-
-    import platform
-
-    paths = [Path.home() / ".netrc"]
-    if platform.system() == "Windows":
-        paths.append(Path.home() / "_netrc")
-
-    return [_write_netrc_entry(p, username, password) for p in paths]
-
-
-def _write_netrc_entry(path: Path, username: str, password: str) -> Path:
-    """Writes/updates one netrc-format file at the given path with an
-    entry for urs.earthdata.nasa.gov, preserving any other existing
-    machine entries in that same file - see save_earthdata_credentials()
-    for why this matters."""
-    entry = (
-        f"machine {EARTHDATA_NETRC_MACHINE}\nlogin {username}\npassword {password}\n"
-    )
-
-    if path.exists():
-        existing = path.read_text()
-        blocks = _split_netrc_blocks(existing)
-        blocks = [
-            b
-            for b in blocks
-            if not b.strip().startswith(f"machine {EARTHDATA_NETRC_MACHINE}")
-        ]
-        blocks.append(entry.strip())
-        new_content = "\n".join(b.strip() for b in blocks if b.strip()) + "\n"
-    else:
-        new_content = entry
-
-    path.write_text(new_content)
-    return path
-
-
-def _split_netrc_blocks(content: str) -> list:
-    """Splits a .netrc file's content into per-machine blocks, each
-    starting with a 'machine <name>' line. Used only by
-    save_earthdata_credentials() to preserve unrelated entries."""
-    blocks = []
-    current = []
-    for line in content.splitlines():
-        if line.strip().startswith("machine") and current:
-            blocks.append("\n".join(current))
-            current = [line]
-        else:
-            current.append(line)
-    if current:
-        blocks.append("\n".join(current))
-    return [b for b in blocks if b.strip()]
-
-
-def get_earthdata_token(config_path: str | Path | None = None) -> str:
-    """Authenticates via earthaccess (tries a stored .netrc first, then
-    environment variables - no interactive prompt, since this runs
-    inside a non-interactive QGIS Processing algorithm) and returns a
-    bearer token for the Giovanni API."""
-    try:
-        import earthaccess
-    except ImportError as missing_dependency:
-        raise RuntimeError(
-            "The 'earthaccess' package is required. Install it into QGIS's Python: "
-            "python -m pip install earthaccess"
-        ) from missing_dependency
-
-    auth = earthaccess.login(strategy="netrc")
-    if not auth.authenticated:
-        auth = earthaccess.login(strategy="environment")
-    if not auth.authenticated:
-        raise RuntimeError(
-            "Could not authenticate with Earthdata Login. Enter your Earthdata username/"
-            "password into this tool's parameters once (saved automatically for future "
-            "runs to ~/.netrc, and on Windows also to ~/_netrc - Python's own netrc "
-            "handling looks for that underscore-prefixed name on Windows specifically, "
-            "not the dot-prefixed one), or set up the file by hand yourself (machine "
-            "urs.earthdata.nasa.gov). Also confirm 'NASA GESDISC DATA ARCHIVE' is an "
-            "authorized application on your Earthdata profile: "
-            "https://urs.earthdata.nasa.gov/profile"
-        )
+    earthdata_login()
     token = earthaccess.get_edl_token()
     return token["access_token"] if isinstance(token, dict) else token
 
@@ -672,13 +555,7 @@ def fetch_granule_based_timeseries(
 
     _check_netcdf_backend_available()
 
-    auth = earthaccess.login(strategy="netrc")
-    if not auth.authenticated:
-        auth = earthaccess.login(strategy="environment")
-    if not auth.authenticated:
-        raise RuntimeError(
-            "Could not authenticate with Earthdata Login (see get_earthdata_token's error for detail)."
-        )
+    earthdata_login()
 
     results = earthaccess.search_data(
         short_name=short_name,

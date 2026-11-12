@@ -31,6 +31,7 @@ from qgis.core import (
 )
 from qgis.PyQt.QtGui import QIcon
 
+from mayim_tools._common.data_sources import data_source_help, log_data_source
 from mayim_tools.rainfall._common.extract_outputs import (
     OUTPUT_CSV,
     OUTPUT_MATCHED_POINTS,
@@ -51,6 +52,9 @@ WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
 STYLES_DIR = Path(__file__).resolve().parent / "styles"
 
 OUTPUT_SPECS = extract_specs("CHIRPS")
+
+
+TOOL_VERSION = "0.5.1"
 
 
 class ChirpsExtractAlgorithm(QgsProcessingAlgorithm):
@@ -88,11 +92,17 @@ class ChirpsExtractAlgorithm(QgsProcessingAlgorithm):
         return "rainfall_tools"
 
     def shortHelpString(self):
-        return self._base_help() + "\n\n" + files_help(OUTPUT_SPECS)
+        return (
+            self._base_help()
+            + "\n\n"
+            + files_help(OUTPUT_SPECS)
+            + "\n\n"
+            + data_source_help("chirps")
+        )
 
     def _base_help(self):
         return (
-            "CHIRPS Point Extractor (version 0.5.0)\n"
+            f"CHIRPS Point Extractor (version {TOOL_VERSION})\n"
             "\n"
             "PURPOSE:\tExtracts CHIRPS v3 precipitation at a point for a specified "
             "date range or the full available record (1981-01-01 to today for "
@@ -263,6 +273,7 @@ class ChirpsExtractAlgorithm(QgsProcessingAlgorithm):
     def processAlgorithm(
         self, parameters, context: QgsProcessingContext, feedback: QgsProcessingFeedback
     ):
+        log_data_source(feedback, "chirps")
         self._post_processors = []
         sites = self._collect_sites(parameters, context, feedback)
         feedback.pushInfo(f"{len(sites)} site(s) to process.")
