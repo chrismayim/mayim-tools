@@ -39,8 +39,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import h5py
-
+from mayim_tools.hec_ras._common.h5io import is_group, open_h5
 from mayim_tools.hec_ras._common.hdf5_utils import (
     PolylineFeature,
     read_polygon_features,
@@ -76,7 +75,7 @@ def read_break_lines(geometry_hdf5_path: str) -> list[PolylineFeature]:
     Returns an empty list if the project has no breaklines defined,
     rather than raising.
     """
-    with h5py.File(geometry_hdf5_path, "r") as h5file:
+    with open_h5(geometry_hdf5_path) as h5file:
         if BREAK_LINES_GROUP not in h5file:
             return []
         return read_polyline_features(h5file, BREAK_LINES_GROUP)
@@ -89,7 +88,7 @@ def read_refinement_regions(geometry_hdf5_path: str) -> list[PolylineFeature]:
     Returns an empty list if the project has no refinement regions
     defined, rather than raising.
     """
-    with h5py.File(geometry_hdf5_path, "r") as h5file:
+    with open_h5(geometry_hdf5_path) as h5file:
         if REFINEMENT_REGIONS_GROUP not in h5file:
             return []
         return read_polygon_features(h5file, REFINEMENT_REGIONS_GROUP)
@@ -108,22 +107,18 @@ def list_2d_flow_area_names(geometry_hdf5_path: str) -> list[str]:
     and must be filtered out; only actual h5py.Group children (one per
     flow area, named after it) are real flow areas.
     """
-    with h5py.File(geometry_hdf5_path, "r") as h5file:
+    with open_h5(geometry_hdf5_path) as h5file:
         if FLOW_AREAS_GROUP not in h5file:
             return []
         areas_group = h5file[FLOW_AREAS_GROUP]
-        return [
-            key
-            for key in areas_group.keys()
-            if isinstance(areas_group[key], h5py.Group)
-        ]
+        return [key for key in areas_group.keys() if is_group(areas_group[key])]
 
 
 def read_2d_flow_area_perimeter(
     geometry_hdf5_path: str, flow_area_name: str
 ) -> list[tuple[float, float]]:
     """Read one 2D Flow Area's own outer perimeter ring."""
-    with h5py.File(geometry_hdf5_path, "r") as h5file:
+    with open_h5(geometry_hdf5_path) as h5file:
         group_path = f"{FLOW_AREAS_GROUP}/{flow_area_name}"
         if group_path not in h5file:
             raise KeyError(f"2D Flow Area '{flow_area_name}' not found.")
@@ -142,7 +137,7 @@ def read_2d_flow_area_cells(
     rather than raising, so one malformed cell doesn't take down the
     whole read.
     """
-    with h5py.File(geometry_hdf5_path, "r") as h5file:
+    with open_h5(geometry_hdf5_path) as h5file:
         group_path = f"{FLOW_AREAS_GROUP}/{flow_area_name}"
         if group_path not in h5file:
             raise KeyError(f"2D Flow Area '{flow_area_name}' not found.")

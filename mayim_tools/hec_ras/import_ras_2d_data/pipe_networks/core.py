@@ -23,8 +23,7 @@ tests/test_pipe_networks_core.py).
 
 from __future__ import annotations
 
-import h5py
-
+from mayim_tools.hec_ras._common.h5io import open_h5
 from mayim_tools.hec_ras._common.hdf5_utils import (
     PointFeature,
     PolylineFeature,
@@ -44,7 +43,7 @@ def read_pipe_nodes(geometry_hdf5_path: str) -> list[PointFeature]:
     Returns an empty list if the project has no pipe network defined,
     rather than raising.
     """
-    with h5py.File(geometry_hdf5_path, "r") as h5file:
+    with open_h5(geometry_hdf5_path) as h5file:
         if PIPE_NODES_GROUP not in h5file:
             return []
         return read_point_features(h5file, PIPE_NODES_GROUP)
@@ -57,7 +56,7 @@ def read_pipe_conduits(geometry_hdf5_path: str) -> list[PolylineFeature]:
     Returns an empty list if the project has no pipe network defined,
     rather than raising.
     """
-    with h5py.File(geometry_hdf5_path, "r") as h5file:
+    with open_h5(geometry_hdf5_path) as h5file:
         if PIPE_CONDUITS_GROUP not in h5file:
             return []
         return read_polyline_features(h5file, PIPE_CONDUITS_GROUP)

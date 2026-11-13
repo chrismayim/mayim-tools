@@ -14,8 +14,7 @@ geometry/load_geometry_algorithm.py, the single consolidated tool.
 
 from __future__ import annotations
 
-import h5py
-
+from mayim_tools.hec_ras._common.h5io import open_h5
 from mayim_tools.hec_ras._common.hdf5_utils import (
     PointFeature,
     PolylineFeature,
@@ -48,7 +47,7 @@ def read_reference_lines(geometry_hdf5_path: str) -> list[PolylineFeature]:
         Empty list if the project has no Reference Lines defined at all
         (a normal, non-error case - not every model has them).
     """
-    with h5py.File(geometry_hdf5_path, "r") as h5file:
+    with open_h5(geometry_hdf5_path) as h5file:
         if REFERENCE_LINES_GROUP not in h5file:
             return []
         return read_polyline_features(h5file, REFERENCE_LINES_GROUP)
@@ -61,7 +60,7 @@ def read_reference_points(geometry_hdf5_path: str) -> list[PointFeature]:
     Returns an empty list if the group isn't present, same reasoning as
     read_reference_lines.
     """
-    with h5py.File(geometry_hdf5_path, "r") as h5file:
+    with open_h5(geometry_hdf5_path) as h5file:
         if REFERENCE_POINTS_GROUP not in h5file:
             return []
         return read_point_features(h5file, REFERENCE_POINTS_GROUP)

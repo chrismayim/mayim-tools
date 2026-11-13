@@ -161,7 +161,7 @@ from mayim_tools.hec_ras.import_ras_2d_data.structures.core import (
     read_weir_structures,
 )
 
-TOOL_VERSION = "0.6.0"
+TOOL_VERSION = "0.6.1"
 
 # --- Element catalogue -------------------------------------------------
 #
@@ -662,6 +662,18 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
         hdf_path = self.parameterAsFile(parameters, self.INPUT_GEOMETRY_HDF, context)
         if not hdf_path:
             raise QgsProcessingException("No geometry HDF5 file provided.")
+        from mayim_tools.hec_ras._common import h5io
+
+        h5io.NOTES.clear()
+        if h5io.backend() != "h5py":
+            feedback.pushInfo(
+                f"h5py cannot load inside QGIS ({h5io.H5PY_ERROR}); "
+                + (
+                    "the HDF5 file is read with h5py in a separate Python process."
+                    if h5io.backend() == "h5py-external"
+                    else "the HDF5 file is read through GDAL's HDF5 driver."
+                )
+            )
 
         crs: QgsCoordinateReferenceSystem = self.parameterAsCrs(
             parameters, self.CRS, context
@@ -749,6 +761,10 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
             raise QgsProcessingException(
                 "No layer could be written - see the errors above."
             )
+        for note in h5io.NOTES:
+            if "incomplete" in note or "failed" in note:
+                feedback.pushWarning(note)
+        h5io.clear_cache()
         return {self.OUTPUT_FOLDER: output_folder}
 
     def _out_path(self, output_folder, slug) -> str:

@@ -44,8 +44,7 @@ tests/test_structures_core.py).
 
 from __future__ import annotations
 
-import h5py
-
+from mayim_tools.hec_ras._common.h5io import open_h5
 from mayim_tools.hec_ras._common.hdf5_utils import (
     PolylineFeature,
     read_polyline_features,
@@ -84,7 +83,7 @@ def read_structures(geometry_hdf5_path: str) -> list[PolylineFeature]:
     Returns an empty list if the project has no structures defined at
     all, rather than raising.
     """
-    with h5py.File(geometry_hdf5_path, "r") as h5file:
+    with open_h5(geometry_hdf5_path) as h5file:
         if STRUCTURES_GROUP not in h5file:
             return []
         return read_polyline_features(
@@ -233,7 +232,7 @@ def read_culvert_barrels(geometry_hdf5_path: str) -> list[PolylineFeature]:
     Returns an empty list if the project has no culvert barrels defined
     at all, rather than raising.
     """
-    with h5py.File(geometry_hdf5_path, "r") as h5file:
+    with open_h5(geometry_hdf5_path) as h5file:
         if CULVERT_BARRELS_GROUP not in h5file:
             return []
         return read_polyline_features(

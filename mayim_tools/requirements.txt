@@ -13,7 +13,7 @@
 # Package              Needed by
 python-docx            # Word reports (most tools)
 geopandas              # Design Rainfall Estimation (South Africa)
-h5py                   # Import RAS 2D data
+h5py                   # Import RAS 2D data (optional: QGIS's GDAL reads the file when h5py cannot load)
 xarray                 # GRIB to CSV, NetCDF4 tools, ERA5, IMERG, MERRA2
 cfgrib                 # GRIB to CSV (reads GRIB files through xarray)
 netCDF4                # NetCDF4 tools, IMERG
