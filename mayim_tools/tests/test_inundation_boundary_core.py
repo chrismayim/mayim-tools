@@ -337,6 +337,9 @@ def test_report_docx(tmp_path):
         {
             "tool": "DEM Inundation Boundary",
             "version": "0.4.0",
+            "project_number": "P123",
+            "project_name": "Test dam",
+            "software": "Mayim Tools 0.31.1, QGIS 4.0.3",
             "dem": {"path": "dem.tif", "crs": "EPSG:32735", "cell_x": 1, "cell_y": 1},
             "bounding": "box (1 feature(s))",
             "seeds": {"layer": "seed"},
@@ -361,7 +364,17 @@ def test_report_docx(tmp_path):
     h1 = doc.styles["Heading 1"].font
     assert h1.name == "Arial" and h1.all_caps and str(h1.color.rgb) == "0F0F36"
     assert doc.styles["Normal"].font.name == "Arial"
-    header_xml = doc.tables[0].rows[0].cells[0]._tc.xml
+    # title page (output standard 1.4): details table first, then the body
+    details = {r.cells[0].text: r.cells[1].text for r in doc.tables[0].rows}
+    assert details["Project number"] == "P123"
+    assert details["Project / site"] == "Test dam"
+    assert details["Tool and version"] == "DEM Inundation Boundary, version 0.4.0"
+    assert details["Software"] == "Mayim Tools 0.31.1, QGIS 4.0.3"
+    assert details["Document status"] == "Draft"
+    assert doc.paragraphs[0].style.name == "Title" or any(
+        p.style.name == "Title" for p in doc.paragraphs[:5]
+    )
+    header_xml = doc.tables[1].rows[0].cells[0]._tc.xml
     assert "ADADCC" in header_xml
     # parameter table: three columns, Parameter | Value | Definition
     params = next(
@@ -381,3 +394,26 @@ def test_report_dry_level(tmp_path):
     path = tmp_path / "dry.docx"
     write_report_docx(str(path), res, {"warnings": res.warnings})
     assert path.exists()
+
+
+def test_plan_extent_shows_whole_bounding_polygon_with_margin():
+    from mayim_tools.hydrology.inundation_boundary.report import plan_extent
+
+    z, centre = _cone()
+    cx, cy = _centre_xy(centre)
+    # a long bounding polygon, much larger than the water
+    bound = [[[(cx - 40, cy - 10), (cx + 160, cy - 10), (cx + 160, cy + 10),
+               (cx - 40, cy + 10), (cx - 40, cy - 10)]]]  # fmt: skip
+    res = run_inundation(z, -9999.0, GT, (0, 0, *z.shape), 101.0, bounding=bound)
+    xmin, ymin, xmax, ymax = plan_extent(res, bound)
+    pad = 0.10 * 200
+    assert xmin == pytest.approx(cx - 40 - pad)
+    assert xmax == pytest.approx(cx + 160 + pad)
+    assert ymin == pytest.approx(cy - 10 - pad)
+    assert ymax == pytest.approx(cy + 10 + pad)
+    # without a bounding polygon: the water, with the same 10% margin
+    xmin, _, xmax, _ = plan_extent(res)
+    xs = [p[0] for ring in res.lines for p in ring]
+    span = max(max(xs) - min(xs), max(p[1] for r in res.lines for p in r)
+               - min(p[1] for r in res.lines for p in r))  # fmt: skip
+    assert xmin == pytest.approx(min(xs) - 0.10 * span)

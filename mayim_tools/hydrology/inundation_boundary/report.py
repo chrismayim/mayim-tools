@@ -34,6 +34,7 @@ from mayim_tools.hydrology.catchment_delineation.report import (
 from .core import InundationResult
 
 REPORT_TITLE = "DEM Inundation Boundary"
+PLAN_PAD = 0.10  # layout map margin around the bounding polygon or water
 
 C_RED, C_AMBER, C_YELLOW, C_GREEN, C_BLUE, C_CYAN, C_MAGENTA = CHART_COLOURS
 
@@ -97,6 +98,23 @@ def depth_classes(depth: np.ndarray, cell_area: float, weights=None) -> list[dic
             }
         )
     return out
+
+
+def title_details(ctx: dict) -> list[tuple[str, str]]:
+    """Report details for the title page (output standard 1.4)."""
+    from datetime import date
+
+    tool = ctx.get("tool", REPORT_TITLE)
+    version = ctx.get("version")
+    return [
+        ("Project number", ctx.get("project_number") or "-"),
+        ("Project / site", ctx.get("project_name") or "-"),
+        ("Prepared by", ctx.get("prepared_by") or "Mayim Consulting"),
+        ("Tool and version", f"{tool}, version {version}" if version else tool),
+        ("Software", ctx.get("software") or "-"),
+        ("Report date", ctx.get("report_date") or date.today().isoformat()),
+        ("Document status", ctx.get("status") or "Draft"),
+    ]
 
 
 def describe_result(result: InundationResult, geometry=None) -> str:
@@ -165,12 +183,13 @@ def _ring_patch(rings, **kwargs):
     return PathPatch(Path(verts, codes), **kwargs)
 
 
-def plan_extent(result: InundationResult, bounding=None, pad: float = 0.08):
-    """(xmin, ymin, xmax, ymax) of the water (or of the bounding polygon /
-    analysis window when nothing is wet), padded on every side."""
-    pts = [p for ring in result.lines for p in ring]
-    if not pts and bounding:
-        pts = [p for poly in bounding for ring in poly for p in ring]
+def plan_extent(result: InundationResult, bounding=None, pad: float = PLAN_PAD):
+    """(xmin, ymin, xmax, ymax) of the layout map: the whole bounding polygon
+    when one is given, otherwise the water (or the analysis window when
+    nothing is wet), with ``pad`` x the larger side added on every side."""
+    pts = [p for poly in bounding or () for ring in poly for p in ring]
+    if not pts:
+        pts = [p for ring in result.lines for p in ring]
     if not pts:
         gt = result.window_gt
         rows, cols = result.fill.shape
@@ -339,7 +358,17 @@ def write_report_docx(
     cell_area = abs(result.window_gt[1] * result.window_gt[5])
     g = geometry
 
-    d.heading(REPORT_TITLE, 1)
+    d.title_page(
+        REPORT_TITLE,
+        purpose=(
+            "This report gives the ground inundated by water standing at "
+            f"{result.level:.2f} m, read from the digital elevation model, with "
+            "its boundary, area, volume and depths, as a screening estimate of "
+            "the inundation extent."
+        ),
+        details=title_details(ctx),
+        subtitle=ctx.get("project_name") or None,
+    )
 
     # 1. Summary ------------------------------------------------------------
     d.heading("1. Summary", 2)

@@ -28,12 +28,11 @@ from qgis.core import (
 )
 from qgis.PyQt.QtCore import QMetaType
 
+from mayim_tools._common.qgis_maps import contour_layers
 from mayim_tools.hydrology.catchment_delineation.qgis_outputs import (
-    CONTOUR_SYMBOL,
     STUDY_AREA_SYMBOL,
     _osm_has_tiles,
     legend_entries,
-    lines_layer,
     osm_layer,
     render_map,
 )
@@ -193,7 +192,8 @@ def make_plan_map(
     """Returns the report's PlanMapFn. Layers (memory layers, styled here):
     ``boundary`` lines, ``seeds`` points, ``study_area`` polygon; the depth
     raster from ``depth_path`` with the stage-storage depth style.
-    ``contours_for(extent)`` returns [(level, coords)] contour lines."""
+    ``contours_for(extent)`` returns (minor, major) contour lines
+    [(level, coords)], ``contour_interval`` being the minor interval."""
     messages = messages if messages is not None else []
     osm = osm_layer() if use_osm else None
     if use_osm and osm is None:
@@ -230,15 +230,11 @@ def make_plan_map(
             top_down.append(boundary)
         if study_area is not None and study_area.featureCount():
             top_down.append(study_area)
-        contour_layer = None
+        contour_sets = []  # [(layer, legend label)], major first
         if contours_for is not None and contour_interval > 0:
-            lines = contours_for(extent)
-            if lines:
-                contour_layer = lines_layer("Contours", lines, crs, "elev_m")
-                contour_layer.setRenderer(
-                    QgsSingleSymbolRenderer(QgsLineSymbol.createSimple(CONTOUR_SYMBOL))
-                )
-                top_down.append(contour_layer)
+            minor, major = contours_for(extent)
+            contour_sets = contour_layers(minor, major, crs, contour_interval)
+            top_down += [layer for layer, _label in contour_sets]
         if depth is not None:
             top_down.append(depth)
         osm_ok = False
@@ -270,10 +266,8 @@ def make_plan_map(
             legend += legend_entries(study_area, "Bounding polygon")
         if seeds is not None and seeds.featureCount():
             legend += legend_entries(seeds, "Seed point")
-        if contour_layer is not None:
-            legend += legend_entries(
-                contour_layer, f"Contours ({contour_interval:g} m interval)"
-            )
+        for layer, label in reversed(contour_sets):  # minor, then major
+            legend += legend_entries(layer, label)
         return PlanMap(
             image=image,
             extent=rendered,

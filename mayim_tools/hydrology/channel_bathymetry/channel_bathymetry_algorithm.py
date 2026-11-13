@@ -187,6 +187,21 @@ def _r(value, digits=3):
     )
 
 
+def _software_version() -> str:
+    """'Mayim Tools <version>, QGIS <version>' for the report title page."""
+    parts = []
+    metadata = Path(__file__).resolve().parents[2] / "metadata.txt"
+    try:
+        for line in metadata.read_text(encoding="utf-8").splitlines():
+            if line.startswith("version="):
+                parts.append(f"Mayim Tools {line.split('=', 1)[1].strip()}")
+                break
+    except OSError:
+        pass
+    parts.append(f"QGIS {Qgis.version()}")
+    return ", ".join(parts)
+
+
 class ChannelBathymetryAlgorithm(QgsProcessingAlgorithm):
     DEM = "DEM"
     CENTRELINES = "CENTRELINES"
@@ -760,7 +775,7 @@ class ChannelBathymetryAlgorithm(QgsProcessingAlgorithm):
                 "run_time": datetime.now().strftime("%Y-%m-%d %H:%M"),
                 "project_number": project_number or None,
                 "project_name": project_name or None,
-                "software": f"QGIS {Qgis.version()}",
+                "software": _software_version(),
                 "dem": {
                     "path": dem_layer.source(),
                     "crs": f"{crs.authid()} - {crs.description()}",

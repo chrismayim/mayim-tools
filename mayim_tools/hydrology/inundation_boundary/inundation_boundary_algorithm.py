@@ -49,7 +49,7 @@ from mayim_tools._common.output_files import (
     OutputSpec,
     clean_name_part,
 )
-from mayim_tools.hydrology._common.contours import dem_contours
+from mayim_tools.hydrology._common.contours import minor_major_contours
 from mayim_tools.hydrology._common.d8_network import (
     GridError,
     nodata_mask,
@@ -86,7 +86,7 @@ from .qgis_outputs import (
 )
 from .report import write_report_docx
 
-TOOL_VERSION = "0.5.0"
+TOOL_VERSION = "0.6.0"
 
 STYLE_DEPTH_PATH = str(STYLES_DIR / STYLE_DEPTH)  # stage-storage "Depth at top stage"
 STYLE_WSE_PATH = str(
@@ -148,6 +148,21 @@ FOLDER_PARAMS = {
 }
 
 
+def _software_version() -> str:
+    """'Mayim Tools <version>, QGIS <version>' for the report title page."""
+    parts = []
+    metadata = Path(__file__).resolve().parents[2] / "metadata.txt"
+    try:
+        for line in metadata.read_text(encoding="utf-8").splitlines():
+            if line.startswith("version="):
+                parts.append(f"Mayim Tools {line.split('=', 1)[1].strip()}")
+                break
+    except OSError:
+        pass
+    parts.append(f"QGIS {Qgis.version()}")
+    return ", ".join(parts)
+
+
 class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
     DEM = "DEM"
     WATER_LEVEL = "WATER_LEVEL"
@@ -156,9 +171,11 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
     SEEDS = "SEEDS"
     SMOOTHING = "SMOOTHING"
     MIN_CELLS = "MIN_CELLS"
+    SHOW_CONTOURS = "SHOW_CONTOURS"
     CONTOUR_INTERVAL = "CONTOUR_INTERVAL"
     REPORT_BASEMAP = "REPORT_BASEMAP"
     PROJECT_NUMBER = "PROJECT_NUMBER"
+    PROJECT_NAME = "PROJECT_NAME"
 
     def icon(self):
         return QIcon(
@@ -235,12 +252,15 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
             "rasters follow the DEM cells, so their edge is stepped; the "
             "smoothed polygons show the interpolated water's edge.\n"
             "\n"
-            "WORD REPORT:\tAn annexure in the Mayim report standard: summary, "
-            "method, inputs, parameters with definitions, depth classes, a "
-            "layout map (rendered by QGIS: depth, boundary, bounding polygon, "
-            "seeds, DEM contours at the set interval and an OpenStreetMap "
-            "background - needs internet), the depth distribution, outputs, "
-            "notes and references.\n"
+            "WORD REPORT:\tAn annexure in the Mayim Tools output standard: a "
+            "title page (project number, project / site name, tool and version, "
+            "software, date, status), summary, method, inputs, parameters with "
+            "definitions, depth classes, a layout map (rendered by QGIS: depth, "
+            "boundary, bounding polygon, seeds, minor and major DEM contours - "
+            "major every fifth - and an OpenStreetMap background, which needs "
+            "internet), the depth distribution, outputs, notes and references. "
+            "The layout map shows the whole bounding polygon with a 10% margin "
+            "(without one, the water with a 10% margin).\n"
             "\n"
             "LIMITATIONS:\tA level-pool (bathtub) extent - no flow, no "
             "hydraulic gradient, no structures below DEM resolution. For "
@@ -288,6 +308,13 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
                 optional=True,
             )
         )
+        self.addParameter(
+            QgsProcessingParameterString(
+                self.PROJECT_NAME,
+                "Project / site name (report title page, optional)",
+                optional=True,
+            )
+        )
         for spec in OUTPUT_SPECS:
             self.addParameter(
                 QgsProcessingParameterBoolean(
@@ -314,9 +341,15 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
                 minValue=0.0,
                 defaultValue=DEFAULT_MIN_CELLS,
             ),
+            QgsProcessingParameterBoolean(
+                self.SHOW_CONTOURS,
+                "Word report: show contours on the layout map",
+                defaultValue=True,
+            ),
             QgsProcessingParameterNumber(
                 self.CONTOUR_INTERVAL,
-                "Word report: contour interval on the layout map (m; 0 = none)",
+                "Word report: minor contour interval on the layout map (m; major "
+                "contours every 5 x this; 0 = no contours)",
                 type=QgsProcessingParameterNumber.Type.Double,
                 minValue=0.0,
                 defaultValue=1.0,
@@ -458,9 +491,14 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
         contour_interval = self.parameterAsDouble(
             parameters, self.CONTOUR_INTERVAL, context
         )
+        if not self.parameterAsBoolean(parameters, self.SHOW_CONTOURS, context):
+            contour_interval = 0.0
         use_basemap = self.parameterAsBoolean(parameters, self.REPORT_BASEMAP, context)
         project_number = (
             self.parameterAsString(parameters, self.PROJECT_NUMBER, context) or ""
+        ).strip()
+        project_name = (
+            self.parameterAsString(parameters, self.PROJECT_NAME, context) or ""
         ).strip()
 
         selected = [
@@ -679,11 +717,11 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
             dem_nan = np.where(nodata_mask(dem, nodata), np.nan, dem).astype(float)
 
             def contours_for(extent):
-                lines, warnings = dem_contours(
+                minor, major, warnings = minor_major_contours(
                     dem_nan, window_gt, contour_interval, extent=extent
                 )
                 map_messages.extend(warnings)
-                return lines
+                return minor, major
 
             plan_map = make_plan_map(
                 crs,
@@ -713,6 +751,8 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
                 "version": TOOL_VERSION,
                 "run_time": datetime.now().strftime("%Y-%m-%d %H:%M"),
                 "project_number": project_number or None,
+                "project_name": project_name or None,
+                "software": _software_version(),
                 "dem": {
                     "path": dem_layer.source(),
                     "crs": f"{crs.authid()} - {crs.description()}",

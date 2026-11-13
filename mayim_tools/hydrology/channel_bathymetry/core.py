@@ -40,7 +40,7 @@ import numpy as np
 
 from mayim_tools.hydrology._common.d8_network import GridError
 
-TOOL_VERSION = "1.0.0"
+TOOL_VERSION = "1.0.1"
 
 BASIS_TEXT = {
     "banks": "both bank slopes",
