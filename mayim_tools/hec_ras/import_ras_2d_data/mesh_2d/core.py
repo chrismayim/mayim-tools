@@ -58,14 +58,75 @@ REFINEMENT_REGIONS_GROUP = "Geometry/2D Flow Area Refinement Regions"
 _FACEPOINT_PADDING = -1
 
 
+# Confirmed 2026-11-13 against project 2625038 (HEC-RAS 7.0.2): the
+# Manning's n overrides by land cover class (one empty row when there are
+# none).
+LAND_COVER_N_TABLE = "Geometry/Land Cover (Manning's n)/Calibration Table"
+
+# Per-cell datasets in each flow area group (confirmed 2026-11-13).
+_CELL_MANNINGS_N = "Cells Center Manning's n"
+_CELL_MIN_ELEV = "Cells Minimum Elevation"
+_CELL_AREA = "Cells Surface Area"
+
+
 @dataclass
 class CellFeature:
     """One 2D mesh cell: its centre point and its polygon boundary (a
     closed ring - first point repeated as the last - built from
-    'Cells FacePoint Indexes' with padding slots dropped)."""
+    'Cells FacePoint Indexes' with padding slots dropped), with the
+    cell's Manning's n, lowest terrain level and plan area when the
+    geometry has been preprocessed (None otherwise)."""
 
     center: tuple[float, float]
     polygon: list[tuple[float, float]]
+    mannings_n: float | None = None
+    min_elevation: float | None = None
+    area_m2: float | None = None
+
+
+def _finite(value):
+    value = float(value)
+    return None if value != value else value  # NaN -> None
+
+
+def read_2d_flow_area_settings(geometry_hdf5_path: str) -> dict[str, dict]:
+    """Per flow area name: its settings from 'Geometry/2D Flow Areas/
+    Attributes' (confirmed 2026-11-13, HEC-RAS 7.0.2): default Manning's n
+    ('Mann'), mesh spacing and real cell count. {} when absent."""
+    from mayim_tools.hec_ras._common.hdf5_utils import read_attribute_table
+
+    with open_h5(geometry_hdf5_path) as h5file:
+        rows = read_attribute_table(h5file, f"{FLOW_AREAS_GROUP}/Attributes")
+    out = {}
+    for row in rows:
+        name = row.get("Name")
+        if not name:
+            continue
+        out[name] = {
+            "mannings_n": _finite(row["Mann"]) if "Mann" in row else None,
+            "spacing_dx": _finite(row["Spacing dx"]) if "Spacing dx" in row else None,
+            "spacing_dy": _finite(row["Spacing dy"]) if "Spacing dy" in row else None,
+            "cell_count": int(row["Cell Count"]) if "Cell Count" in row else None,
+        }
+    return out
+
+
+def read_mannings_n_overrides(geometry_hdf5_path: str) -> list[tuple[str, float]]:
+    """[(land cover class, Manning's n)] from the geometry's Manning's n
+    overrides table; empty rows (no overrides) are left out."""
+    from mayim_tools.hec_ras._common.hdf5_utils import read_attribute_table
+
+    with open_h5(geometry_hdf5_path) as h5file:
+        rows = read_attribute_table(h5file, LAND_COVER_N_TABLE)
+    out = []
+    for row in rows:
+        values = list(row.values())
+        if len(values) < 2 or not str(values[0]).strip():
+            continue
+        n = _finite(values[1])
+        if n is not None:
+            out.append((str(values[0]).strip(), n))
+    return out
 
 
 def read_break_lines(geometry_hdf5_path: str) -> list[PolylineFeature]:
@@ -146,19 +207,42 @@ def read_2d_flow_area_cells(
         centers = area["Cells Center Coordinate"][()]
         facepoint_indexes = area["Cells FacePoint Indexes"][()]
         facepoint_coords = area["FacePoints Coordinate"][()]
+        extra = {}
+        for key, dataset in (
+            ("mannings_n", _CELL_MANNINGS_N),
+            ("min_elevation", _CELL_MIN_ELEV),
+            ("area_m2", _CELL_AREA),
+        ):
+            if dataset in area:
+                extra[key] = area[dataset][()]
 
-        cells: list[CellFeature] = []
-        for center_row, index_row in zip(centers, facepoint_indexes, strict=True):
-            valid_indexes = [i for i in index_row if i != _FACEPOINT_PADDING]
-            ring = [
-                (float(x), float(y))
-                for x, y in (facepoint_coords[i] for i in valid_indexes)
-            ]
-            if ring and ring[0] != ring[-1]:
-                ring.append(ring[0])  # close the polygon ring
-            cells.append(
-                CellFeature(
-                    center=(float(center_row[0]), float(center_row[1])), polygon=ring
-                )
+    # HEC-RAS lists 'Cell Count' real cells first, then one virtual cell per
+    # perimeter face (no area, no terrain); those are left out. Confirmed
+    # 2026-11-13: 1106 real + 110 virtual cells in project 2625038.
+    count = (
+        read_2d_flow_area_settings(geometry_hdf5_path)
+        .get(flow_area_name, {})
+        .get("cell_count")
+    )
+    n_cells = len(centers) if not count else min(int(count), len(centers))
+
+    cells: list[CellFeature] = []
+    for c, (center_row, index_row) in enumerate(
+        zip(centers[:n_cells], facepoint_indexes[:n_cells], strict=True)
+    ):
+        valid_indexes = [i for i in index_row if i != _FACEPOINT_PADDING]
+        ring = [
+            (float(x), float(y))
+            for x, y in (facepoint_coords[i] for i in valid_indexes)
+        ]
+        if ring and ring[0] != ring[-1]:
+            ring.append(ring[0])  # close the polygon ring
+        values = {k: (_finite(v[c]) if c < len(v) else None) for k, v in extra.items()}
+        cells.append(
+            CellFeature(
+                center=(float(center_row[0]), float(center_row[1])),
+                polygon=ring,
+                **values,
             )
-        return cells
+        )
+    return cells

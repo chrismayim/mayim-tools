@@ -136,7 +136,9 @@ from mayim_tools.hec_ras.import_ras_2d_data.mesh_2d.core import (
     list_2d_flow_area_names,
     read_2d_flow_area_cells,
     read_2d_flow_area_perimeter,
+    read_2d_flow_area_settings,
     read_break_lines,
+    read_mannings_n_overrides,
     read_refinement_regions,
 )
 from mayim_tools.hec_ras.import_ras_2d_data.pipe_networks.core import (
@@ -161,7 +163,7 @@ from mayim_tools.hec_ras.import_ras_2d_data.structures.core import (
     read_weir_structures,
 )
 
-TOOL_VERSION = "0.6.1"
+TOOL_VERSION = "0.7.0"
 
 # --- Element catalogue -------------------------------------------------
 #
@@ -516,6 +518,17 @@ def _attribute_fields(attribute_dicts) -> QgsFields:
     return fields
 
 
+def _set_cell_values(feature, cell) -> None:
+    """Manning's n, lowest terrain level and plan area of a mesh cell."""
+    for field, value, digits in (
+        ("Mann_n", cell.mannings_n, 4),
+        ("Min_elev", cell.min_elevation, 3),
+        ("Area_m2", cell.area_m2, 2),
+    ):
+        if value is not None:
+            feature[field] = round(value, digits)
+
+
 class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
     INPUT_GEOMETRY_HDF = "INPUT_GEOMETRY_HDF"
     CRS = "CRS"
@@ -556,7 +569,7 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
             "folder, in one tool run. Use the 'Elements to import' "
             "checklist to pick which of these to write; all are selected "
             "by default. Each selected element becomes its own "
-            "<project number>_<name>.shp file in the output folder and is "
+            "<project number>_RAS_<name>.shp file in the output folder and is "
             "loaded into the project automatically. A file that is open "
             "in QGIS cannot be replaced: it is reported and the other "
             "elements are still written.\n"
@@ -569,6 +582,17 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
             "'Culvert Group ID' -> 'Culvert _1'). Every shortened name is "
             "listed in the log, and the full HEC-RAS name is shown as the "
             "field's alias (column heading) when the layer is loaded.\n"
+            "\n"
+            "MANNING'S n:\tThe 2D Mesh Cells and 2D computation points carry "
+            "each cell's Manning's n (Mann_n), lowest terrain level (Min_elev) "
+            "and plan area (Area_m2), as HEC-RAS computed them when the "
+            "geometry was last preprocessed (empty when it has not been). The "
+            "2D perimeter carries the flow area's default Manning's n "
+            "(Def_Mann), cell spacing (Cell_dx, Cell_dy) and cell count. "
+            "Manning's n overrides by land cover class, when the geometry has "
+            "any, are written to <project number>_RAS_Mannings_n_overrides.csv. "
+            "HEC-RAS's virtual cells along the perimeter (no area) are left "
+            "out.\n"
             "\n"
             "NOTE:\t'2D Mesh Cells (polygons)' isn't one of Chris's "
             "originally-listed elements but is kept from the earlier "
@@ -601,9 +625,10 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
             "  Elements to import: which geometry types to write.\n"
             "  Project number (optional): file name prefix.\n"
             "  Output folder: where the shapefile for each selected "
-            "element is written, named <project number>_<element> (spaces "
+            "element is written, named <project number>_RAS_<element> "
+            "(RAS_<element> without a project number; spaces "
             "- and forward slashes, which can't appear in a filename - "
-            "replaced with underscores, e.g. 'MC2025_014_SA_2D_connections_"
+            "replaced with underscores, e.g. 'MC2025_014_RAS_SA_2D_connections_"
             "-_bridge_2D.shp').\n"
             "\n"
             "STYLING:\tEach output layer is styled automatically on "
@@ -695,7 +720,8 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
         project_number = clean_name_part(
             self.parameterAsString(parameters, self.PROJECT_NUMBER, context) or ""
         )
-        self._prefix = f"{project_number}_" if project_number else ""
+        # <project number>_RAS_<element>, or RAS_<element> without one
+        self._prefix = f"{project_number}_RAS_" if project_number else "RAS_"
 
         selected = set(self.parameterAsEnums(parameters, self.ELEMENTS, context))
         if not selected:
@@ -942,6 +968,19 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
 
         area_field = QgsFields()
         area_field.append(QgsField("Flow Area", QMetaType.Type.QString))
+        # cell values from the preprocessed geometry (empty when absent)
+        cell_fields = QgsFields(area_field)
+        for name in ("Mann_n", "Min_elev", "Area_m2"):
+            cell_fields.append(QgsField(name, QMetaType.Type.Double))
+        perimeter_fields = QgsFields(area_field)
+        for name in ("Def_Mann", "Cell_dx", "Cell_dy"):
+            perimeter_fields.append(QgsField(name, QMetaType.Type.Double))
+        perimeter_fields.append(QgsField("Cells", QMetaType.Type.Int))
+        try:
+            settings = read_2d_flow_area_settings(hdf_path)
+        except Exception as e:  # settings are extra information only
+            settings = {}
+            feedback.pushWarning(f"2D Flow Area settings not read: {e}")
 
         # One in-memory layer + feature list per wanted mesh element -
         # features accumulate in these lists across all flow areas and
@@ -956,7 +995,7 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
             out_paths[ELEMENT_PERIMETER] = self._out_path(output_folder, "2D_perimeter")
             labels[ELEMENT_PERIMETER] = "2D perimeter"
             layers[ELEMENT_PERIMETER] = self._build_memory_layer(
-                area_field, QgsWkbTypes.Polygon, crs
+                perimeter_fields, QgsWkbTypes.Polygon, crs
             )
             feature_lists[ELEMENT_PERIMETER] = []
         if ELEMENT_CELL_POLYGONS in wanted:
@@ -965,7 +1004,7 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
             )
             labels[ELEMENT_CELL_POLYGONS] = "2D Mesh Cells (polygons)"
             layers[ELEMENT_CELL_POLYGONS] = self._build_memory_layer(
-                area_field, QgsWkbTypes.Polygon, crs
+                cell_fields, QgsWkbTypes.Polygon, crs
             )
             feature_lists[ELEMENT_CELL_POLYGONS] = []
         if ELEMENT_CELL_POINTS in wanted:
@@ -974,7 +1013,7 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
             )
             labels[ELEMENT_CELL_POINTS] = "2D computation points"
             layers[ELEMENT_CELL_POINTS] = self._build_memory_layer(
-                area_field, QgsWkbTypes.Point, crs
+                cell_fields, QgsWkbTypes.Point, crs
             )
             feature_lists[ELEMENT_CELL_POINTS] = []
 
@@ -986,6 +1025,18 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
                 perimeter_ring = read_2d_flow_area_perimeter(hdf_path, area_name)
                 perim_feature = QgsFeature(layers[ELEMENT_PERIMETER].fields())
                 perim_feature["Flow Area"] = area_name
+                area_settings = settings.get(area_name, {})
+                for field, key in (
+                    ("Def_Mann", "mannings_n"),
+                    ("Cell_dx", "spacing_dx"),
+                    ("Cell_dy", "spacing_dy"),
+                    ("Cells", "cell_count"),
+                ):
+                    value = area_settings.get(key)
+                    if value is not None:
+                        perim_feature[field] = (
+                            round(value, 4) if isinstance(value, float) else value
+                        )
                 perim_feature.setGeometry(
                     QgsGeometry.fromPolygonXY(
                         [[QgsPointXY(x, y) for x, y in perimeter_ring]]
@@ -1002,6 +1053,7 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
                             layers[ELEMENT_CELL_POLYGONS].fields()
                         )
                         poly_feature["Flow Area"] = area_name
+                        _set_cell_values(poly_feature, cell)
                         if cell.polygon:
                             poly_feature.setGeometry(
                                 QgsGeometry.fromPolygonXY(
@@ -1012,6 +1064,7 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
                     if ELEMENT_CELL_POINTS in layers:
                         point_feature = QgsFeature(layers[ELEMENT_CELL_POINTS].fields())
                         point_feature["Flow Area"] = area_name
+                        _set_cell_values(point_feature, cell)
                         point_feature.setGeometry(
                             QgsGeometry.fromPointXY(QgsPointXY(*cell.center))
                         )
@@ -1034,4 +1087,42 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
             f"{len(flow_area_names)} flow area(s)"
             + (f", {total_cells} cell(s) total" if total_cells else "")
         )
+        for area_name, values in settings.items():
+            if values.get("mannings_n") is not None:
+                feedback.pushInfo(
+                    f"{area_name}: default Manning's n {values['mannings_n']:.4g}"
+                )
+        written_paths += self._write_mannings_overrides(
+            hdf_path, output_folder, feedback
+        )
         return written_paths
+
+    def _write_mannings_overrides(self, hdf_path, output_folder, feedback):
+        """CSV of the geometry's Manning's n overrides by land cover class,
+        when there are any."""
+        try:
+            overrides = read_mannings_n_overrides(hdf_path)
+        except Exception as e:
+            feedback.pushWarning(f"Manning's n overrides not read: {e}")
+            return []
+        if not overrides:
+            feedback.pushInfo("No Manning's n overrides by land cover class.")
+            return []
+        path = str(Path(output_folder) / f"{self._prefix}Mannings_n_overrides.csv")
+        try:
+            with open(path, "w", newline="", encoding="utf-8-sig") as f:
+                f.write("# Column key\n")
+                f.write("# land_cover: land cover class name in HEC-RAS\n")
+                f.write("# mannings_n: Manning's n override for the class\n")
+                f.write("land_cover,mannings_n\n")
+                for name, n in overrides:
+                    safe = name.replace('"', "'")
+                    f.write(f'"{safe}",{n:.4f}\n')
+        except OSError as e:
+            feedback.reportError(
+                f"Manning's n overrides: {path} could not be written ({e}).",
+                fatalError=False,
+            )
+            return []
+        feedback.pushInfo(f"Manning's n overrides ({len(overrides)} classes): {path}")
+        return [path]

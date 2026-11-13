@@ -150,3 +150,59 @@ def test_read_refinement_regions_absent_group_returns_empty(tmp_path):
     with h5py.File(path, "w") as f:
         f.create_group("Geometry/2D Flow Areas")
     assert read_refinement_regions(str(path)) == []
+
+
+def test_cell_values_settings_and_virtual_cells(tmp_path):
+    """HEC-RAS 7.0.2 layout (project 2625038): real cells first, then
+    virtual perimeter cells; per-cell Manning's n, lowest level and area;
+    flow-area settings and the Manning's n overrides table."""
+    from mayim_tools.hec_ras.import_ras_2d_data.mesh_2d.core import (
+        read_2d_flow_area_settings,
+        read_mannings_n_overrides,
+    )
+
+    path = tmp_path / "g.hdf"
+    with h5py.File(path, "w") as f:
+        areas = f.create_group("Geometry/2D Flow Areas")
+        dt = np.dtype(
+            [("Name", "S16"), ("Mann", "<f4"), ("Spacing dx", "<f4"),
+             ("Spacing dy", "<f4"), ("Cell Count", "<i4")]
+        )  # fmt: skip
+        areas.create_dataset(
+            "Attributes", data=np.array([(b"Perimeter 1", 0.045, 10, 10, 1)], dt)
+        )
+        a = areas.create_group("Perimeter 1")
+        a.create_dataset("Cells Center Coordinate", data=[[1.0, 1.0], [9.0, 9.0]])
+        a.create_dataset(
+            "Cells FacePoint Indexes",
+            data=np.array([[0, 1, 2, -1], [2, 3, -1, -1]], "i4"),
+        )
+        a.create_dataset("FacePoints Coordinate", data=[[0, 0], [2, 0], [2, 2], [9, 9]])
+        a.create_dataset("Cells Center Manning's n", data=np.array([0.05, 0.045], "f4"))
+        a.create_dataset(
+            "Cells Minimum Elevation", data=np.array([100.5, np.nan], "f4")
+        )
+        a.create_dataset("Cells Surface Area", data=np.array([2.0, 0.0], "f4"))
+        lc = f.create_group("Geometry/Land Cover (Manning's n)")
+        ldt = np.dtype([("Land Cover Name", "S32"), ("Base Manning's n Value", "<f4")])
+        lc.create_dataset(
+            "Calibration Table",
+            data=np.array([(b"", np.nan), (b"Grass", 0.035)], ldt),
+        )
+    cells = read_2d_flow_area_cells(str(path), "Perimeter 1")
+    assert len(cells) == 1  # the virtual perimeter cell is left out
+    assert cells[0].mannings_n == pytest.approx(0.05)
+    assert cells[0].min_elevation == pytest.approx(100.5)
+    assert cells[0].area_m2 == pytest.approx(2.0)
+    settings = read_2d_flow_area_settings(str(path))
+    assert settings["Perimeter 1"]["mannings_n"] == pytest.approx(0.045)
+    assert settings["Perimeter 1"]["cell_count"] == 1
+    assert settings["Perimeter 1"]["spacing_dx"] == 10
+    overrides = read_mannings_n_overrides(str(path))
+    assert overrides == [("Grass", pytest.approx(0.035))]
+
+
+def test_cells_without_preprocessed_values(geometry_hdf):
+    cells = read_2d_flow_area_cells(str(geometry_hdf), "Perimeter 1")
+    assert len(cells) == 2
+    assert cells[0].mannings_n is None and cells[0].area_m2 is None
