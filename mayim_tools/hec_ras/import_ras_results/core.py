@@ -37,7 +37,7 @@ from mayim_tools.hec_ras.import_ras_2d_data.mesh_2d.core import (
     read_2d_flow_area_settings,
 )
 
-TOOL_VERSION = "1.0.0"
+TOOL_VERSION = "1.1.0"
 
 BASE = "Results/Unsteady/Output/Output Blocks/Base Output"
 SUMMARY = f"{BASE}/Summary Output/2D Flow Areas"
@@ -81,6 +81,9 @@ class AreaResults:
     cell_facepoints: list  # per real cell: facepoint indices in ring order
     facepoint_cells: list  # per facepoint: adjacent real cells
     profiles: dict = field(default_factory=dict)  # profile line index -> results
+    face_cells: np.ndarray | None = None  # (faces, 2) cell on each side
+    face_facepoints: np.ndarray | None = None  # (faces, 2) end facepoints
+    face_min_elev: np.ndarray | None = None  # (faces,) lowest terrain on the face
 
 
 @dataclass
@@ -151,6 +154,10 @@ def reconstruct_cell_velocity(
             np.add.at(b[:, :, k], (slice(None), pair_cell), u * comp)
         out[t0 : t0 + TIME_CHUNK] = np.einsum("cij,tcj->tci", inv, b)
     return out
+
+
+def _opt(geo, name, dtype):
+    return geo[name][()].astype(dtype) if name in geo else None
 
 
 def _cell_faces(info, values, n_cells) -> list:
@@ -247,6 +254,9 @@ def _read_area(
         facepoints=geo["FacePoints Coordinate"][()].astype(float),
         cell_facepoints=cell_fps,
         facepoint_cells=fp_cells,
+        face_cells=_opt(geo, "Faces Cell Indexes", np.int64),
+        face_facepoints=_opt(geo, "Faces FacePoint Indexes", np.int64),
+        face_min_elev=_opt(geo, "Faces Minimum Elevation", float),
         profiles=profiles,
     )
 

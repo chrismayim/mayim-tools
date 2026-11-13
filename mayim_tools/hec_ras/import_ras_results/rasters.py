@@ -1,18 +1,15 @@
 """
 Import RAS result data - result rasters on the terrain grid (GDAL, NumPy).
 
-The water surface between cells follows RAS Mapper's two options:
-
-- "sloping": each facepoint takes the mean peak water level of the wet
-  cells around it; inside a cell the surface is interpolated linearly on
-  the fan of triangles (cell centre, facepoint i, facepoint i+1), so it
-  slopes smoothly from cell to cell (RAS Mapper's "Sloping (cell corners)"
-  rendering, simplified). As in RAS Mapper's "pretty" option (reduce
-  shallow to horizontal), a cell that is only partly under water keeps its
-  own level. Checked on project 2625038 against the RAS Mapper flood edge
-  of the 2% AEP plan (sloping pretty): median distance 0.5 m, 90% within
-  1.5 m (terrain cells 0.5 m); without the shallow rule 0.9 m and 3.7 m;
-- "horizontal": one level per cell.
+The water surface between cells follows RAS Mapper's five renderings
+(METHODS): sloping from the cell corners; from the corners and face
+centres; the same with depth-weighted faces; the same with shallow water
+reducing to horizontal; and horizontal. Checked on project 2625038 against
+RAS Mapper's own flood edges (2% and 1% AEP, 0.5 m terrain): shallow-to-
+horizontal and horizontal lie within 0.5 m (median) and 1.5 m (90%); the
+three plain sloping options 0.7-0.9 m and 2.7-3.7 m, too small a flood on
+this steep, shallow flow. In 1.0.0, "sloping" kept partly wet cells flat
+(85% of the cells here), which looked horizontal; 1.1.0 blends instead.
 
 Depth = water level - terrain, where positive (above the threshold).
 Velocity is the cell's peak speed; depth x velocity and the flood hazard
@@ -148,7 +145,21 @@ def rasterize_cells(polygons, ids, gt, shape) -> np.ndarray:
     return band.ReadAsArray().astype(np.int64)
 
 
+# RAS Mapper's water surface rendering options (RAS Mapper > Results >
+# "Water Surface Rendering"), in the order RAS Mapper lists them
+METHODS = {
+    "corners": "Sloping (cell corners)",
+    "faces": "Sloping (cell corners + face centres)",
+    "faces_depth": "Sloping (cell corners + face centres), depth-weighted faces",
+    "faces_shallow": "Sloping (cell corners + face centres), shallow water "
+    "reduces to horizontal",
+    "horizontal": "Horizontal",
+}
+METHOD_KEYS = list(METHODS)
+
+
 def _facepoint_levels(area, cell_level, wet) -> np.ndarray:
+    """Corner level = mean of the wet cells around the corner."""
     out = np.full(len(area.facepoints), np.nan)
     for i, cells in enumerate(area.facepoint_cells):
         vals = [cell_level[c] for c in cells if wet[c]]
@@ -157,9 +168,66 @@ def _facepoint_levels(area, cell_level, wet) -> np.ndarray:
     return out
 
 
-def _sloping_levels(area, cell_ids_local, px, py, cell_level, fp_level):
+def face_levels(area, level, wet, depth_weighted=False) -> np.ndarray:
+    """Water level at each face: the mean of the two cells (or weighted by
+    their depths), or the wet cell's level where only one side is wet and
+    the water reaches the face; NaN where the face is dry."""
+    fc = area.face_cells
+    n = len(area.centers)
+    out = np.full(len(fc), np.nan)
+    a, b = fc[:, 0], fc[:, 1]
+    ra = (a >= 0) & (a < n)
+    rb = (b >= 0) & (b < n)
+    wa = np.zeros(len(fc), bool)
+    wb = np.zeros(len(fc), bool)
+    wa[ra] = wet[a[ra]]
+    wb[rb] = wet[b[rb]]
+    la = np.where(wa, level[np.clip(a, 0, n - 1)], np.nan)
+    lb = np.where(wb, level[np.clip(b, 0, n - 1)], np.nan)
+    both = wa & wb
+    if depth_weighted:
+        da = np.maximum(la - area.min_elev[np.clip(a, 0, n - 1)], 1e-6)
+        db = np.maximum(lb - area.min_elev[np.clip(b, 0, n - 1)], 1e-6)
+        out[both] = ((la * da + lb * db) / (da + db))[both]
+    else:
+        out[both] = (0.5 * (la + lb))[both]
+    one = wa ^ wb
+    single = np.where(wa, la, lb)
+    zf = area.face_min_elev if area.face_min_elev is not None else None
+    reach = single > zf if zf is not None else np.ones(len(fc), bool)
+    out[one & reach] = single[one & reach]
+    return out
+
+
+def _corner_levels_from_faces(area, f_level) -> np.ndarray:
+    """Corner level = mean of the wet faces meeting at the corner."""
+    m = len(area.facepoints)
+    acc = np.zeros(m)
+    cnt = np.zeros(m)
+    ok = np.isfinite(f_level)
+    for k in (0, 1):
+        idx = area.face_facepoints[ok, k]
+        np.add.at(acc, idx, f_level[ok])
+        np.add.at(cnt, idx, 1)
+    return np.where(cnt > 0, acc / np.maximum(cnt, 1), np.nan)
+
+
+def _face_lookup(area) -> dict:
+    """(facepoint a, facepoint b) -> face index, both orders."""
+    out = {}
+    for k, (p, q) in enumerate(area.face_facepoints.tolist()):
+        out[(p, q)] = k
+        out[(q, p)] = k
+    return out
+
+
+def _sloping_levels(
+    area, cell_ids_local, px, py, cell_level, fp_level, f_level=None, lookup=None
+):
     """Water level at pixel centres (px, py) of cells ``cell_ids_local``
-    (one entry per pixel), on the fan of triangles of each cell."""
+    (one entry per pixel), interpolated linearly on the fan of triangles
+    from the cell centre to its corners (and, with ``f_level``, to its face
+    centres as well)."""
     out = np.full(len(px), np.nan)
     order = np.argsort(cell_ids_local, kind="stable")
     ids_sorted = cell_ids_local[order]
@@ -177,6 +245,19 @@ def _sloping_levels(area, cell_ids_local, px, py, cell_level, fp_level):
         p = area.facepoints[ring]
         wp = fp_level[ring]
         wp = np.where(np.isfinite(wp), wp, wc)
+        if f_level is not None:
+            # face centres between consecutive corners of the ring
+            mids, wm = [], []
+            for t in range(len(ring)):
+                u, v = ring[t], ring[(t + 1) % len(ring)]
+                mids.append(0.5 * (area.facepoints[u] + area.facepoints[v]))
+                k = lookup.get((u, v))
+                val = f_level[k] if k is not None else np.nan
+                wm.append(
+                    val if np.isfinite(val) else 0.5 * (wp[t] + wp[(t + 1) % len(ring)])
+                )
+            p = np.vstack([p, np.array(mids)])
+            wp = np.r_[wp, np.array(wm)]
         ang = np.arctan2(p[:, 1] - cy, p[:, 0] - cx)
         k = np.argsort(ang)
         ang, p, wp = ang[k], p[k], wp[k]
@@ -198,12 +279,49 @@ def _sloping_levels(area, cell_ids_local, px, py, cell_level, fp_level):
     return out
 
 
+def area_levels(area, local, px, py, z_px, method, threshold):
+    """Water level at the pixels of one 2D flow area (``local`` = cell of
+    each pixel, ``z_px`` = their terrain) for one rendering method."""
+    if method not in METHODS:
+        raise ValueError(f"Unknown water surface method '{method}'.")
+    wet = np.nan_to_num(area.max_depth) > threshold
+    level = np.where(wet, area.max_wse, np.nan)
+    flat = level[local]
+    if method == "horizontal":
+        return flat
+    if method == "corners" or area.face_cells is None or area.face_facepoints is None:
+        fp = _facepoint_levels(area, area.max_wse, wet)
+        return _sloping_levels(area, local, px, py, level, fp)
+    f_level = face_levels(area, level, wet, depth_weighted=method == "faces_depth")
+    fp = _corner_levels_from_faces(area, f_level)
+    fp = np.where(np.isfinite(fp), fp, _facepoint_levels(area, area.max_wse, wet))
+    sloped = _sloping_levels(
+        area, local, px, py, level, fp, f_level, _face_lookup(area)
+    )
+    if method != "faces_shallow":
+        return sloped
+    # shallow water reduces to horizontal: the sloping surface is blended
+    # towards the cell's own level by how much of the cell's terrain relief
+    # the water covers (fully covered: sloping; just wet: horizontal)
+    n = len(area.centers)
+    zin = np.nan_to_num(z_px, nan=np.inf)
+    zmin = np.full(n, np.inf)
+    np.minimum.at(zmin, local, zin)
+    zmax = np.full(n, -np.inf)
+    np.maximum.at(zmax, local, np.nan_to_num(z_px, nan=-np.inf))
+    relief = np.maximum(zmax - zmin, 1e-6)
+    w = np.clip((area.max_wse - zmin) / relief, 0.0, 1.0)[local]
+    return np.where(np.isfinite(sloped), flat + w * (sloped - flat), flat)
+
+
 def build_grids(
     plan: PlanResults,
     terrain_path: str,
-    method: str = "sloping",
+    method: str = "faces",
     threshold: float = 0.001,
 ) -> ResultGrids:
+    if method == "sloping":  # 1.0.0 name
+        method = "faces_shallow"
     z, gt, projection = read_terrain(terrain_path, _mesh_bounds(plan))
     shape = z.shape
     rows, cols = np.indices(shape)
@@ -220,25 +338,10 @@ def build_grids(
         cid = rasterize_cells(area.polygons, ids, gt, shape)
         inside = (cid >= offset) & (cid < offset + n)
         local = cid[inside] - offset
-        wet = np.nan_to_num(area.max_depth) > threshold
-        level = np.where(wet, area.max_wse, np.nan)
-        vals = level[local]
-        if method == "sloping":
-            # RAS Mapper's "reduce shallow to horizontal": a cell that is
-            # only partly under water keeps its own level; the surface
-            # slopes only across cells the water covers completely
-            zin = np.nan_to_num(z[inside], nan=-np.inf)
-            zmax = np.full(n, -np.inf)
-            np.maximum.at(zmax, local, zin)
-            full = wet & (area.max_wse >= zmax)
-            sel = full[local]
-            if sel.any():
-                fp = _facepoint_levels(area, area.max_wse, wet)
-                vals[sel] = _sloping_levels(
-                    area, local[sel], px_all[inside][sel], py_all[inside][sel],
-                    level, fp,
-                )  # fmt: skip
-        wse[inside] = vals
+        wse[inside] = area_levels(
+            area, local, px_all[inside], py_all[inside], z[inside], method,
+            threshold,
+        )  # fmt: skip
         vel[inside] = area.max_velocity[local]
         arr[inside] = area.arrival_h[local]
         dur[inside] = area.duration_h[local]

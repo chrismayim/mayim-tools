@@ -37,6 +37,7 @@ from qgis.core import (
     QgsProcessingLayerPostProcessorInterface,
     QgsProcessingParameterBoolean,
     QgsProcessingParameterCrs,
+    QgsProcessingParameterEnum,
     QgsProcessingParameterFeatureSource,
     QgsProcessingParameterFile,
     QgsProcessingParameterFolderDestination,
@@ -78,7 +79,16 @@ from .core import (
     read_plan_results,
 )
 from .export import profile_rows, write_peaks_csv
-from .rasters import HAZARD_CLASSES, build_grids, write_grid
+from .rasters import (
+    HAZARD_CLASSES,
+    METHOD_KEYS,
+    METHODS,
+    build_grids,
+    write_grid,
+)
+
+# closest to RAS Mapper's own flood edge on project 2625038 (see help)
+DEFAULT_METHOD = "faces_shallow"
 
 STYLES_DIR = Path(__file__).resolve().parent / "styles"
 
@@ -254,15 +264,28 @@ class ImportRasResultsAlgorithm(QgsProcessingAlgorithm):
             "they are computed here from the cell results on the terrain grid, "
             "as RAS Mapper does.\n"
             "\n"
-            "WATER SURFACE:\t'Sloping' (default) follows RAS Mapper's sloping "
-            "(cell corners) rendering: the level at each cell corner is the "
-            "mean of the wet cells around it and the surface is interpolated "
-            "between the cell centre and its corners; a cell only partly under "
-            "water keeps its own level (RAS Mapper's 'reduce shallow to "
-            "horizontal'). 'Horizontal' uses one level per cell. Depth = water "
-            "level - terrain, where above the depth threshold. On project "
-            "2625038 the flood edge lies within 0.5 m (median) of RAS Mapper's "
-            "own edge.\n"
+            "WATER SURFACE:\tThe five RAS Mapper renderings. Corner levels "
+            "come from the wet cells around the corner (1) or from the faces "
+            "meeting there (2-4); inside a cell the level is interpolated "
+            "linearly between the cell centre, its corners and (2-4) its face "
+            "centres.\n"
+            "  1. Sloping (cell corners).\n"
+            "  2. Sloping (cell corners + face centres): face level = mean of "
+            "the two cells (the wet cell where only one side is wet and the "
+            "water reaches the face).\n"
+            "  3. As 2, with depth-weighted faces (RAS Mapper's 'precip mode'): "
+            "the deeper cell counts more at the face.\n"
+            "  4. As 2, with shallow water reducing to horizontal (default): "
+            "the sloping surface is blended to the cell's own level by how much "
+            "of the cell's terrain the water covers - fully covered cells "
+            "slope, just-wet cells are flat.\n"
+            "  5. Horizontal: one level per cell.\n"
+            "On project 2625038 (0.5 m terrain) the distance from RAS Mapper's "
+            "own flood edge was: 1 and 3 about 0.9 m median, 3.7 m at 90%; 2 "
+            "0.8 m and 3.7 m; 4 and 5 0.5 m and 1.5 m. 1-3 give too small a "
+            "flood on steep, shallow flow, because a corner averages in the "
+            "lower cells downhill. Depth = water level - terrain, where above "
+            "the depth threshold.\n"
             "\n"
             "VELOCITY AND HAZARD:\tCell velocities are rebuilt at every output "
             "time from the face velocities (least squares, weighted by face "
@@ -341,11 +364,13 @@ class ImportRasResultsAlgorithm(QgsProcessingAlgorithm):
             )
         )  # fmt: skip
         self.addParameter(
-            QgsProcessingParameterBoolean(
-                self.METHOD, "Sloping water surface (untick for horizontal)",
-                defaultValue=True,
+            QgsProcessingParameterEnum(
+                self.METHOD,
+                "Water surface rendering (as in RAS Mapper)",
+                options=[f"{i + 1}. {METHODS[k]}" for i, k in enumerate(METHOD_KEYS)],
+                defaultValue=METHOD_KEYS.index(DEFAULT_METHOD),
             )
-        )  # fmt: skip
+        )
         self.addParameter(
             QgsProcessingParameterNumber(
                 self.THRESHOLD, "Depth threshold (m)",
@@ -453,11 +478,7 @@ class ImportRasResultsAlgorithm(QgsProcessingAlgorithm):
             self.parameterAsString(parameters, self.PROJECT_NUMBER, context) or ""
         )
         threshold = self.parameterAsDouble(parameters, self.THRESHOLD, context)
-        method = (
-            "sloping"
-            if self.parameterAsBoolean(parameters, self.METHOD, context)
-            else "horizontal"
-        )
+        method = METHOD_KEYS[self.parameterAsEnum(parameters, self.METHOD, context)]
         selected = [
             o for o in OUTPUTS if self.parameterAsBoolean(parameters, o[0], context)
         ]
@@ -582,7 +603,7 @@ class ImportRasResultsAlgorithm(QgsProcessingAlgorithm):
             wet = np.isfinite(grids.depth)
             cell_area = abs(grids.gt[1] * grids.gt[5])
             feedback.pushInfo(
-                f"Water surface: {method}; flooded area "
+                f"Water surface: {METHODS[method]}; flooded area "
                 f"{wet.sum() * cell_area:.0f} m2; maximum depth "
                 f"{np.nanmax(grids.depth) if wet.any() else 0:.3f} m"
             )
@@ -670,7 +691,7 @@ class ImportRasResultsAlgorithm(QgsProcessingAlgorithm):
                     {"tool": f"{self.displayName()} {TOOL_VERSION}",
                      "software": _software_version(),
                      "run date": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                     "water surface": method,
+                     "water surface": METHODS[method],
                      "depth threshold (m)": f"{threshold:g}"},
                 )  # fmt: skip
                 outputs["OUT_CSV"] = path

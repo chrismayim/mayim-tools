@@ -240,8 +240,16 @@ def test_result_grids_and_terrain(plan_hdf, tmp_path):
     gdal.BuildVRT(str(tif), [tmp]).FlushCache()
     plan = core.read_plan_results(path)
     assert core.find_terrain(plan) == str(tif)
-    for method in ("horizontal", "sloping"):
+    from mayim_tools.hec_ras.import_ras_results.rasters import METHOD_KEYS
+
+    assert len(METHOD_KEYS) == 5
+    for method in METHOD_KEYS:
         g = build_grids(plan, str(tif), method=method)
+        cell2 = g.wse[:, 21:29]  # inside cell 2, away from its faces' rows
+        if method == "horizontal":
+            assert np.nanmax(cell2) - np.nanmin(cell2) < 1e-6
+        else:  # the surface slopes inside the cell
+            assert np.nanmax(cell2) - np.nanmin(cell2) > 1e-3, method
         wet = np.isfinite(g.depth)
         assert wet.all()  # every cell is wet and flat-bottomed
         # flat-bottomed cells are fully under water: depth = cell depth there
