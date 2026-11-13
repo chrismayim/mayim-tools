@@ -281,6 +281,13 @@ ALGORITHMS = [
         HYDRO,
     ),
     (
+        "hydrology.channel_bathymetry.channel_bathymetry_algorithm",
+        "ChannelBathymetryAlgorithm",
+        "channel_bathymetry",
+        "DEM Channel Bathymetry",
+        HYDRO,
+    ),
+    (
         "hydrology.terrain_profile.terrain_profile_algorithm",
         "TerrainProfileAlgorithm",
         "terrain_profile",
