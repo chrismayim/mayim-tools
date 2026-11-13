@@ -179,7 +179,14 @@ ALGORITHMS = [
         "hec_ras.import_ras_2d_data.import_ras_2d_data_algorithm",
         "ImportRas2dDataAlgorithm",
         "import_ras_2d_data",
-        "Import RAS 2D data",
+        "Import RAS 2D geometry data",
+        HECRAS,
+    ),
+    (
+        "hec_ras.import_ras_results.import_ras_results_algorithm",
+        "ImportRasResultsAlgorithm",
+        "import_ras_results",
+        "Import RAS result data",
         HECRAS,
     ),
     (

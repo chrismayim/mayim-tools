@@ -86,7 +86,7 @@ from .qgis_outputs import (
 )
 from .report import write_report_docx
 
-TOOL_VERSION = "0.6.0"
+TOOL_VERSION = "0.6.1"
 
 STYLE_DEPTH_PATH = str(STYLES_DIR / STYLE_DEPTH)  # stage-storage "Depth at top stage"
 STYLE_WSE_PATH = str(
@@ -717,8 +717,19 @@ class InundationBoundaryAlgorithm(QgsProcessingAlgorithm):
             dem_nan = np.where(nodata_mask(dem, nodata), np.nan, dem).astype(float)
 
             def contours_for(extent):
+                # the layout map reaches 10% past the bounding polygon, beyond
+                # the analysis window: read the DEM over the whole map extent
+                x0, y0, x1, y1 = extent
+                corners = [[[(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)]]]
+                map_window = polygon_window(corners, gt, shape, pad=2)
+                if map_window is None:
+                    z, z_gt = dem_nan, window_gt
+                else:
+                    z = read_window(dem_layer.source(), map_window)
+                    z = np.where(nodata_mask(z, nodata), np.nan, z).astype(float)
+                    z_gt = window_geotransform(gt, map_window[0], map_window[1])
                 minor, major, warnings = minor_major_contours(
-                    dem_nan, window_gt, contour_interval, extent=extent
+                    z, z_gt, contour_interval, extent=extent
                 )
                 map_messages.extend(warnings)
                 return minor, major

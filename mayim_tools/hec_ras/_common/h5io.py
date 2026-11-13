@@ -10,8 +10,9 @@ own) h5py loads fine.
 
 1. h5py in this process;
 2. h5py in a separate Python process (QGIS's own python.exe), which copies
-   every dataset under ``Geometry`` (or the whole file when there is none)
-   into a temporary .npz file that is then read here;
+   every dataset under ``Geometry`` (or under the ``roots`` asked for; the
+   whole file when none is there), with the attributes, into a temporary
+   .npz file that is then read here;
 3. GDAL's multidimensional HDF5 driver (ships with QGIS). Some GDAL
    versions (3.13) return only the first character of text fields inside
    tables, so names may be cut short; ``NOTES`` then says so.
@@ -116,8 +117,12 @@ def backend() -> str:
     return "gdal"
 
 
-def open_h5(path: str, force_gdal: bool = False):
-    """Read-only HDF5 file (h5py.File, the copied file, or the GDAL reader)."""
+def open_h5(path: str, force_gdal: bool = False, roots=None):
+    """Read-only HDF5 file (h5py.File, the copied file, or the GDAL reader).
+    ``roots``: the groups the separate-process copy takes (default
+    ``Geometry``; e.g. add the results groups for a plan's results); the
+    copy also keeps the attributes of every group and dataset it takes and
+    of the file itself."""
     if not force_gdal:
         h5py = _h5py()
         if h5py is not None:
@@ -125,7 +130,7 @@ def open_h5(path: str, force_gdal: bool = False):
         exe = _external_python()
         if exe is not None:
             try:
-                return _extract(exe, path)
+                return _extract(exe, path, tuple(roots or ("Geometry",)))
             except Exception as e:
                 _note(
                     f"Reading the HDF5 file with h5py in a separate process failed "
@@ -150,7 +155,7 @@ import json, sys
 import numpy as np
 import h5py
 
-src, out = sys.argv[1], sys.argv[2]
+src, out, roots = sys.argv[1], sys.argv[2], json.loads(sys.argv[3])
 
 
 def as_bytes(values):
@@ -185,26 +190,48 @@ def fixed(a):
     return a.astype(np.dtype(a.dtype.str), copy=False)
 
 
-arrays, names, groups = {}, {}, [""]
+arrays, names, groups, attrs = {}, {}, [""], []
+
+
+def keep_attrs(path, obj):
+    for k in obj.attrs:
+        try:
+            value = fixed(np.asarray(obj.attrs[k]))
+        except Exception:
+            continue
+        key = f"a{len(attrs)}"
+        arrays[key] = value
+        attrs.append([path, k, key])
+
+
 with h5py.File(src, "r") as f:
-    root = "Geometry" if "Geometry" in f else ""
-    if root:
-        groups.append(root)
-    start = f[root] if root else f
+    keep_attrs("", f)
+    present = [r for r in roots if r in f] or ([] if "Geometry" in f else [""])
+    for root in present:
+        parts = root.split("/")
+        for i in range(1, len(parts) + 1):  # the root's parent groups
+            g = "/".join(parts[:i])
+            if g not in groups:
+                groups.append(g)
+                keep_attrs(g, f[g])
+        start = f[root] if root else f
 
-    def visit(name, obj):
-        full = f"{root}/{name}" if root else name
-        if isinstance(obj, h5py.Group):
-            groups.append(full)
-        elif isinstance(obj, h5py.Dataset):
-            key = f"d{len(arrays)}"
-            arrays[key] = fixed(obj[()])
-            names[key] = full
+        def visit(name, obj, root=root):
+            full = f"{root}/{name}" if root else name
+            if isinstance(obj, h5py.Group):
+                if full not in groups:
+                    groups.append(full)
+                keep_attrs(full, obj)
+            elif isinstance(obj, h5py.Dataset):
+                key = f"d{len(names)}"
+                arrays[key] = fixed(obj[()])
+                names[key] = full
+                keep_attrs(full, obj)
 
-    start.visititems(visit)
+        start.visititems(visit)
 np.savez(out, **arrays)
 with open(out + ".json", "w", encoding="utf-8") as fh:
-    json.dump({"groups": groups, "datasets": names}, fh)
+    json.dump({"groups": groups, "datasets": names, "attrs": attrs}, fh)
 """
 
 
@@ -216,22 +243,28 @@ def clear_cache() -> None:
     _COPIES.clear()
 
 
-def _extract(exe: str, path: str):
+def _extract(exe: str, path: str, roots: tuple = ("Geometry",)):
     st = os.stat(path)
-    key = (os.path.abspath(path), st.st_mtime_ns, st.st_size)
+    key = (os.path.abspath(path), st.st_mtime_ns, st.st_size, roots)
     if key in _COPIES:
-        data, groups = _COPIES[key]
-        return CopyH5File(data, groups)
+        return CopyH5File(*_COPIES[key])
     tmp = tempfile.mkdtemp(prefix="mayim_h5_")
     out = os.path.join(tmp, "copy.npz")
-    r = _run([exe, "-c", _EXTRACT_SCRIPT, path, out], EXTRACT_TIMEOUT_S)
+    r = _run(
+        [exe, "-c", _EXTRACT_SCRIPT, path, out, json.dumps(list(roots))],
+        EXTRACT_TIMEOUT_S,
+    )
     if r.returncode != 0:
         tail = (r.stderr or r.stdout or "").strip().splitlines()[-1:]
         raise RuntimeError(tail[0] if tail else f"exit code {r.returncode}")
     with open(out + ".json", encoding="utf-8") as fh:
         index = json.load(fh)
+    attrs: dict = {}
     with np.load(out, allow_pickle=False) as npz:
-        data = {index["datasets"][k]: npz[k] for k in npz.files}
+        data = {index["datasets"][k]: npz[k] for k in npz.files if k[0] == "d"}
+        for obj, name, k in index.get("attrs", []):
+            value = npz[k]
+            attrs.setdefault(obj, {})[name] = value[()] if value.ndim == 0 else value
     for name in (out, out + ".json"):
         try:
             os.remove(name)
@@ -245,14 +278,15 @@ def _extract(exe: str, path: str):
         "The HDF5 file was read with h5py in a separate Python process "
         f"({exe}), because h5py cannot load inside QGIS ({H5PY_ERROR})."
     )
-    _COPIES[key] = (data, set(index["groups"]))
-    return CopyH5File(data, set(index["groups"]))
+    _COPIES[key] = (data, set(index["groups"]), attrs)
+    return CopyH5File(*_COPIES[key])
 
 
 class CopyH5Dataset:
-    def __init__(self, array: np.ndarray, name: str):
+    def __init__(self, array: np.ndarray, name: str, attrs: dict | None = None):
         self._a = array
         self.name = name
+        self.attrs = attrs or {}
         self.shape = array.shape
         self.dtype = array.dtype
 
@@ -266,8 +300,10 @@ class CopyH5Dataset:
 
 
 class CopyH5Group:
-    def __init__(self, data: dict, groups: set, name: str = ""):
+    def __init__(self, data: dict, groups: set, name: str = "", attrs=None):
         self._data, self._groups, self.name = data, groups, name
+        self._attrs = attrs if attrs is not None else {}
+        self.attrs = self._attrs.get(name, {})
 
     def _full(self, path: str) -> str:
         parts = [p for p in f"{self.name}/{path}".split("/") if p]
@@ -287,9 +323,9 @@ class CopyH5Group:
     def __getitem__(self, path: str):
         full = self._full(path)
         if full in self._data:
-            return CopyH5Dataset(self._data[full], full)
+            return CopyH5Dataset(self._data[full], full, self._attrs.get(full))
         if full in self._groups:
-            return CopyH5Group(self._data, self._groups, full)
+            return CopyH5Group(self._data, self._groups, full, self._attrs)
         raise KeyError(path)
 
     def __contains__(self, path: str) -> bool:
@@ -298,8 +334,8 @@ class CopyH5Group:
 
 
 class CopyH5File(CopyH5Group):
-    def __init__(self, data: dict, groups: set):
-        super().__init__(data, groups, "")
+    def __init__(self, data: dict, groups: set, attrs: dict | None = None):
+        super().__init__(data, groups, "", attrs)
 
     def close(self):
         self._data = {}

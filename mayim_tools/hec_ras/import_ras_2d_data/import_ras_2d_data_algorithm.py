@@ -17,7 +17,7 @@ Ported 2026-09-29 from the standalone "Import RAS 2D Data" plugin
 (package ``ras2d_import``) into the Mayim Tools suite, per Chris's
 request: "Can we at this time include this plugin within the Mayim
 Tools plugin suite please. It will sit under Mayim Tools -> HEC-RAS
-Tools -> Import RAS 2D data." Only the QGIS-facing wrapper's package
+Tools -> Import RAS 2D geometry data." Only the QGIS-facing wrapper's package
 paths, ``name()``/``displayName()``/``group()``/``groupId()``/
 ``icon()`` changed on the port - none of the reading, writing, or
 styling logic below was touched. See
@@ -543,7 +543,7 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
         return "import_ras_2d_data"
 
     def displayName(self):
-        return "Import RAS 2D data"
+        return "Import RAS 2D geometry data"
 
     def group(self):
         return "HEC-RAS Tools"
@@ -558,7 +558,7 @@ class ImportRas2dDataAlgorithm(QgsProcessingAlgorithm):
 
     def shortHelpString(self):
         return (
-            f"Import RAS 2D data (version {TOOL_VERSION})\n"
+            f"Import RAS 2D geometry data (version {TOOL_VERSION})\n"
             "\n"
             "PURPOSE:\tReads every 2D geometry element defined in a "
             "HEC-RAS 6.x/7.0 model - mesh, breaklines, refinement "

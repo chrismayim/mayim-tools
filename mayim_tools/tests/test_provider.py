@@ -49,7 +49,7 @@ def test_provider_registers_all_algorithms() -> None:
     provider = loaded_provider()
 
     algorithms = provider.algorithms()
-    assert len(algorithms) == 40
+    assert len(algorithms) == 41
 
     by_name = {algorithm.name(): algorithm for algorithm in algorithms}
 
@@ -74,6 +74,7 @@ def test_provider_registers_all_algorithms() -> None:
         "catchment_delineation",
         "adjust_subdaily_to_ddf",
         "import_ras_2d_data",
+        "import_ras_results",
         "dem_depression_stage_storage",
         "inundation_boundary",
         "stream_network",
@@ -193,7 +194,12 @@ def test_provider_registers_all_algorithms() -> None:
             "rainfall_tools",
         ),
         "import_ras_2d_data": (
-            "Import RAS 2D data",
+            "Import RAS 2D geometry data",
+            "HEC-RAS Tools",
+            "hec_ras_tools",
+        ),
+        "import_ras_results": (
+            "Import RAS result data",
             "HEC-RAS Tools",
             "hec_ras_tools",
         ),
@@ -310,7 +316,7 @@ def test_provider_lists_every_algorithm_once() -> None:
     from mayim_tools.processing.provider import ALGORITHMS
 
     ids = [entry[2] for entry in ALGORITHMS]
-    assert len(ids) == len(set(ids)) == 40
+    assert len(ids) == len(set(ids)) == 41
 
 
 def test_missing_package_gives_placeholder() -> None:
