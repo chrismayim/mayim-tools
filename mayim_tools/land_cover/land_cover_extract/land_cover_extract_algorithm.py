@@ -44,6 +44,7 @@ from mayim_tools.soil._common.grid import check_area, make_grid
 from . import catalogue as cat
 from . import core
 from . import sanlc as sl
+from .hec_ras_parameters import write_hecras_csv
 
 METADATA_NAME = "worldcover_metadata.csv"
 SANLC_METADATA_NAME = "sanlc_metadata.csv"
@@ -181,7 +182,17 @@ class LandCoverExtractAlgorithm(QgsProcessingAlgorithm):
             "worldcover_metadata.csv / sanlc_metadata.csv (point mode: "
             "worldcover_points.csv / sanlc_points.csv and <name>_metadata.csv) "
             "with citations, accuracy, class areas (SANLC also by SALCC level 1 "
-            "group) or counts, and warnings.\n"
+            "group) or counts, and warnings. Area mode also writes "
+            "worldcover_<year>_hecras_land_cover.csv / sanlc_<year>_hecras_"
+            "land_cover.csv: for each class in the extract, a recommended "
+            "Manning's n (with a typical range), percent impervious and HEC-RAS "
+            "Spiral Intensity Source Factor, plus its area - starting values for "
+            "the RAS Mapper land cover table, to be calibrated. Manning's n is "
+            "for 2D flow of appreciable depth (shallow rain-on-grid flow is "
+            "rougher); built-up n stands in for buildings that are not in the "
+            "terrain; open water is 100 % impervious; the spiral factor is 1 "
+            "only for river channels (SANLC rivers, estuaries, riverbed "
+            "material).\n"
             "\n"
             "PARAMETERS:\n"
             "  Area: an extent OR a polygon layer (its extent, buffered by two "
@@ -431,6 +442,16 @@ class LandCoverExtractAlgorithm(QgsProcessingAlgorithm):
                 encoding=xf.CSV_ENCODING,
             ),
         )
+        names = {c.code: c.name for c in cat.CLASSES}
+        for rec in result.records:
+            hp = files.path(f"worldcover_{rec.year}_hecras_land_cover.csv")
+            if files.write(
+                hp,
+                lambda p, rec=rec: write_hecras_csv(
+                    p, "ESA WorldCover", names, rec.areas, xf.CSV_ENCODING
+                ),
+            ):
+                feedback.pushInfo(f"HEC-RAS land cover parameters: {hp}")
         self._report(result, feedback)
         n_written = sum(1 for path in result.files if files.actual(path))
         feedback.pushInfo(f"{n_written} raster(s) written to {folder}")
@@ -612,6 +633,18 @@ class LandCoverExtractAlgorithm(QgsProcessingAlgorithm):
                     f"{sl.class_name(c)} {100 * a / total:.0f} %" for c, a in top
                 )
             )
+        hp = files.path(f"sanlc_{year}_hecras_land_cover.csv")
+        if files.write(
+            hp,
+            lambda p: write_hecras_csv(
+                p,
+                "SANLC",
+                {c.code: c.name for c in sl.CLASSES},
+                rec.areas,
+                xf.CSV_ENCODING,
+            ),
+        ):
+            feedback.pushInfo(f"HEC-RAS land cover parameters: {hp}")
         feedback.pushInfo(f"Raster: {files.actual(result.files[0])}")
         feedback.pushInfo(f"Metadata: {meta_path}")
         outputs = [

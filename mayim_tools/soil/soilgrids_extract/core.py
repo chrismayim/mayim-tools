@@ -104,7 +104,7 @@ from mayim_tools.soil._common.stats import (  # noqa: F401
     texture_sum_check,
 )
 
-TOOL_VERSION = "0.5.0"
+TOOL_VERSION = "0.5.1"
 
 BASE_URL = "https://files.isric.org/soilgrids/latest/data/"
 SG2017_URL = "https://files.isric.org/soilgrids/former/2017-03-10/data/"
@@ -154,7 +154,17 @@ class SoilVariable:
     units: str
     default: bool
     purpose: str
+    available: bool = True  # still published by ISRIC
 
+
+# ISRIC no longer serves the water-content layers under latest/data/ (404 for
+# the VRTs and the tiles, Chris's run of 2026-11-16; the folders are gone).
+# They stay in the list so the variable choice keeps its numbering (saved
+# models and the bedrock option), but are left out with a warning.
+RETIRED_NOTE = (
+    "no longer published by ISRIC (the wv0010, wv0033 and wv1500 folders are "
+    "gone from files.isric.org/soilgrids/latest/data/, November 2026)"
+)
 
 VARIABLES: tuple[SoilVariable, ...] = (
     SoilVariable(
@@ -217,6 +227,7 @@ VARIABLES: tuple[SoilVariable, ...] = (
         "vol %",
         False,
         "independent check on PTF water retention",
+        False,
     ),
     SoilVariable(
         "wv0033",
@@ -226,6 +237,7 @@ VARIABLES: tuple[SoilVariable, ...] = (
         "vol %",
         False,
         "independent check on PTF field capacity",
+        False,
     ),
     SoilVariable(
         "wv1500",
@@ -235,6 +247,7 @@ VARIABLES: tuple[SoilVariable, ...] = (
         "vol %",
         False,
         "independent check on PTF wilting point",
+        False,
     ),
 )
 VARIABLE_BY_CODE = {v.code: v for v in VARIABLES}
@@ -342,11 +355,20 @@ def plan_selection(
     if bad_stats:
         raise SoilGridsError(f"Unknown statistic(s): {', '.join(bad_stats)}")
 
-    variables_ordered = [v.code for v in VARIABLES if v.code in variables]
+    warnings: list[str] = []
+    retired = [v.code for v in VARIABLES if v.code in variables and not v.available]
+    if retired:
+        warnings.append(f"{', '.join(retired)} left out: {RETIRED_NOTE}.")
+        if len(retired) == len(set(variables)) and not bedrock:
+            raise SoilGridsError(
+                f"{', '.join(retired)}: {RETIRED_NOTE}. Select other variables."
+            )
+    variables_ordered = [
+        v.code for v in VARIABLES if v.code in variables and v.available
+    ]
     depths_ordered = [d[0] for d in DEPTHS if d[0] in depths]
     written = [s for s in STATISTICS if s in statistics]
     fetched = list(written)
-    warnings: list[str] = []
 
     if variables_ordered and not depths_ordered:
         raise SoilGridsError("Select at least one depth interval.")
@@ -510,6 +532,8 @@ class RunResult:
     load_files: list[str] = field(default_factory=list)
     tiles: dict = field(default_factory=dict)  # variable -> tiles (0 = VRT)
     seconds: float = 0.0
+    skipped: list[str] = field(default_factory=list)  # variables left out
+    errors: list[str] = field(default_factory=list)
 
 
 def count_jobs(selection: Selection) -> int:
@@ -559,6 +583,31 @@ def _build_indices(
             indices[var] = index
             result.tiles[var] = len(index.rel_paths)
     return indices
+
+
+def _skip_failed(var, got, result, log_fn) -> bool:
+    """True when some layers of ``var`` could not be read by any route: the
+    variable is then left out with a warning and the other variables are
+    still written (one unreadable variable used to stop the whole run)."""
+    failed = [(k, v) for k, v in got.items() if isinstance(v, Exception)]
+    if not failed:
+        return False
+    (depth, stat), exc = failed[0]
+    msg = (
+        f"{var}: {len(failed)} of {len(got)} layers could not be read, so "
+        f"{var} is left out ({layer_name(var, depth, stat)}: {exc})"
+    )
+    result.warnings.append(msg)
+    result.skipped.append(var)
+    result.errors.append(str(exc))
+    log_fn(msg)
+    return True
+
+
+def _nothing_read(result) -> None:
+    """Stop when every selected variable failed and nothing else was made."""
+    if result.skipped and not (result.files or result.rows):
+        raise SoilGridsError("No SoilGrids layer could be read - " + result.errors[0])
 
 
 def _check_empty(records, result, log_fn):
@@ -642,16 +691,21 @@ def extract_area(
 
             def job(key, var=var):
                 depth, stat = key
-                return read_with_fallback(
-                    layer_sources(indices.get(var), var, depth, stat, base),
-                    read,
-                    grid,
-                )
+                try:
+                    return read_with_fallback(
+                        layer_sources(indices.get(var), var, depth, stat, base),
+                        read,
+                        grid,
+                    )
+                except SoilDataError as exc:  # left out below, run goes on
+                    return exc
 
             def done(key, var=var):
                 progress.step(f"Read {layer_name(var, key[0], key[1])}")
 
             got = run_jobs(keys, job, workers, cancel_fn, done)
+            if _skip_failed(var, got, result, log_fn):
+                continue
             for stat in selection.statistics:
                 bands: list[tuple[str, np.ndarray]] = []
                 records: list[LayerRecord] = []
@@ -735,6 +789,7 @@ def extract_area(
                 result,
             )
 
+    _nothing_read(result)
     result.seconds = (datetime.now(UTC) - t_start).total_seconds()
     progress_fn(1.0, "Done")
     return result
@@ -935,16 +990,21 @@ def extract_points(
 
             def job(key, var=var):
                 depth, stat = key
-                return read_with_fallback(
-                    layer_sources(indices.get(var), var, depth, stat, base),
-                    sample,
-                    lonlats,
-                )
+                try:
+                    return read_with_fallback(
+                        layer_sources(indices.get(var), var, depth, stat, base),
+                        sample,
+                        lonlats,
+                    )
+                except SoilDataError as exc:  # left out below, run goes on
+                    return exc
 
             def done(key, var=var):
                 progress.step(f"Sampled {layer_name(var, key[0], key[1])}")
 
             got = run_jobs(keys, job, workers, cancel_fn, done)
+            if _skip_failed(var, got, result, log_fn):
+                continue
             for stat in selection.statistics:
                 for depth in selection.depths:
                     raw, route, errors = got[(depth, stat)]
@@ -1096,6 +1156,7 @@ def extract_points(
                     )
                 )
 
+    _nothing_read(result)
     result.seconds = (datetime.now(UTC) - t_start).total_seconds()
     progress_fn(1.0, "Done")
     return result

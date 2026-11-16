@@ -73,7 +73,12 @@ class SoilGridsExtractAlgorithm(QgsProcessingAlgorithm):
         # Variable checklist: SoilGrids 2.0 variables, then depth to bedrock.
         self._var_codes = [v.code for v in core.VARIABLES] + [core.BEDROCK_CODE]
         self._var_labels = [
-            f"{v.code} - {v.label} ({v.units})" + ("" if v.default else " [optional]")
+            f"{v.code} - {v.label} ({v.units})"
+            + (
+                " [no longer published by ISRIC]"
+                if not v.available
+                else ("" if v.default else " [optional]")
+            )
             for v in core.VARIABLES
         ] + [f"{core.BEDROCK_LABEL} [optional]"]
 
@@ -121,7 +126,11 @@ class SoilGridsExtractAlgorithm(QgsProcessingAlgorithm):
             "selection typically takes under a minute or two, depending on your "
             "connection. Values are resampled with nearest neighbour only (no further "
             "smoothing) and converted to conventional units (%, g/kg, g/cm3, "
-            "vol %, pH, cmol(c)/kg) before writing.\n"
+            "vol %, pH, cmol(c)/kg) before writing. A variable whose layers "
+            "cannot be read by any route is left out with a warning and the "
+            "other variables are still written. The water contents at 10, 33 and "
+            "1500 kPa (wv0010, wv0033, wv1500) are no longer published by ISRIC "
+            "(November 2026); they stay in the list but are left out.\n"
             "\n"
             "OUTPUTS:\tArea mode: one multi-band GeoTIFF per variable and "
             "statistic, e.g. soilgrids_clay_Q0.50.tif, with one band per depth. "

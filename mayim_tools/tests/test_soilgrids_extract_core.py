@@ -312,9 +312,39 @@ def test_vars_2017_cover_all_but_water_content():
     assert core.VARS_2017["phh2o"].divide_by == 10
 
 
-def test_plan_selection_sg2017_warning_for_water_content_only():
-    sel = core.plan_selection(["wv0033"], ["0-5cm"], ["mean"], sg2017=True)
-    assert sel.sg2017 and any("2017" in w for w in sel.warnings)
+def test_water_content_layers_are_retired():
+    """ISRIC no longer serves wv0010/wv0033/wv1500 (404, 2026-11-16): they
+    are left out with a warning; alone they stop the run with the reason."""
+    assert [v.code for v in core.VARIABLES if not v.available] == [
+        "wv0010",
+        "wv0033",
+        "wv1500",
+    ]
+    sel = core.plan_selection(["clay", "wv0033"], ["0-5cm"], ["mean"])
+    assert sel.variables == ["clay"]
+    assert any("no longer published" in w for w in sel.warnings)
+    with pytest.raises(core.SoilGridsError, match="no longer published"):
+        core.plan_selection(["wv0033", "wv1500"], ["0-5cm"], ["mean"])
+    sel = core.plan_selection(["wv0033"], ["0-5cm"], ["mean"], bedrock=True)
+    assert sel.variables == [] and sel.bedrock
+
+
+def test_unreadable_variable_is_left_out(grid, tmp_path):
+    """One variable that cannot be read no longer stops the run: the others
+    are written and the failed one is named in the warnings."""
+    good = make_reader()
+
+    def reader(path, *args):
+        if "silt" in str(path):
+            raise RuntimeError("HTTP response code: 404")
+        return good(path, *args)
+
+    sel = core.plan_selection(["clay", "silt"], ["0-5cm"], ["Q0.5"])
+    result, writer = run_area(grid, tmp_path, sel, reader=reader)
+    names = [os.path.basename(p) for p in result.files]
+    assert any("clay" in n for n in names) and not any("silt" in n for n in names)
+    assert result.skipped == ["silt"]
+    assert any("silt" in w and "left out" in w for w in result.warnings)
 
 
 # ----------------------------------------------------------------------
@@ -580,7 +610,7 @@ def test_area_all_routes_fail_names_routes(grid, tmp_path):
 
 def test_area_sg2017_file_native_depth_points(grid, tmp_path):
     sel = core.plan_selection(
-        ["clay", "bdod", "wv0033"], ["0-5cm", "100-200cm"], ["Q0.5"], sg2017=True
+        ["clay", "bdod"], ["0-5cm", "100-200cm"], ["Q0.5"], sg2017=True
     )
     result, writer = run_area(grid, tmp_path, sel)
     path = os.path.join(str(tmp_path), "soilgrids2017_clay_mean.tif")
