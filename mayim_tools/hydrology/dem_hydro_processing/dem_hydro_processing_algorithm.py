@@ -46,6 +46,7 @@ from mayim_tools._common.output_files import (
     SHAPEFILE,
     WORD,
     OutputSpec,
+    clean_name_part,
 )
 from mayim_tools.hydrology._common.contours import minor_major_contours
 
@@ -74,7 +75,7 @@ from .qgis_map import (
 )
 from .report import change_classes_present, elevation_change, write_report_docx
 
-TOOL_VERSION = "1.3.1"
+TOOL_VERSION = "1.4.0"
 SOURCE_KEYS = list(DEM_SOURCE_VERTICAL_ERROR_M) + ["custom"]
 SOURCE_LABELS = {
     "survey": "Ground survey",
@@ -125,6 +126,15 @@ OUTPUT_SPECS = [
     OutputSpec("OUTPUT_DOCX", "Report (Word)", "DEM Processing Report", WORD),
 ]
 SPEC_BY_KEY = {spec.key: spec for spec in OUTPUT_SPECS}
+
+
+def file_prefix(project_number: str | None, dem_description: str | None) -> str:
+    """'<project number>_<DEM description>' (either part may be empty), the
+    prefix of every output file name, e.g. M1234_COP30_Corrected_DEM.tif."""
+    parts = (clean_name_part(project_number), clean_name_part(dem_description))
+    return "_".join(p for p in parts if p)
+
+
 FOLDER_PARAMS = {
     RASTER: ("FOLDER_RASTER", "Output folder for rasters (GeoTIFF)"),
     SHAPEFILE: ("FOLDER_SHP", "Output folder for vector layers (shapefiles)"),
@@ -214,6 +224,7 @@ class DemHydroProcessingAlgorithm(QgsProcessingAlgorithm):
     CONTOURS_SMOOTH = "CONTOURS_SMOOTH"
     REPORT_OSM = "REPORT_OSM"
     PROJECT_NUMBER = "PROJECT_NUMBER"
+    DEM_DESCRIPTION = "DEM_DESCRIPTION"
     PROJECT_NAME = "PROJECT_NAME"
     OUTPUT_DEM = "OUTPUT_DEM"
     OUTPUT_CHANGE = "OUTPUT_CHANGE"
@@ -281,7 +292,8 @@ class DemHydroProcessingAlgorithm(QgsProcessingAlgorithm):
             "\n"
             "OUTPUTS:\tTick the outputs you need and choose a folder for each "
             "kind (rasters, shapefiles, CSV, Word). Files are named "
-            "<project number>_<description>, e.g. MC2025_014_Corrected_DEM.tif; "
+            "<project number>_<DEM description>_<description>, e.g. "
+            "M1234_COP30_Corrected_DEM.tif (each part only when given); "
             "existing files are replaced. Layers are loaded with the Mayim "
             "styles. Outputs: corrected DEM, elevation change (corrected minus "
             "original), remaining sinks (points; fields sink_id, kind, reason, "
@@ -473,6 +485,14 @@ class DemHydroProcessingAlgorithm(QgsProcessingAlgorithm):
         )
         self.addParameter(
             QgsProcessingParameterString(
+                self.DEM_DESCRIPTION,
+                "DEM description (file names, after the project number; "
+                "optional, e.g. COP30)",
+                optional=True,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterString(
                 self.PROJECT_NAME,
                 "Project / site name (report title page, optional)",
                 optional=True,
@@ -601,6 +621,9 @@ class DemHydroProcessingAlgorithm(QgsProcessingAlgorithm):
         project_name = self.parameterAsString(
             parameters, self.PROJECT_NAME, context
         ).strip()
+        dem_description = (
+            self.parameterAsString(parameters, self.DEM_DESCRIPTION, context) or ""
+        ).strip()
         selected = [
             spec
             for spec in OUTPUT_SPECS
@@ -616,7 +639,8 @@ class DemHydroProcessingAlgorithm(QgsProcessingAlgorithm):
                 raise QgsProcessingException(f"Choose the {label.lower()}.")
             os.makedirs(folder, exist_ok=True)
             folders[kind] = folder
-        paths = {spec.key: spec.path(folders, project_number) for spec in selected}
+        prefix = file_prefix(project_number, dem_description)
+        paths = {spec.key: spec.path(folders, prefix) for spec in selected}
         contours_interval = self.parameterAsDouble(
             parameters, self.CONTOURS_INTERVAL, context
         )
@@ -843,6 +867,7 @@ class DemHydroProcessingAlgorithm(QgsProcessingAlgorithm):
             "software": _software_version(),
             "project_number": project_number,
             "project_name": project_name,
+            "dem_description": dem_description,
             "run_time": datetime.now().strftime("%Y-%m-%d %H:%M"),
             "dem_path": dem_path,
             "crs": f"{crs.authid()} - {crs.description()}",

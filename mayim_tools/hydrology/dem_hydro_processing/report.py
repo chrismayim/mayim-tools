@@ -282,6 +282,7 @@ def inputs_rows(result: ConditioningResult, ctx: dict) -> list[list[str]]:
     rows = [
         ["Project number", text(ctx.get("project_number"))],
         ["Project / site", text(ctx.get("project_name"))],
+        ["DEM description", text(ctx.get("dem_description"))],
         ["Input DEM", text(ctx.get("dem_path"))],
         ["Coordinate reference system", text(ctx.get("crs"))],
         ["Cell size (m)", text(ctx.get("cell_size"))],
