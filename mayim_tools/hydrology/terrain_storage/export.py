@@ -1,4 +1,4 @@
-"""Table writers for DEM depression stage-storage (no QGIS dependency).
+"""Table writers for DEM Depression Stage-Storage (no QGIS dependency).
 
 The stage table CSV is UTF-8 with a byte-order mark and starts with a
 column key ('#' lines; read it in pandas with comment='#'). The HEC-RAS /

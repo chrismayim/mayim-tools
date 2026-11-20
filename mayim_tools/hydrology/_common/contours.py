@@ -1,6 +1,6 @@
 """
 Contour lines from a gridded field - pure NumPy, shared by the Hydrological
-Tools (DEM depression stage-storage water-edge contours, Inundation
+Tools (DEM Depression Stage-Storage water-edge contours, Inundation
 boundary).
 
 - marching_squares: contour lines of values sampled at cell centres, with

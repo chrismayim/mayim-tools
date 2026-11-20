@@ -1,6 +1,6 @@
 """
 Tests for mayim_tools/hydrology/terrain_storage/bathymetry.py and
-bathymetry_export.py (the bed estimate of DEM depression stage-storage).
+bathymetry_export.py (the bed estimate of DEM Depression Stage-Storage).
 Zero QGIS dependency - run under plain pytest.
 
 Synthetic water bodies with a known bed are "flooded" to a water level
@@ -306,7 +306,7 @@ def test_mosaic_and_exports(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Integration with DEM depression stage-storage
+# Integration with DEM Depression Stage-Storage
 # ---------------------------------------------------------------------------
 
 
@@ -410,7 +410,7 @@ def test_report_with_bed_estimate(tmp_path):
         str(path),
         [res],
         {
-            "tool": "DEM depression stage-storage",
+            "tool": "DEM Depression Stage-Storage",
             "version": "test",
             "dem": {"path": "dem.tif", "crs": "EPSG:32735", "cell_x": 5, "cell_y": 5},
             "storage": {"layer": "dams", "n_features": 1, "id_field": "name"},

@@ -205,7 +205,7 @@ def test_provider_registers_all_algorithms() -> None:
             "hec_ras_tools",
         ),
         "dem_depression_stage_storage": (
-            "DEM depression stage-storage",
+            "DEM Depression Stage-Storage",
             "Hydrological Tools",
             "hydrological_tools",
         ),
@@ -260,9 +260,9 @@ def test_provider_registers_all_algorithms() -> None:
             "hydrological_tools",
         ),
         "contours_to_dem": (
-            "Contours to DEM",
-            "Hydrological Tools",
-            "hydrological_tools",
+            "DEM interpolation from contours",
+            "Data Tools",
+            "data_tools",
         ),
         "sanral_peak_flows": (
             "SANRAL Deterministic Peak Flows",

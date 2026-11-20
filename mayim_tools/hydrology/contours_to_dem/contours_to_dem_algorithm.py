@@ -1,4 +1,5 @@
-"""Processing Toolbox algorithm: Contours to DEM.
+"""Processing Toolbox algorithm: DEM interpolation from contours (Data Tools;
+id contours_to_dem, first released as "Contours to DEM" in 0.35.0).
 
 Contours (with a level field or Z) and stream centrelines (optional ridge
 lines and spot heights) in -> a DEM from a linear TIN in which the streams
@@ -217,13 +218,13 @@ class ContoursToDemAlgorithm(QgsProcessingAlgorithm):
         return "contours_to_dem"
 
     def displayName(self):
-        return "Contours to DEM"
+        return "DEM interpolation from contours"
 
     def group(self):
-        return "Hydrological Tools"
+        return "Data Tools"
 
     def groupId(self):
-        return "hydrological_tools"
+        return "data_tools"
 
     def shortHelpString(self):
         files = "\n".join(
@@ -233,7 +234,7 @@ class ContoursToDemAlgorithm(QgsProcessingAlgorithm):
         )
         fields = "\n".join(f"  {n}: {d}" for n, _, d in LINE_FIELDS)
         return (
-            f"Contours to DEM (version {TOOL_VERSION})\n"
+            f"DEM interpolation from contours (version {TOOL_VERSION})\n"
             "\n"
             "PURPOSE:\tA DEM from contours that slopes along the valley floors. "
             "A TIN from contours alone joins points of the same contour across "
@@ -1001,7 +1002,7 @@ class ContoursToDemAlgorithm(QgsProcessingAlgorithm):
                 w.writerow([f"# {n} (crossings)", d])
             w.writerow(["[run]"])
             w.writerow(["item", "value"])
-            w.writerow(["tool", f"Contours to DEM {TOOL_VERSION}"])
+            w.writerow(["tool", f"DEM interpolation from contours {TOOL_VERSION}"])
             w.writerow(["contour lines", n_contours])
             w.writerow(["contour interval (m)", f"{interval:g}"])
             w.writerow(["cell size (m)", f"{cell:g}"])

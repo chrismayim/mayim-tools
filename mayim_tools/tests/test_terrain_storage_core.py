@@ -522,7 +522,7 @@ def test_word_report(tmp_path):
         str(path),
         [res, res2],
         {
-            "tool": "DEM depression stage-storage",
+            "tool": "DEM Depression Stage-Storage",
             "version": "test",
             "dem": {"path": "dem.tif", "crs": "EPSG:32735", "cell_x": 2, "cell_y": 2},
             "storage": {"layer": "ponds", "n_features": 2, "id_field": "name"},

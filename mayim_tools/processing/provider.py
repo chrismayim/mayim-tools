@@ -193,7 +193,7 @@ ALGORITHMS = [
         "hydrology.terrain_storage.terrain_storage_algorithm",
         "DemDepressionStageStorageAlgorithm",
         "dem_depression_stage_storage",
-        "DEM depression stage-storage",
+        "DEM Depression Stage-Storage",
         HYDRO,
     ),
     (
@@ -270,8 +270,8 @@ ALGORITHMS = [
         "hydrology.contours_to_dem.contours_to_dem_algorithm",
         "ContoursToDemAlgorithm",
         "contours_to_dem",
-        "Contours to DEM",
-        HYDRO,
+        "DEM interpolation from contours",
+        DATA,
     ),
     (
         "hydrology.sanral_peak_flows.sanral_peak_flows_algorithm",

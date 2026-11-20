@@ -1,4 +1,4 @@
-"""Processing Toolbox algorithm "DEM depression stage-storage": DEM +
+"""Processing Toolbox algorithm "DEM Depression Stage-Storage": DEM +
 storage-area polygon(s) in -> stage-area-volume table, HEC-RAS / HEC-HMS
 elevation-volume table, water-surface polygons, top-stage depth raster,
 spill points and a Word report out. Optionally (DEM surface is a water
@@ -436,7 +436,7 @@ class DemDepressionStageStorageAlgorithm(QgsProcessingAlgorithm):
         return "dem_depression_stage_storage"
 
     def displayName(self):
-        return "DEM depression stage-storage"
+        return "DEM Depression Stage-Storage"
 
     def group(self):
         return "Hydrological Tools"
@@ -452,7 +452,7 @@ class DemDepressionStageStorageAlgorithm(QgsProcessingAlgorithm):
             for s in OUTPUT_SPECS
         )
         return (
-            f"DEM depression stage-storage (version {TOOL_VERSION})\n"
+            f"DEM Depression Stage-Storage (version {TOOL_VERSION})\n"
             "\n"
             "PURPOSE:\tStage-storage (elevation-area-volume) curves for ponds, "
             "dams, detention basins and natural depressions, read straight off "

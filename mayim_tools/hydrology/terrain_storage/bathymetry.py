@@ -1,5 +1,5 @@
 """
-Bathymetry estimate for DEM depression stage-storage - pure NumPy, no QGIS
+Bathymetry estimate for DEM Depression Stage-Storage - pure NumPy, no QGIS
 dependency (GDAL only in write_bed_dem; scipy for the distance transform
 when available, with a NumPy fallback). Used when the tool's "DEM surface
 is a water surface" option is ticked; core.compute_storage_with_bed()
@@ -48,7 +48,7 @@ STEPS
    farthest from the shore. With a centreline: the valley surface above.
 
 Volumes below the water surface use the prism method with the polygon
-cell weights, as in DEM depression stage-storage.
+cell weights, as in DEM Depression Stage-Storage.
 """
 
 from __future__ import annotations
@@ -483,7 +483,7 @@ def estimate_bathymetry(
                 f"Storage '{sid}': no flat water surface found at the bottom of "
                 f"the depression (fewer than {MIN_WATER_CELLS} cells within "
                 f"{flat_tol:g} m of the lowest ground). The depression looks dry - "
-                "use DEM depression stage-storage directly - or the water surface "
+                "use DEM Depression Stage-Storage directly - or the water surface "
                 "is noisier than the flat-water tolerance (raise it, or give the "
                 "water level)."
             )
@@ -846,7 +846,7 @@ def write_bed_dem(
 ) -> None:
     """Copies the input DEM to a float32 GeoTIFF and writes the estimated bed
     into the water cells of every result (the rest of the DEM unchanged), so
-    the result can go straight into DEM depression stage-storage or a
+    the result can go straight into DEM Depression Stage-Storage or a
     hydraulic model."""
     from osgeo import gdal
 

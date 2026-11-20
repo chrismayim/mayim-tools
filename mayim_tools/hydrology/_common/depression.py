@@ -1,6 +1,6 @@
 """
 Depression / storage-area building blocks shared by the Hydrological Tools
-(DEM depression stage-storage, DEM bathymetry estimate) - pure NumPy, no
+(DEM Depression Stage-Storage, DEM bathymetry estimate) - pure NumPy, no
 QGIS dependency (GDAL is imported only inside the raster I/O helpers).
 
 - polygon_window / window_geotransform: DEM window around a polygon.

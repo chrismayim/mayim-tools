@@ -1,4 +1,4 @@
-"""Word (.docx) report for the DEM depression stage-storage tool, in the
+"""Word (.docx) report for the DEM Depression Stage-Storage tool, in the
 Mayim report and figure standard (title page, house text styles, charts
 16.5 cm wide in Arial Narrow 9 pt with the house colours).
 
@@ -655,7 +655,7 @@ def _bed_section(d, r: StorageResult, include_figures: bool, style=None) -> None
 
 
 def title_details(context: dict) -> list[tuple[str, str]]:
-    tool = context.get("tool", "DEM depression stage-storage")
+    tool = context.get("tool", "DEM Depression Stage-Storage")
     version = context.get("version")
     return [
         ("Project number", context.get("project_number") or "-"),
@@ -711,7 +711,7 @@ def write_report_docx(
         f"relationship of {n} storage area{'s' if n != 1 else ''} read from a "
         f"digital elevation model (DEM) with a {dem.get('cell_x', 0):g} m x "
         f"{dem.get('cell_y', 0):g} m cell size, using the "
-        f"{ctx.get('tool', 'DEM depression stage-storage')} tool (version "
+        f"{ctx.get('tool', 'DEM Depression Stage-Storage')} tool (version "
         f"{ctx.get('version', '-')}). Cells were counted when "
         f"{MODE_TEXT.get(mode, mode)}. For each storage area it gives the "
         "levels, the stage-area-volume table, the depth distribution and the "

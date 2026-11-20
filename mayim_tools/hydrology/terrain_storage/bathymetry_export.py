@@ -1,4 +1,4 @@
-"""CSV writers for the bathymetry estimate of DEM depression stage-storage
+"""CSV writers for the bathymetry estimate of DEM Depression Stage-Storage
 (no QGIS dependency). UTF-8 with a byte-order mark, starting with a column
 key ('#' lines)."""
 
