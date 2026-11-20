@@ -267,6 +267,13 @@ ALGORITHMS = [
         HYDRO,
     ),
     (
+        "hydrology.contours_to_dem.contours_to_dem_algorithm",
+        "ContoursToDemAlgorithm",
+        "contours_to_dem",
+        "Contours to DEM",
+        HYDRO,
+    ),
+    (
         "hydrology.sanral_peak_flows.sanral_peak_flows_algorithm",
         "SanralPeakFlowsAlgorithm",
         "sanral_peak_flows",

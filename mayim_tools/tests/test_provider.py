@@ -49,7 +49,7 @@ def test_provider_registers_all_algorithms() -> None:
     provider = loaded_provider()
 
     algorithms = provider.algorithms()
-    assert len(algorithms) == 41
+    assert len(algorithms) == 42
 
     by_name = {algorithm.name(): algorithm for algorithm in algorithms}
 
@@ -86,6 +86,7 @@ def test_provider_registers_all_algorithms() -> None:
         "land_cover_extract",
         "curve_numbers",
         "dem_hydro_processing",
+        "contours_to_dem",
         "sanral_peak_flows",
         "time_of_concentration",
         "terrain_profile",
@@ -258,6 +259,11 @@ def test_provider_registers_all_algorithms() -> None:
             "Hydrological Tools",
             "hydrological_tools",
         ),
+        "contours_to_dem": (
+            "Contours to DEM",
+            "Hydrological Tools",
+            "hydrological_tools",
+        ),
         "sanral_peak_flows": (
             "SANRAL Deterministic Peak Flows",
             "Hydrological Tools",
@@ -316,7 +322,7 @@ def test_provider_lists_every_algorithm_once() -> None:
     from mayim_tools.processing.provider import ALGORITHMS
 
     ids = [entry[2] for entry in ALGORITHMS]
-    assert len(ids) == len(set(ids)) == 41
+    assert len(ids) == len(set(ids)) == 42
 
 
 def test_missing_package_gives_placeholder() -> None:
