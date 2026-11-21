@@ -2,7 +2,7 @@
 name=Mayim Tools
 qgisMinimumVersion=4.0
 description=Mayim Tools - hydrology, rainfall and data processing tools for QGIS.
-version=0.35.1
+version=0.36.0
 author=Mayim Consulting
 email=chris@mayimconsulting.co.za
 

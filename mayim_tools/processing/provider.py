@@ -316,6 +316,13 @@ ALGORITHMS = [
         HYDRO,
     ),
     (
+        "data.sa_spatial_data.sa_spatial_data_algorithm",
+        "SaSpatialDataAlgorithm",
+        "sa_spatial_data_extract",
+        "Extract: South African spatial data",
+        DATA,
+    ),
+    (
         "data.hec_hms_project.prepare_hec_hms_project_algorithm",
         "PrepareHecHmsProjectAlgorithm",
         "prepare_hec_hms_project",
