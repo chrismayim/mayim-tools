@@ -31,7 +31,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-TOOL_VERSION = "1.0.0"
+TOOL_VERSION = "1.0.1"
 
 DFFE = "https://dffeportal.environment.gov.za/hosting/rest/services"
 NDA = "https://ndagis.nda.agric.za/arcgis/rest/services"
@@ -120,7 +120,7 @@ CATALOGUE: list[Item] = [
         "parent_farm",
         "Cadastre",
         "Parent farms",
-        "SG Parent Farms",
+        "Parent Farms",
         "dffe",
         CSG,
         ("Parent Farm",),
@@ -131,19 +131,19 @@ CATALOGUE: list[Item] = [
         "farm_portions",
         "Cadastre",
         "Farm portions",
-        "SG Farm Portions",
+        "Farm Portions",
         "dffe",
         CSG,
         ("Farm Portions",),
         (1,),
         True,
     ),
-    Item("erven", "Cadastre", "Erven", "SG Erven", "dffe", CSG, ("Erven",), (2,), True),
+    Item("erven", "Cadastre", "Erven", "Erven", "dffe", CSG, ("Erven",), (2,), True),
     Item(
         "holdings",
         "Cadastre",
         "Agricultural holdings",
-        "SG Holdings",
+        "Holdings",
         "dffe",
         CSG,
         ("Holdings",),
@@ -154,7 +154,7 @@ CATALOGUE: list[Item] = [
         "public_places",
         "Cadastre",
         "Public places",
-        "SG Public Places",
+        "Public Places",
         "dffe",
         CSG,
         ("Public Places",),
@@ -166,7 +166,7 @@ CATALOGUE: list[Item] = [
         "provinces",
         "Admin boundaries",
         "Provinces",
-        "MDB Provinces",
+        "Provinces",
         "dffe",
         MDB,
         ("GISDB.LDR.Provinces",),
@@ -176,7 +176,7 @@ CATALOGUE: list[Item] = [
         "district_munic",
         "Admin boundaries",
         "District municipalities",
-        "MDB District Municipalities",
+        "District Municipalities",
         "dffe",
         MDB,
         ("GISDB.LDR.DistrictMunicipalities",),
@@ -186,7 +186,7 @@ CATALOGUE: list[Item] = [
         "local_munic",
         "Admin boundaries",
         "Local municipalities",
-        "MDB Local Municipalities",
+        "Local Municipalities",
         "dffe",
         MDB,
         ("GISDB.LDR.LocalMunicipalites", "GISDB.LDR.LocalMunicipalities"),
@@ -197,7 +197,7 @@ CATALOGUE: list[Item] = [
         "wards",
         "Admin boundaries",
         "Wards",
-        "MDB Wards",
+        "Wards",
         "dffe",
         MDB,
         ("GISDB.LDR.Wards",),
@@ -429,13 +429,48 @@ CATALOGUE: list[Item] = [
 ]
 ITEM_BY_KEY = {i.key: i for i in CATALOGUE}
 
+# file-name prefix = the data custodian (Chris, 2026-11-21):
+# <project number>_<source code>_<layer>.shp
+SOURCES = {
+    "CSG": "Chief Surveyor-General (served by DFFE)",
+    "MDB": "Municipal Demarcation Board (served by DFFE)",
+    "DFFE": "Department of Forestry, Fisheries and the Environment",
+    "DoA": "Department of Agriculture, AGIS",
+}
+
+# the date of the data, where the service or the layer states one
+DATA_DATES = {
+    "Cadastre": "per parcel (DATE_STAMP); the latest is in the sources CSV",
+    "sacad": "2021 Q3 release",
+    "cba": "2017",
+    "esa": "2017",
+    "cultivated": "2021",
+    "paa": "2020",
+    "grazing": "2018",
+}
+
+
+def source_code(item: Item) -> str:
+    """The custodian code that prefixes the layer's file name."""
+    if item.group == "Cadastre":
+        return "CSG"
+    if item.group == "Admin boundaries":
+        return "MDB"
+    return "DFFE" if item.source == "dffe" else "DoA"
+
+
+def file_description(item: Item) -> str:
+    """'<source code> <layer>', e.g. 'CSG Farm Portions'."""
+    return f"{source_code(item)} {item.description}"
+
+
+def data_date(item: Item) -> str:
+    return DATA_DATES.get(item.key) or DATA_DATES.get(item.group) or "not stated"
+
+
 SOURCE_NAMES = {
     "dffe": "DFFE geoportal",
     "nda": "Department of Agriculture AGIS",
-}
-CUSTODIANS = {
-    "Cadastre": "Chief Surveyor-General (via DFFE)",
-    "Admin boundaries": "Municipal Demarcation Board (via DFFE)",
 }
 TERMS = (
     "Government data: credit the custodian, do not sell it or pass the raw "

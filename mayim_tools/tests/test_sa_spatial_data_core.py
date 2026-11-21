@@ -124,3 +124,20 @@ def test_fetch_features_reports_server_errors():
 
     with pytest.raises(RestError, match="Invalid layer"):
         core.fetch_features("http://x/MapServer/9", (0, 0, 1, 1), fetch)
+
+
+def test_source_codes_and_file_names():
+    from mayim_tools._common.output_files import output_file_name
+
+    codes = {core.source_code(i) for i in core.CATALOGUE}
+    assert codes == set(core.SOURCES)
+    name = lambda k: output_file_name(  # noqa: E731
+        "M2643", core.file_description(core.ITEM_BY_KEY[k]), "shapefile"
+    )
+    assert name("farm_portions") == "M2643_CSG_Farm_Portions.shp"
+    assert name("wards") == "M2643_MDB_Wards.shp"
+    assert name("sapad") == "M2643_DFFE_Protected_Areas_SAPAD.shp"
+    assert name("quaternary") == "M2643_DoA_Quaternary_Catchments.shp"
+    assert "2021 Q3" in core.data_date(core.ITEM_BY_KEY["sacad"])
+    assert "DATE_STAMP" in core.data_date(core.ITEM_BY_KEY["erven"])
+    assert core.data_date(core.ITEM_BY_KEY["rivers"]) == "not stated"

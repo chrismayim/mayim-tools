@@ -131,20 +131,21 @@ class SaSpatialDataAlgorithm(QgsProcessingAlgorithm):
 
     def shortHelpString(self):
         rows = []
-        for group in core.GROUPS:
-            rows.append(f"  {group}:")
-            for i in core.CATALOGUE:
-                if i.group == group:
-                    src = f"{core.SOURCE_NAMES[i.source]} " + (
-                        f"({i.service.split('/')[1]})"
-                        if i.source == "dffe"
-                        else "(provincial service)"
-                    )
-                    rows.append(
-                        f"    {i.label}{' [default]' if i.default else ''} - "
-                        f"<project number>_{clean_name_part(i.description)}.shp; "
-                        f"{src}"
-                    )
+        for code, custodian in core.SOURCES.items():
+            items = [i for i in core.CATALOGUE if core.source_code(i) == code]
+            dates = {core.data_date(i) for i in items}
+            shared = dates.pop() if len(dates) == 1 else None
+            rows.append(
+                f"  {code} - {custodian}"
+                + (f" (data date: {shared})" if shared else "")
+                + ":"
+            )
+            for i in items:
+                date = "" if shared else f" ({core.data_date(i)})"
+                star = " *" if i.default else ""
+                rows.append(f"    {clean_name_part(i.description)}{star}{date}")
+        rows.append("  * ticked by default")
+
         return (
             f"Extract: South African spatial data (version {core.TOOL_VERSION})\n"
             "\n"
@@ -162,7 +163,8 @@ class SaSpatialDataAlgorithm(QgsProcessingAlgorithm):
             "feature that touches the area is downloaded whole, not clipped, "
             "so farm and erf boundaries stay complete.\n"
             "\n"
-            "LAYERS:\n" + "\n".join(rows) + "\n"
+            "SOURCES AND LAYERS (source code, custodian, layers, date of the "
+            "data):\n" + "\n".join(rows) + "\n"
             "\n"
             "CURRENCY:\tThe data is as the services hold it on the day of the "
             "run. The sources CSV records the download date and, where the "
@@ -178,11 +180,13 @@ class SaSpatialDataAlgorithm(QgsProcessingAlgorithm):
             "\n"
             f"TERMS:\t{core.TERMS}\n"
             "\n"
-            "OUTPUTS:\tOne shapefile per layer in the vector folder, in the "
-            "output CRS (default the area's CRS), field names shortened to 10 "
-            "characters; <project number>_Spatial_Data_Sources.csv in the CSV "
-            "folder (layer, custodian, service URL, features, download date, "
-            "data date, warnings)."
+            "OUTPUTS:\tOne shapefile per layer in the vector folder, named "
+            "<project number>_<source code>_<layer>.shp (e.g. "
+            "M2643_CSG_Farm_Portions.shp, M2643_DoA_Quaternary_Catchments.shp), "
+            "in the output CRS (default the area's CRS), field names shortened "
+            "to 10 characters; <project number>_Spatial_Data_Sources.csv in the "
+            "CSV folder (source code, custodian, layer, service URL, features, "
+            "download date, data date, warnings)."
         )
 
     def initAlgorithm(self, config=None):
@@ -452,7 +456,9 @@ class SaSpatialDataAlgorithm(QgsProcessingAlgorithm):
             count = add_features(layer, field_list, feats, kind)
             path = os.path.join(
                 shp_folder,
-                output_file_name(project_number, item.description, "shapefile"),
+                output_file_name(
+                    project_number, core.file_description(item), "shapefile"
+                ),
             )
             try:
                 save_shapefile(layer, path, out_crs, context.transformContext())
@@ -528,21 +534,21 @@ class SaSpatialDataAlgorithm(QgsProcessingAlgorithm):
     @staticmethod
     def _row(item, url, count, today, data_date, notes):
         return {
+            "source": core.source_code(item),
             "group": item.group,
             "layer": item.label,
-            "custodian": core.CUSTODIANS.get(
-                item.group, core.SOURCE_NAMES[item.source]
-            ),
+            "custodian": core.SOURCES[core.source_code(item)],
             "service": url,
             "features": count,
             "downloaded": today,
-            "data_date": data_date or "-",
+            "data_date": data_date or core.data_date(item),
             "notes": notes or "",
         }
 
     @staticmethod
     def _write_csv(path, rows, bbox, crs, today):
         key = [
+            ("source", "source code (file-name prefix): the data custodian"),
             ("group", "layer group"),
             ("layer", "layer"),
             ("custodian", "data custodian / publisher"),
